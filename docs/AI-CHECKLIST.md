@@ -13,28 +13,85 @@ already in this repo — a measurement, not a look.
 
 ---
 
-## 0. The decision that gates everything
+## 0. How inference reaches the app
 
-- [ ] **Choose where inference runs**
-  **Problem** — Every item below needs a model, and the answer changes all of
-  them. Today nothing leaves the machine and the README says so.
-  **Approach** — Three options, and they can coexist: models in the browser
-  (transformers.js / ONNX Runtime Web, WebGPU where available), a local runtime
-  the user already has (Ollama, LM Studio, an MLX server on localhost), or the
-  user's own API key held in local storage. In-browser keeps the privacy promise
-  and costs a download of 40–900 MB depending on the model; a key is instant and
-  breaks the promise unless it is clearly labelled.
-  **Test** — Not a test, a written decision in `CLAUDE.md`. Do this before
-  building item 1, because item 1 hardcodes the answer.
+One OpenAI-compatible client covers more of this list than it looks like, and
+building it first means most later items are a prompt rather than a project.
 
-- [ ] **A model cache and a first-run download experience**
-  **Problem** — A 200 MB model download that starts silently on the first
-  caption request feels broken.
-  **Approach** — Cache in the Origin Private File System next to the
-  recordings. Show size, progress, and an explicit "download once" step.
-  **Test** — Second run loads from cache with the network offline.
+- [ ] **An OpenAI-compatible client with a configurable base URL**
+  **Problem** — Every item below needs a model, and writing a separate
+  integration per provider is how this stalls.
+  **Approach** — One client, three destinations, no branching:
+  `https://api.openai.com/v1` with a key, `http://localhost:11434/v1` for
+  Ollama, `http://localhost:1234/v1` for LM Studio — and by the same token
+  Groq, OpenRouter, llama.cpp's server, vLLM, or anything else that speaks the
+  shape. Store base URL, key and model name in local storage; ship a "test
+  connection" button that calls `/v1/models` and names what came back.
+  **Test** — Point it at a local server and at a cloud endpoint with the same
+  code path; assert both list models and complete a trivial prompt.
 
----
+### What this covers
+
+Everything whose input is text and whose output is text: chapters and titles,
+translation, retake grouping, highlight scoring, natural-language edits. Vision
+tasks — reading a screen, judging whether text is legible — go through the same
+chat endpoint as image content parts, so they come almost free wherever the
+model is vision-capable.
+
+### What it does not cover, and why
+
+Two gaps. Both are real and neither is a reason to skip the client.
+
+- [ ] **Transcription needs a provider that implements it**
+  **Problem** — `/v1/audio/transcriptions` is part of the standard, but not
+  everything that speaks OpenAI's chat API speaks its audio API. **Ollama does
+  not do speech-to-text at all**, so pointing the client at Ollama gives you
+  every item in section 2 except the transcript they all depend on.
+  **Approach** — Either a provider that has the endpoint (OpenAI, Groq,
+  whisper.cpp's server, faster-whisper-server), or Whisper in the browser via
+  transformers.js. In-browser is the only option that keeps the promise on the
+  README, and this machine already has `whisper-large-v3-turbo` cached from
+  earlier work.
+  **Test** — Whichever route, the test from section 1 is the same: known
+  script, assert word error rate and timestamp bounds. Run it against both so
+  the difference is measured rather than assumed.
+
+- [ ] **Per-frame work cannot go over HTTP**
+  **Problem** — Background removal, face tracking for auto-framing, and voice
+  denoise all run on every frame or every audio block. Thirty round-trips a
+  second to any endpoint, local or not, is not a design.
+  **Approach** — Those items are in-browser models regardless of what item 0
+  decides: MediaPipe or ONNX Runtime Web, WebGPU where available. They are
+  marked in sections 3 and 4 where they appear.
+  **Test** — Measure milliseconds per frame, not accuracy alone. Anything above
+  the frame budget is a feature that cannot be used while recording.
+
+### Gotchas worth knowing before the first request
+
+- [ ] **CORS on local servers**
+  **Problem** — A page on `localhost:5310` calling `localhost:11434` is a
+  cross-origin request, and local runtimes reject it by default. The failure is
+  an opaque network error that looks like the server is down.
+  **Approach** — Ollama needs `OLLAMA_ORIGINS` set to include the app's origin;
+  LM Studio has a CORS switch in its server settings. Detect the failure and
+  say exactly this, with the setting named — do not report "could not connect".
+  **Test** — Assert the error message for a CORS failure differs from the one
+  for a genuinely unreachable server.
+
+- [ ] **Be honest about where the key goes**
+  **Problem** — There is no backend here, so a cloud key sits in the browser
+  and travels with every request from the page. That is the user's call to
+  make, but only if they are told.
+  **Approach** — Say it plainly next to the field, and default the setup to a
+  local base URL so the privacy promise on the README holds unless the user
+  deliberately changes it.
+  **Test** — Assert nothing leaves the machine when the base URL is local, by
+  watching the network panel with a cloud key present but unused.
+
+> Endpoint behaviour above is from documentation, not from a running server —
+> nothing here was verified against a live Ollama or LM Studio instance. Confirm
+> `/v1/models` and `/v1/audio/transcriptions` on whichever you target before
+> building on them.
 
 ## 1. Transcript — the foundation
 
