@@ -5,6 +5,7 @@ import {
   Gauge,
   History,
   Link2Off,
+  Lock,
   Redo2,
   Save,
   Scissors,
@@ -30,6 +31,7 @@ import {
   type History as EditHistory,
 } from "@/editor/project";
 import { saveProject, writeRecovery } from "@/editor/persistence";
+import { useProjectLock } from "@/hooks/use-project-lock";
 import type { ClipRef, Project } from "@/editor/types";
 import type { PlaybackEngine } from "@/editor/playback";
 import { MediaPool } from "@/components/editor/media-pool";
@@ -72,9 +74,12 @@ const RECOVERY_INTERVAL_MS = 5000;
 export function Editor({
   initial,
   onClose,
+  onProjectChange,
 }: {
   initial: Project;
   onClose: () => void;
+  /** Lets the error boundary above snapshot the live document if a render throws. */
+  onProjectChange?: (project: Project) => void;
 }) {
   const [history, setHistory] = useState<EditHistory>(() => newHistory(initial));
   const [selected, setSelected] = useState<ClipRef | null>(null);
@@ -91,6 +96,15 @@ export function Editor({
   const engineRef = useRef<PlaybackEngine | null>(null);
   const urls = useMemo(() => new AssetUrls(), []);
   const project = history.present;
+  const { isPrimary, takeOver } = useProjectLock(initial.id);
+  // The boundary needs the live project at the instant of a crash, and a ref is
+  // the only thing that survives a render that threw.
+  const projectRef = useRef(project);
+  projectRef.current = project;
+
+  useEffect(() => {
+    onProjectChange?.(project);
+  }, [project, onProjectChange]);
 
   useEffect(() => () => urls.dispose(), [urls]);
 
@@ -122,6 +136,10 @@ export function Editor({
   // Autosave waits for a pause rather than saving on every keystroke: writing a
   // whole project per slider tick would spend more time in OPFS than rendering.
   useEffect(() => {
+    // A second tab on the same project does not write. Letting it autosave
+    // would mean both tabs overwriting each other on every keystroke, with the
+    // loser never finding out.
+    if (!isPrimary) return;
     setSaving("idle");
     const timer = window.setTimeout(() => {
       setSaving("saving");
@@ -133,12 +151,13 @@ export function Editor({
         });
     }, AUTOSAVE_IDLE_MS);
     return () => window.clearTimeout(timer);
-  }, [project]);
+  }, [project, isPrimary]);
 
   useEffect(() => {
+    if (!isPrimary) return;
     const timer = window.setInterval(() => writeRecovery(project), RECOVERY_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [project]);
+  }, [project, isPrimary]);
 
   // Scopes cannot observe canvas writes, so they are nudged on a slow interval
   // rather than every frame — reading pixels back is the expensive half.
@@ -208,6 +227,79 @@ export function Editor({
     [firstVideoTrack, time, dispatch],
   );
 
+  /**
+   * Keyboard navigation of the timeline.
+   *
+   * Selecting and moving clips was pointer-only, which is both an accessibility
+   * failure and a ceiling on how fast anyone can work. Alt is the modifier
+   * because the bare arrows already step frames, and losing that would be a
+   * worse trade.
+   */
+  const moveSelection = useCallback(
+    (direction: "prev" | "next" | "up" | "down") => {
+      const tracks = project.tracks;
+      if (tracks.length === 0) return;
+
+      if (!selected) {
+        // Nothing selected yet: take whatever sits under the playhead, or the
+        // first clip on the timeline if the playhead is over a gap.
+        for (const track of tracks) {
+          const under =
+            track.clips.find((c) => time >= c.start && time < c.start + c.duration) ??
+            track.clips[0];
+          if (under) {
+            setSelected({ trackId: track.id, clipId: under.id });
+            return;
+          }
+        }
+        return;
+      }
+
+      const trackIndex = tracks.findIndex((t) => t.id === selected.trackId);
+      const track = tracks[trackIndex];
+      if (!track) return;
+
+      if (direction === "prev" || direction === "next") {
+        const index = track.clips.findIndex((c) => c.id === selected.clipId);
+        const next = track.clips[index + (direction === "next" ? 1 : -1)];
+        if (next) setSelected({ trackId: track.id, clipId: next.id });
+        return;
+      }
+
+      // Up and down keep the playhead position and look for whatever overlaps
+      // it on the neighbouring track, so the selection follows the eye rather
+      // than an index.
+      const current = track.clips.find((c) => c.id === selected.clipId);
+      const at = current ? current.start : time;
+      const step = direction === "up" ? 1 : -1;
+      for (let i = trackIndex + step; i >= 0 && i < tracks.length; i += step) {
+        const candidate = tracks[i];
+        if (!candidate || candidate.clips.length === 0) continue;
+        const overlapping =
+          candidate.clips.find((c) => at >= c.start && at < c.start + c.duration) ??
+          candidate.clips.reduce((best, c) =>
+            Math.abs(c.start - at) < Math.abs(best.start - at) ? c : best,
+          );
+        setSelected({ trackId: candidate.id, clipId: overlapping.id });
+        return;
+      }
+    },
+    [project, selected, time],
+  );
+
+  const nudgeSelected = useCallback(
+    (frames: number) => {
+      const clip = findClip(project, selected);
+      if (!selected || !clip) return;
+      dispatch({
+        type: "moveClip",
+        ref: selected,
+        start: Math.max(0, clip.start + frames / project.frameRate),
+      });
+    },
+    [project, selected, dispatch],
+  );
+
   /* ----------------------------------------------------------- shortcuts */
 
   useEffect(() => {
@@ -264,11 +356,32 @@ export function Editor({
           break;
         case "ArrowLeft":
           e.preventDefault();
-          engineRef.current?.step(e.shiftKey ? -10 : -1);
+          if (e.altKey) moveSelection("prev");
+          else engineRef.current?.step(e.shiftKey ? -10 : -1);
           break;
         case "ArrowRight":
           e.preventDefault();
-          engineRef.current?.step(e.shiftKey ? 10 : 1);
+          if (e.altKey) moveSelection("next");
+          else engineRef.current?.step(e.shiftKey ? 10 : 1);
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          moveSelection("up");
+          break;
+        case "ArrowDown":
+          e.preventDefault();
+          moveSelection("down");
+          break;
+        case ",":
+          e.preventDefault();
+          nudgeSelected(e.shiftKey ? -10 : -1);
+          break;
+        case ".":
+          e.preventDefault();
+          nudgeSelected(e.shiftKey ? 10 : 1);
+          break;
+        case "Escape":
+          setSelected(null);
           break;
         case "Home":
           e.preventDefault();
@@ -322,7 +435,18 @@ export function Editor({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [doUndo, doRedo, splitAtPlayhead, deleteSelected, dispatch, time, project, selected]);
+  }, [
+    doUndo,
+    doRedo,
+    splitAtPlayhead,
+    deleteSelected,
+    moveSelection,
+    nudgeSelected,
+    dispatch,
+    time,
+    project,
+    selected,
+  ]);
 
   const selectedClip = findClip(project, selected);
   const selectedIsLinked = Boolean(selectedClip && linkSize(project, selectedClip) > 1);
@@ -415,10 +539,21 @@ export function Editor({
           className="ml-2 h-8 w-56 rounded-lg text-xs font-medium"
         />
 
-        <span className="ml-1 flex items-center gap-1 text-[11px] text-muted-foreground">
-          <Save className={cn("size-3", saving === "saving" && "animate-pulse text-primary")} />
-          {saving === "saved" ? "Saved" : saving === "saving" ? "Saving…" : "Unsaved"}
-        </span>
+        {isPrimary ? (
+          <span className="ml-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+            <Save className={cn("size-3", saving === "saving" && "animate-pulse text-primary")} />
+            {saving === "saved" ? "Saved" : saving === "saving" ? "Saving…" : "Unsaved"}
+          </span>
+        ) : (
+          <button
+            onClick={takeOver}
+            title="Another tab has this project open. Click to make this tab the one that saves."
+            className="ml-1 flex items-center gap-1 rounded-full bg-amber-400/15 px-2.5 py-1 text-[11px] font-medium text-amber-500 hover:bg-amber-400/25"
+          >
+            <Lock className="size-3" />
+            Open elsewhere · not saving
+          </button>
+        )}
 
         <div className="ml-auto flex items-center gap-1">
           <Button variant="ghost" size="icon" className="size-7" disabled={!canUndo} onClick={doUndo} title="Undo (⌘Z)">

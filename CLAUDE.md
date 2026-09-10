@@ -30,6 +30,7 @@ listed at the bottom of this file.
 | Timeline: n tracks, trim/ripple/slip, snapping, markers | done |
 | On-canvas select, drag, resize and rotate | done |
 | Linked A/V clips, detach audio | done |
+| Export in a worker, proxies, GPU chroma key | done |
 | Compositing: transform, blend, mask, chroma key, effects, grade | done |
 | Keyframes and transitions | done |
 | Text and shape layers | done |
@@ -195,6 +196,31 @@ are kept, so re-opening a recording is free.
 Elements stall and round; if one of them is the clock, every other layer chases
 a moving target. Each element is corrected against the independent clock, and
 only past `DRIFT_TOLERANCE_SEC`.
+
+**`compositor.ts` runs in a worker as well as on the page, so it may not touch
+the DOM.** `makeCanvas` picks `OffscreenCanvas` when `document` is absent, and
+every `instanceof HTMLVideoElement`-style check is guarded by a `typeof` —
+unguarded, those are a `ReferenceError` in the worker rather than a false
+branch, which is exactly how the first worker export failed.
+
+**The audio mix stays on the main thread.** `OfflineAudioContext` is not exposed
+to workers, and reimplementing gain ramps and resampling by hand would be a
+worse trade than one transfer. The mix crosses as planar float32 — an
+`AudioBuffer` belongs to a context and cannot be transferred — and the worker
+rebuilds it into `AudioSample`s. **Close each one after `add`**; mediabunny
+holds decoded audio outside the JS heap and will tell you on the console when
+you have not.
+
+**Playback reads the proxy, the exporter reads the original.** `assetFile` takes
+a `preferProxy` flag and `AssetUrls` sets it; `export-worker.ts` deliberately
+has its own `originalFile` so the flag cannot be passed by accident. A file
+delivered from a 720p proxy would be exactly the right length, exactly the right
+codec, and visibly soft.
+
+**A hidden tab invalidates any measurement.** Timers clamp to one second and
+`requestAnimationFrame` stops, so a capture driven from a canvas runs at about
+1 fps. `/dev-stress-check.html` refuses to run rather than print numbers that
+are an order of magnitude low and still look like results.
 
 **On-canvas handles read their box from `clipBox` in the compositor.** The
 monitor overlay never computes layout of its own: a second implementation would

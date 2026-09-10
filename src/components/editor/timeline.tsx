@@ -436,8 +436,13 @@ export function Timeline({
                     <ContextMenu key={clip.id}>
                       <ContextMenuTrigger asChild>
                         <div
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`${clip.name}, ${clip.duration.toFixed(1)} seconds on ${track.name}`}
+                          aria-pressed={isSelected}
                           className={cn(
                             "group absolute top-1 bottom-1 overflow-hidden rounded border select-none",
+                            "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                             clipStyle(project, clip),
                             tool === "select" && "cursor-grab active:cursor-grabbing",
                             isSelected && "ring-2 ring-primary",
@@ -446,6 +451,13 @@ export function Timeline({
                           )}
                           style={{ left: clip.start * pxPerSec, width }}
                           onPointerDown={(e) => beginDrag(e, "move", ref, clip)}
+                          onFocus={() => onSelect(ref)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              onSelect(ref);
+                            }
+                          }}
                         >
                           {asset?.thumbnail && track.kind === "video" && width > 40 && (
                             <img

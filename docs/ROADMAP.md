@@ -55,64 +55,39 @@ rather than a drift.
 
 ## Correctness and risk
 
-Things that are wrong or fragile now. None of these are features; all of them
-will bite someone.
+Six of the seven items that were here are done. What follows is what they turned
+into, kept because the reasoning is the part worth reading.
 
-### Export blocks the main thread
+### Done
 
-`exportProject` runs the composite-and-encode loop inline. A long export
-freezes the interface completely — no progress feels live, no cancel feels
-responsive, and the tab may be killed as unresponsive.
+- **Export runs in a worker.** `export-worker.ts` does the decode, composite and
+  encode; the main thread only mixes audio and relays progress. The audio mix
+  stays put because `OfflineAudioContext` is not exposed to workers, and it
+  crosses the boundary as planar float32 rather than as an `AudioBuffer`, which
+  cannot be transferred.
+- **There is an error boundary.** It snapshots the live project to the recovery
+  slot at the moment of the crash, before rendering anything, and offers the
+  document as a downloadable file.
+- **Proxies.** Anything taller than 1200px gets a 720p VP8 transcode on import.
+  Playback reads it; the exporter never does.
+- **Chroma key runs on the GPU.** A WebGL2 fragment shader replaced the
+  `getImageData` loop, which cost 10–20 ms a frame at 1080p. The CPU path is
+  still there for contexts without WebGL2.
+- **Cross-tab autosave lock.** A `BroadcastChannel` decides which tab writes;
+  the others open read-only and say so, with a deliberate "take over".
+- **Timeline keyboard navigation.** Clips are focus targets; Alt+arrows move the
+  selection along a track or between tracks, `,`/`.` nudge by a frame, Escape
+  deselects. The bare arrows still step frames.
 
-Move it to a worker with `OffscreenCanvas`. The compositor already takes a
-context rather than reaching for the DOM, so it should mostly transfer;
-`textMetrics` and the scratch-canvas pool are the parts that need adapting.
+### Still open
 
-### There is no error boundary
-
-One throw anywhere in the render path white-screens the app, and the user loses
-whatever was not autosaved. An editor is exactly the wrong place for that.
-
-Wrap the editor in an error boundary that keeps the project in memory and
-offers to save it.
-
-### No proxy workflow
-
-A 4K screen recording will stutter in the preview, because the preview decodes
-the full-resolution file in real time. Every editor solves this the same way:
-generate a small proxy on import and play that, then conform to the original at
-export.
-
-The import path already remuxes and probes, so the hook exists. This is the
-difference between "works on my test fixture" and "works on real footage".
-
-### Chroma key runs a per-pixel pass in JavaScript
-
-`applyChromaKey` calls `getImageData`, walks every pixel, and calls
-`putImageData` — per frame, per clip. That is roughly 10–20 ms at 1080p, which
-is tolerable while paused and ruins playback.
-
-It wants a WebGL or WebGPU shader. Same for `posterize`, which has the same
-shape.
-
-### Long recordings are untested at scale
-
-Files are handed to `<video>` as blob URLs. A two-hour screen capture is
-several gigabytes, and nothing in this codebase has been run against one.
-Seek behaviour, memory, and OPFS quota all need measuring before anyone is told
-it works.
-
-### Autosave has no conflict handling
-
-Two tabs open on the same project will silently overwrite each other. A
-`BroadcastChannel` lock, or a last-write-wins warning, would be enough.
-
-### The timeline is not keyboard navigable
-
-Clips can only be selected and moved with a pointer. That is both an
-accessibility failure and a speed ceiling for anyone who edits daily.
-
----
+- **Long recordings are still unmeasured.** `/dev-stress-check.html` exists and
+  records a minute of 1440p, then reports write throughput, heap growth against
+  file size, storage headroom, proxy ratio, and whether the far end of the file
+  can be seeked — but it has not been run against a real multi-gigabyte take.
+  It refuses to run in a background tab, because a throttled tab makes every one
+  of those numbers wrong by an order of magnitude while still looking like a
+  result.
 
 ## What would actually make it win
 

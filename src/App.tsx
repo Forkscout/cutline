@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useMemo, useRef, useState } from "react";
 import { Circle, Clapperboard, Moon, Square, Sun } from "lucide-react";
 import type { RecorderPhase } from "@/recorder/types";
 import { checkSupport, missingRequirements } from "@/recorder/mime";
@@ -21,6 +21,9 @@ const Editor = lazy(() =>
 const Projects = lazy(() =>
   import("@/components/editor/projects").then((m) => ({ default: m.Projects })),
 );
+const EditorErrorBoundary = lazy(() =>
+  import("@/components/editor/error-boundary").then((m) => ({ default: m.EditorErrorBoundary })),
+);
 
 const Loading = ({ label }: { label: string }) => (
   <div className="flex h-96 items-center justify-center text-sm text-muted-foreground">{label}</div>
@@ -36,6 +39,11 @@ export function App() {
   const [elapsed, setElapsed] = useState(0);
   const [controls, setControls] = useState<StudioControls | null>(null);
   const [editing, setEditing] = useState<Project | null>(null);
+  // Holds the last good document so a crash can be snapshotted rather than lost.
+  const liveProject = useRef<Project | null>(null);
+  const handleProjectChange = useCallback((p: Project) => {
+    liveProject.current = p;
+  }, []);
 
   const handleControls = useCallback((next: StudioControls | null) => setControls(next), []);
   const handleFinished = useCallback(() => {
@@ -72,11 +80,17 @@ export function App() {
     return (
       <>
         <Suspense fallback={<Loading label="Loading the editor…" />}>
-          <Editor
-            key={editing.id}
-            initial={editing}
+          <EditorErrorBoundary
+            getProject={() => liveProject.current}
             onClose={handleEditorClose}
-          />
+          >
+            <Editor
+              key={editing.id}
+              initial={editing}
+              onClose={handleEditorClose}
+              onProjectChange={handleProjectChange}
+            />
+          </EditorErrorBoundary>
         </Suspense>
         <Toaster position="bottom-center" />
       </>

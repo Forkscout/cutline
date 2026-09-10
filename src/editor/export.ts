@@ -1,6 +1,6 @@
 /**
  * Export: decode, composite, encode — all in the browser, on the GPU wherever
- * the browser allows it.
+ * the browser allows it, and off the main thread.
  *
  * The property that matters here is that the picture is produced by the same
  * `drawFrame` the preview uses. The exporter only changes where the frames come
@@ -9,31 +9,11 @@
  * about layout, colour, effects or order.
  */
 
-import {
-  ALL_FORMATS,
-  AudioBufferSource,
-  BlobSource,
-  BufferTarget,
-  CanvasSource,
-  Input,
-  Mp4OutputFormat,
-  Output,
-  QUALITY_HIGH,
-  QUALITY_LOW,
-  QUALITY_MEDIUM,
-  QUALITY_VERY_HIGH,
-  VideoSampleSink,
-  WebMOutputFormat,
-  getFirstEncodableAudioCodec,
-  getFirstEncodableVideoCodec,
-  type Quality,
-  type VideoSample,
-} from "mediabunny";
-import { assetTimeFor, drawFrame } from "./compositor";
 import { assetFile } from "./media";
 import { assetOf, fadeGainAt, projectDuration, trackAudible } from "./project";
 import type { Container } from "./presets";
 import type { Clip, Project } from "./types";
+import type { FromWorker, ToWorker, WorkerAudio } from "./export-worker";
 
 export interface ExportOptions {
   container: Container;
@@ -54,13 +34,6 @@ export interface ExportProgress {
   frame: number;
   totalFrames: number;
 }
-
-const QUALITIES: Record<ExportOptions["quality"], Quality> = {
-  low: QUALITY_LOW,
-  medium: QUALITY_MEDIUM,
-  high: QUALITY_HIGH,
-  veryHigh: QUALITY_VERY_HIGH,
-};
 
 /* ------------------------------------------------------------------ audio */
 
@@ -156,38 +129,20 @@ async function mixAudio(
 /* ------------------------------------------------------------------ video */
 
 /**
- * A clip's decoded frames, pulled one per output frame.
+ * Hands the mix to the worker as one planar block.
  *
- * Export walks time forwards, so each clip's needed timestamps are monotonic —
- * which lets mediabunny decode each packet once instead of seeking per frame.
- * The difference between this and calling `getSample` per frame is roughly an
- * order of magnitude.
+ * `AudioBuffer` cannot cross a worker boundary — it belongs to an audio
+ * context, and workers have none — so the channels are copied out into a single
+ * `Float32Array` laid out one channel after another, which is the shape the
+ * encoder wants anyway. The buffer is transferred, not cloned.
  */
-class ClipFrames {
-  private iterator: AsyncGenerator<VideoSample | null, void, unknown>;
-  private last: VideoSample | null = null;
-
-  constructor(sink: VideoSampleSink, timestamps: number[]) {
-    this.iterator = sink.samplesAtTimestamps(timestamps);
+function toWorkerAudio(buffer: AudioBuffer): WorkerAudio {
+  const channels = buffer.numberOfChannels;
+  const data = new Float32Array(buffer.length * channels);
+  for (let c = 0; c < channels; c += 1) {
+    data.set(buffer.getChannelData(c), c * buffer.length);
   }
-
-  async next(): Promise<VideoSample | null> {
-    const result = await this.iterator.next();
-    if (result.done) return this.last;
-    // A null means no new frame for this timestamp — hold the previous one
-    // rather than dropping to black between source frames.
-    if (result.value) {
-      this.last?.close();
-      this.last = result.value;
-    }
-    return this.last;
-  }
-
-  close(): void {
-    this.last?.close();
-    this.last = null;
-    void this.iterator.return(undefined);
-  }
+  return { data, channels, sampleRate: buffer.sampleRate };
 }
 
 export async function exportProject(
@@ -199,151 +154,79 @@ export async function exportProject(
   const end = projectDuration(project);
   const from = options.useInOut ? (project.inPoint ?? 0) : 0;
   const to = options.useInOut ? (project.outPoint ?? end) : end;
-  const duration = to - from;
-  if (duration <= 0) throw new Error("There is nothing on the timeline to export.");
+  if (to - from <= 0) throw new Error("There is nothing on the timeline to export.");
 
   // Encoders reject odd dimensions; round both down to an even number.
   const scale = options.height / project.height;
   const width = Math.round((project.width * scale) / 2) * 2;
   const height = Math.round(options.height / 2) * 2;
-  const fps = options.frameRate;
-  const totalFrames = Math.max(1, Math.round(duration * fps));
 
-  const scaled: Project = { ...project, width, height };
+  onProgress?.({ stage: "audio", progress: 0, frame: 0, totalFrames: 0 });
+  const mixed = await mixAudio(project, from, to);
+  const audio = mixed ? toWorkerAudio(mixed) : null;
 
-  const videoCodec = await getFirstEncodableVideoCodec(
-    options.container === "mp4" ? ["avc", "hevc", "av1"] : ["vp9", "vp8", "av1"],
-    { width, height },
-  );
-  if (!videoCodec) throw new Error("This browser cannot encode video in that container.");
+  const worker = new Worker(new URL("./export-worker.ts", import.meta.url), { type: "module" });
 
-  const audioCodec = await getFirstEncodableAudioCodec(
-    options.container === "mp4" ? ["aac", "opus"] : ["opus"],
-  );
+  return new Promise<Blob>((resolve, reject) => {
+    const cleanup = () => {
+      signal?.removeEventListener("abort", onAbort);
+      worker.terminate();
+    };
+    const onAbort = () => {
+      worker.postMessage({ type: "cancel" } satisfies ToWorker);
+      cleanup();
+      reject(new DOMException("Export cancelled", "AbortError"));
+    };
 
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d", { alpha: false });
-  if (!ctx) throw new Error("Could not get a 2D context for the export.");
-
-  const output = new Output({
-    format: options.container === "mp4" ? new Mp4OutputFormat() : new WebMOutputFormat(),
-    target: new BufferTarget(),
-  });
-
-  const videoSource = new CanvasSource(canvas, {
-    codec: videoCodec,
-    ...(options.bitrateMbps
-      ? { bitrate: Math.round(options.bitrateMbps * 1_000_000) }
-      : { quality: QUALITIES[options.quality] }),
-    keyFrameInterval: 2,
-  });
-  output.addVideoTrack(videoSource, { frameRate: fps });
-
-  onProgress?.({ stage: "audio", progress: 0, frame: 0, totalFrames });
-  const mixed = audioCodec ? await mixAudio(scaled, from, to) : null;
-  let audioSource: AudioBufferSource | null = null;
-  if (mixed && audioCodec) {
-    audioSource = new AudioBufferSource({ codec: audioCodec, quality: QUALITY_HIGH });
-    output.addAudioTrack(audioSource);
-  }
-
-  await output.start();
-
-  const inputs: Input[] = [];
-  const frames = new Map<string, ClipFrames>();
-  const stills = new Map<string, ImageBitmap>();
-
-  try {
-    if (audioSource && mixed) await audioSource.add(mixed);
-
-    for (const track of scaled.tracks) {
-      if (track.kind !== "video" || track.hidden) continue;
-      for (const clip of track.clips) {
-        if (!clip.enabled) continue;
-        const asset = assetOf(scaled, clip);
-        if (!asset?.hasVideo || asset.offline) continue;
-
-        const file = await assetFile(asset);
-
-        if (asset.kind === "image") {
-          // A still needs decoding exactly once, not per frame.
-          stills.set(clip.id, await createImageBitmap(file));
-          continue;
-        }
-
-        const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
-        inputs.push(input);
-        const videoTrack = await input.getPrimaryVideoTrack();
-        if (!videoTrack) continue;
-
-        const timestamps: number[] = [];
-        for (let i = 0; i < totalFrames; i += 1) {
-          const t = from + i / fps;
-          if (t >= clip.start && t < clip.start + clip.duration) {
-            timestamps.push(Math.max(0, assetTimeFor(clip, t)));
-          }
-        }
-        // A reversed clip walks its source backwards, and the decoder needs the
-        // timestamps in the order it will be asked for them.
-        frames.set(clip.id, new ClipFrames(new VideoSampleSink(videoTrack), timestamps));
-      }
+    if (signal?.aborted) {
+      onAbort();
+      return;
     }
+    signal?.addEventListener("abort", onAbort);
 
-    const pending = new Map<string, CanvasImageSource | null>();
-
-    for (let i = 0; i < totalFrames; i += 1) {
-      if (signal?.aborted) throw new DOMException("Export cancelled", "AbortError");
-      const t = from + i / fps;
-
-      pending.clear();
-      for (const track of scaled.tracks) {
-        if (track.kind !== "video" || track.hidden) continue;
-        for (const clip of track.clips) {
-          if (!clip.enabled) continue;
-          if (t < clip.start || t >= clip.start + clip.duration) continue;
-
-          const still = stills.get(clip.id);
-          if (still) {
-            pending.set(clip.id, still);
-            continue;
-          }
-          const source = frames.get(clip.id);
-          if (!source) continue;
-          const sample = await source.next();
-          pending.set(clip.id, sample ? sample.toCanvasImageSource() : null);
-        }
-      }
-
-      // Guides are a preview aid and must never reach the file.
-      drawFrame(ctx, scaled, t, (clip) => pending.get(clip.id) ?? null, { guides: false });
-      await videoSource.add(i / fps, 1 / fps);
-
-      if (i % 5 === 0 || i === totalFrames - 1) {
+    worker.onmessage = (event: MessageEvent<FromWorker>) => {
+      const message = event.data;
+      if (message.type === "progress") {
         onProgress?.({
-          stage: "video",
-          progress: (i + 1) / totalFrames,
-          frame: i + 1,
-          totalFrames,
+          stage: message.stage,
+          progress: message.progress,
+          frame: message.frame,
+          totalFrames: message.totalFrames,
         });
+        return;
       }
-    }
+      if (message.type === "done") {
+        cleanup();
+        resolve(new Blob([message.buffer], { type: message.mimeType }));
+        return;
+      }
+      cleanup();
+      reject(new Error(message.message));
+    };
 
-    onProgress?.({ stage: "finalising", progress: 1, frame: totalFrames, totalFrames });
-    await output.finalize();
+    worker.onerror = (event) => {
+      cleanup();
+      reject(new Error(event.message || "The export worker failed to start."));
+    };
 
-    const buffer = output.target.buffer;
-    if (!buffer) throw new Error("Export produced no data.");
-    return new Blob([buffer], {
-      type: options.container === "mp4" ? "video/mp4" : "video/webm",
-    });
-  } catch (err) {
-    await output.cancel().catch(() => {});
-    throw err;
-  } finally {
-    for (const source of frames.values()) source.close();
-    for (const bitmap of stills.values()) bitmap.close();
-    for (const input of inputs) input.dispose();
-  }
+    const payload: ToWorker = {
+      type: "run",
+      // The project is plain JSON by construction, so it structured-clones
+      // without any preparation — which is much of the reason it is kept that
+      // way.
+      project,
+      options: {
+        container: options.container,
+        width,
+        height,
+        frameRate: options.frameRate,
+        quality: options.quality,
+        bitrateMbps: options.bitrateMbps,
+        from,
+        to,
+      },
+      audio,
+    };
+    worker.postMessage(payload, audio ? [audio.data.buffer] : []);
+  });
 }

@@ -40,6 +40,18 @@ export interface MediaAsset {
   rating: number;
   colorLabel: string | null;
   favorite: boolean;
+  /**
+   * A small transcode used for playback only.
+   *
+   * Preview decodes in real time, and a 4K screen recording will not keep up
+   * on any machine that is also compositing three other layers. Export always
+   * reads the original, so nothing is lost to it.
+   *
+   * Interpreted against the asset's own origin: a file name inside the session
+   * directory for a recording, a media-store id for an imported file.
+   */
+  proxyName?: string;
+
   /** A data URL, cached so the browser does not re-decode on every render. */
   thumbnail?: string;
   /** Normalised min/max pairs per bucket, for drawing waveforms. */

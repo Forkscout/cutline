@@ -16,12 +16,14 @@ import {
   Conversion,
   Input,
   Output,
+  QUALITY_LOW,
   WebMOutputFormat,
 } from "mediabunny";
 import type { SessionMeta } from "@/recorder/types";
 import {
   getMediaFile,
   getTrackFile,
+  mediaFileExists,
   sessionFileExists,
   writeMediaFile,
   writeSessionFile,
@@ -31,6 +33,38 @@ import type { AssetKind, MediaAsset } from "./types";
 /** The remuxed sibling of a recorded file. */
 export function editableName(fileName: string): string {
   return fileName.replace(/\.(\w+)$/, ".edit.$1");
+}
+
+/** The playback-resolution sibling. */
+export function proxyName(fileName: string): string {
+  return fileName.replace(/\.(\w+)$/, ".proxy.webm");
+}
+
+/** Anything taller than this gets a proxy; below it the original plays fine. */
+const PROXY_TRIGGER_HEIGHT = 1200;
+/** What the proxy is scaled to. */
+const PROXY_HEIGHT = 720;
+
+/**
+ * A small VP8 transcode for playback.
+ *
+ * VP8 rather than VP9 on purpose: the proxy exists to be decoded quickly while
+ * three other layers are being composited, and VP8 decodes faster than it
+ * compresses well. Quality is deliberately low — nobody grades from a proxy.
+ */
+async function makeProxy(file: File, onProgress?: (fraction: number) => void): Promise<ArrayBuffer> {
+  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  const output = new Output({ format: new WebMOutputFormat(), target: new BufferTarget() });
+  const conversion = await Conversion.init({
+    input,
+    output,
+    video: { height: PROXY_HEIGHT, fit: "contain", codec: "vp8", bitrate: QUALITY_LOW },
+  });
+  if (onProgress) conversion.onProgress = (fraction) => onProgress(fraction);
+  await conversion.execute();
+  const buffer = output.target.buffer;
+  if (!buffer) throw new Error("Proxy produced no output.");
+  return buffer;
 }
 
 const IMAGE_TYPES = /^image\//;
@@ -200,7 +234,9 @@ export interface ImportProgress {
   name: string;
   index: number;
   total: number;
-  stage: "remuxing" | "probing" | "thumbnail" | "waveform";
+  stage: "remuxing" | "probing" | "thumbnail" | "waveform" | "proxy";
+  /** 0..1 within the current stage, where the stage can report it. */
+  fraction?: number;
 }
 
 function baseAsset(name: string, kind: AssetKind, mimeType: string, bytes: number): MediaAsset {
@@ -266,6 +302,21 @@ export async function importSession(
       ...(info.channels ? { channels: info.channels } : {}),
     };
 
+    if (info.hasVideo && info.height > PROXY_TRIGGER_HEIGHT) {
+      const proxy = proxyName(track.fileName);
+      if (!(await sessionFileExists(session.id, proxy))) {
+        onProgress?.({ name: track.fileName, index, total, stage: "proxy", fraction: 0 });
+        await writeSessionFile(
+          session.id,
+          proxy,
+          await makeProxy(editable, (fraction) =>
+            onProgress?.({ name: track.fileName, index, total, stage: "proxy", fraction }),
+          ),
+        );
+      }
+      asset.proxyName = proxy;
+    }
+
     onProgress?.({ name: track.fileName, index, total, stage: "thumbnail" });
     asset.thumbnail = await thumbnailFor(editable, kind);
     if (info.hasAudio) {
@@ -312,6 +363,18 @@ export async function importFiles(
         ...(info.channels ? { channels: info.channels } : {}),
       };
 
+      if (info.hasVideo && info.height > PROXY_TRIGGER_HEIGHT) {
+        const proxyId = `${fileId}.proxy`;
+        if (!(await mediaFileExists(proxyId))) {
+          onProgress?.({ name: file.name, index, total, stage: "proxy", fraction: 0 });
+          const bytes = await makeProxy(file, (fraction) =>
+            onProgress?.({ name: file.name, index, total, stage: "proxy", fraction }),
+          );
+          await writeMediaFile(proxyId, new Blob([bytes], { type: "video/webm" }));
+        }
+        asset.proxyName = proxyId;
+      }
+
       onProgress?.({ name: file.name, index, total, stage: "thumbnail" });
       asset.thumbnail = await thumbnailFor(file, kind);
       if (info.hasAudio) {
@@ -334,12 +397,40 @@ export async function importFiles(
 
 /* ------------------------------------------------------------------ access */
 
-/** Reads an asset's bytes back, wherever they live. */
-export async function assetFile(asset: MediaAsset): Promise<File> {
+/**
+ * Reads an asset's bytes back, wherever they live.
+ *
+ * `preferProxy` is for playback only. The exporter must never pass it — a file
+ * delivered from a 720p proxy would be exactly as long, exactly the right
+ * codec, and visibly soft.
+ */
+export async function assetFile(asset: MediaAsset, preferProxy = false): Promise<File> {
+  const name = preferProxy && asset.proxyName ? asset.proxyName : null;
+
   if (asset.origin.type === "recording") {
+    if (name) {
+      try {
+        return await getTrackFile(asset.origin.sessionId, name);
+      } catch {
+        // A missing proxy is a performance problem, not a failure.
+      }
+    }
     return getTrackFile(asset.origin.sessionId, asset.origin.fileName);
   }
+
+  if (name) {
+    try {
+      return await getMediaFile(name);
+    } catch {
+      // As above.
+    }
+  }
   return getMediaFile(asset.id);
+}
+
+/** True when this asset is being played from a reduced-resolution copy. */
+export function usingProxy(asset: MediaAsset): boolean {
+  return Boolean(asset.proxyName);
 }
 
 /**
@@ -359,7 +450,8 @@ export class AssetUrls {
     const inFlight = this.pending.get(asset.id);
     if (inFlight) return inFlight;
 
-    const promise = assetFile(asset).then((file) => {
+    // Playback always asks for the proxy; the exporter calls assetFile itself.
+    const promise = assetFile(asset, true).then((file) => {
       const url = URL.createObjectURL(file);
       this.urls.set(asset.id, url);
       this.pending.delete(asset.id);

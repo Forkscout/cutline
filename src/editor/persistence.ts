@@ -146,7 +146,7 @@ function migrate(project: Project): Project {
     markers: project.markers ?? [],
     bins: project.bins ?? [],
     captions: project.captions ?? [],
-    assets: project.assets ?? [],
+    assets: (project.assets ?? []).map((asset) => ({ ...asset, tags: asset.tags ?? [] })),
     tracks: (project.tracks ?? []).map((track) => ({
       ...track,
       solo: track.solo ?? false,

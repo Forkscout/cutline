@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Cutline — stress check</title>
+    <style>
+      body { background:#0d1315; color:#e5ebe9; font:13px/1.6 ui-monospace,monospace; padding:24px; }
+      pre { white-space:pre-wrap; }
+      .ok { color:#4fb5a0; } .bad { color:#f2645b; } .dim { color:#6b7d79; }
+    </style>
+  </head>
+  <body>
+    <h1>Stress check</h1>
+    <p>Records a long, high-resolution synthetic take and measures what it costs:
+       write throughput, heap growth, storage headroom, and whether the far end of
+       the file can still be seeked after import. Takes a couple of minutes.</p>
+    <pre id="log"></pre>
+    <script type="module" src="/src/dev-stress-check.ts"></script>
+  </body>
+</html>

@@ -200,6 +200,16 @@ export async function writeMediaFile(fileId: string, data: Blob): Promise<void> 
   await writable.close();
 }
 
+export async function mediaFileExists(fileId: string): Promise<boolean> {
+  try {
+    const dir = await namedDir(MEDIA_DIR);
+    await dir.getFileHandle(fileId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function getMediaFile(fileId: string): Promise<File> {
   const dir = await namedDir(MEDIA_DIR);
   return (await dir.getFileHandle(fileId)).getFile();

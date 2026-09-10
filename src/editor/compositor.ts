@@ -9,6 +9,7 @@
  * is precisely the bug this design exists to prevent.
  */
 
+import { chromaKeyGl } from "./chroma-gl";
 import { clipAt } from "./keyframes";
 import { effectsToFilter, gradeToFilter, isNeutralGrade, overlayEffects } from "./effects";
 import type {
@@ -44,12 +45,31 @@ const REFERENCE_HEIGHT = 1080;
  * per layer per frame is the difference between a preview that plays and one
  * that stutters every time the garbage collector catches up.
  */
-const scratch = new Map<string, HTMLCanvasElement>();
+type AnyCanvas = HTMLCanvasElement | OffscreenCanvas;
 
-function getScratch(key: string, width: number, height: number): HTMLCanvasElement {
+/**
+ * Canvas creation that works on both sides of the worker boundary.
+ *
+ * The exporter runs this whole file inside a worker, where `document` does not
+ * exist. Everything here has to reach for `OffscreenCanvas` in that case, and
+ * a single missed `document.createElement` is a crash rather than a fallback.
+ */
+export function makeCanvas(width: number, height: number): AnyCanvas {
+  if (typeof document !== "undefined") {
+    const c = document.createElement("canvas");
+    c.width = width;
+    c.height = height;
+    return c;
+  }
+  return new OffscreenCanvas(width, height);
+}
+
+const scratch = new Map<string, AnyCanvas>();
+
+function getScratch(key: string, width: number, height: number): AnyCanvas {
   let canvas = scratch.get(key);
   if (!canvas) {
-    canvas = document.createElement("canvas");
+    canvas = makeCanvas(width, height);
     scratch.set(key, canvas);
   }
   if (canvas.width !== width || canvas.height !== height) {
@@ -70,8 +90,15 @@ function getScratch(key: string, width: number, height: number): HTMLCanvasEleme
  * showing nothing but the background.
  */
 function sourceSize(image: CanvasImageSource): { w: number; h: number } {
-  if (image instanceof HTMLVideoElement) return { w: image.videoWidth, h: image.videoHeight };
-  if (image instanceof HTMLImageElement) return { w: image.naturalWidth, h: image.naturalHeight };
+  // Every `instanceof` here is guarded, because this file also runs inside the
+  // export worker where `HTMLVideoElement` and `HTMLImageElement` do not exist
+  // at all — an unguarded reference is a ReferenceError, not a false branch.
+  if (typeof HTMLVideoElement !== "undefined" && image instanceof HTMLVideoElement) {
+    return { w: image.videoWidth, h: image.videoHeight };
+  }
+  if (typeof HTMLImageElement !== "undefined" && image instanceof HTMLImageElement) {
+    return { w: image.naturalWidth, h: image.naturalHeight };
+  }
   if (typeof VideoFrame !== "undefined" && image instanceof VideoFrame) {
     return { w: image.displayWidth, h: image.displayHeight };
   }
@@ -132,12 +159,20 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
 function applyChromaKey(
   image: CanvasImageSource,
   chroma: { color: string; similarity: number; smoothness: number; spill: number },
-): HTMLCanvasElement | null {
+): CanvasImageSource | null {
   const { w, h } = sourceSize(image);
   if (!(w > 0) || !(h > 0)) return null;
 
+  // The GPU does this in well under a millisecond. The loop below is the
+  // fallback for contexts without WebGL2, and it is an order of magnitude
+  // slower — enough to stop playback dead at 1080p.
+  const gpu = chromaKeyGl(image, Math.round(w), Math.round(h), chroma);
+  if (gpu) return gpu;
+
   const canvas = getScratch("chroma", Math.round(w), Math.round(h));
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const ctx = canvas.getContext("2d", {
+    willReadFrequently: true,
+  }) as CanvasRenderingContext2D | null;
   if (!ctx) return null;
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -181,17 +216,15 @@ function applyChromaKey(
 
 /* ---------------------------------------------------------- overlay effects */
 
-let noiseTile: HTMLCanvasElement | null = null;
+let noiseTile: AnyCanvas | null = null;
 
 /** One noise tile, generated once and reused — regenerating per frame is the
  *  single most expensive thing a grain effect can do. */
-function getNoiseTile(): HTMLCanvasElement {
+function getNoiseTile(): AnyCanvas {
   if (noiseTile) return noiseTile;
   const size = 128;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d")!;
+  const canvas = makeCanvas(size, size);
+  const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
   const data = ctx.createImageData(size, size);
   for (let i = 0; i < data.data.length; i += 4) {
     const v = Math.round(Math.random() * 255);
@@ -279,7 +312,9 @@ function applyPixelEffects(
   const { w, h } = sourceSize(source);
   if (!(w > 0) || !(h > 0)) return source;
   const canvas = getScratch("pixel", Math.round(w), Math.round(h));
-  const ctx = canvas.getContext("2d", { willReadFrequently: Boolean(posterize) });
+  const ctx = canvas.getContext("2d", {
+    willReadFrequently: Boolean(posterize),
+  }) as CanvasRenderingContext2D | null;
   if (!ctx) return source;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -288,7 +323,7 @@ function applyPixelEffects(
     const smallW = Math.max(1, Math.round(canvas.width / size));
     const smallH = Math.max(1, Math.round(canvas.height / size));
     const small = getScratch("pixel-small", smallW, smallH);
-    const smallCtx = small.getContext("2d");
+    const smallCtx = small.getContext("2d") as CanvasRenderingContext2D | null;
     if (smallCtx) {
       smallCtx.clearRect(0, 0, smallW, smallH);
       smallCtx.drawImage(source, 0, 0, smallW, smallH);
@@ -620,7 +655,7 @@ export function drawLayer(
   }
 
   const layerCanvas = getScratch("layer", project.width, project.height);
-  const layerCtx = layerCanvas.getContext("2d");
+  const layerCtx = layerCanvas.getContext("2d") as CanvasRenderingContext2D | null;
   if (!layerCtx) {
     ctx.restore();
     return;
@@ -670,7 +705,9 @@ let measureCtx: CanvasRenderingContext2D | null = null;
 function textMetrics(project: Project, clip: Clip): { w: number; h: number } {
   const style = clip.text;
   if (!style) return { w: 0, h: 0 };
-  if (!measureCtx) measureCtx = document.createElement("canvas").getContext("2d");
+  if (!measureCtx) {
+    measureCtx = makeCanvas(2, 2).getContext("2d") as CanvasRenderingContext2D | null;
+  }
   const unit = project.height / REFERENCE_HEIGHT;
   const fontSize = style.fontSize * unit * clip.transform.scale;
   const lines = style.content.split("\n");

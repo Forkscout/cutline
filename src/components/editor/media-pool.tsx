@@ -98,9 +98,10 @@ export function MediaPool({
     if (files.length === 0) return;
     setImporting(`Importing ${files.length} file${files.length > 1 ? "s" : ""}…`);
     try {
-      const { assets, failed } = await importFiles(files, (p) =>
-        setImporting(`${p.stage} ${p.name} (${p.index + 1}/${p.total})`),
-      );
+      const { assets, failed } = await importFiles(files, (p) => {
+        const pct = p.fraction === undefined ? "" : ` ${Math.round(p.fraction * 100)}%`;
+        setImporting(`${p.stage}${pct} · ${p.name} (${p.index + 1}/${p.total})`);
+      });
       if (assets.length > 0) {
         dispatch({ type: "addAssets", assets: assets.map((a) => ({ ...a, binId })) });
         toast.success(`Imported ${assets.length} file${assets.length > 1 ? "s" : ""}`);
@@ -263,6 +264,14 @@ export function MediaPool({
                     {asset.favorite && (
                       <Star className="absolute top-1 left-1 size-3 fill-amber-400 text-amber-400" />
                     )}
+                    {asset.proxyName && (
+                      <span
+                        className="absolute top-1 right-1 rounded bg-primary px-1 text-[8px] font-bold text-primary-foreground"
+                        title="Played from a 720p proxy. The export uses the original."
+                      >
+                        PROXY
+                      </span>
+                    )}
                   </div>
                   <div className="px-1.5 py-1">
                     <p className="truncate text-[11px] font-medium">{asset.name}</p>
@@ -337,6 +346,9 @@ function AssetDetails({
       ? ([["Audio", `${(asset.sampleRate / 1000).toFixed(1)} kHz · ${asset.channels ?? 1}ch`]] as [string, string][])
       : []),
     ["Format", asset.mimeType || "—"],
+    ...(asset.proxyName
+      ? ([["Playback", "720p proxy · export uses the original"]] as [string, string][])
+      : []),
     ["Added", new Date(asset.createdAt).toLocaleDateString()],
   ];
 
