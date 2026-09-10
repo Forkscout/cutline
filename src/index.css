@@ -1,0 +1,203 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * A recorder and an editor want opposite things from a colour scheme, so the
+ * app runs two.
+ *
+ * The capture and library surfaces are light and open — you are choosing and
+ * arranging, and the app should feel like paper. The editor stamps itself dark
+ * regardless of the viewer's theme, because the picture is the thing being
+ * judged there and a bright surround shifts how you read exposure and colour.
+ * Both share one palette: a lime accent against green-biased neutrals, so the
+ * two halves read as one product.
+ */
+:root {
+  --radius: 0.85rem;
+
+  --background: #ffffff;
+  --foreground: #101a0d;
+  --card: #ffffff;
+  --card-foreground: #101a0d;
+  --popover: #ffffff;
+  --popover-foreground: #101a0d;
+
+  --primary: #c3f53c;
+  --primary-foreground: #14300f;
+
+  --secondary: #f3f5ee;
+  --secondary-foreground: #23301e;
+  --muted: #f5f6f1;
+  --muted-foreground: #6c7666;
+  --accent: #edf7d9;
+  --accent-foreground: #24380f;
+
+  --destructive: #e8453c;
+  --border: #e5e8de;
+  --input: #e5e8de;
+  --ring: #a8dd2c;
+
+  /* The deep green the reference uses behind capture thumbnails. */
+  --surface-deep: #14300f;
+  --surface-deep-foreground: #c3f53c;
+  --record: #e8453c;
+
+  --chart-1: #c3f53c;
+  --chart-2: #4fb5a0;
+  --chart-3: #f0b429;
+  --chart-4: #7c5cd6;
+  --chart-5: #e8453c;
+
+  --sidebar: #fafbf7;
+  --sidebar-foreground: #101a0d;
+  --sidebar-primary: #c3f53c;
+  --sidebar-primary-foreground: #14300f;
+  --sidebar-accent: #edf7d9;
+  --sidebar-accent-foreground: #24380f;
+  --sidebar-border: #e5e8de;
+  --sidebar-ring: #a8dd2c;
+
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --background: #0b0f09;
+    --foreground: #eaefe4;
+    --card: #141a11;
+    --card-foreground: #eaefe4;
+    --popover: #171e14;
+    --popover-foreground: #eaefe4;
+
+    --primary: #c3f53c;
+    --primary-foreground: #14300f;
+
+    --secondary: #1d2519;
+    --secondary-foreground: #eaefe4;
+    --muted: #1a2117;
+    --muted-foreground: #8e9a86;
+    --accent: #23301b;
+    --accent-foreground: #d6f59a;
+
+    --destructive: #f2645b;
+    --border: #262f21;
+    --input: #2c3626;
+    --ring: #9ed42a;
+
+    --surface-deep: #12290e;
+    --surface-deep-foreground: #c3f53c;
+
+    --sidebar: #101509;
+    --sidebar-foreground: #eaefe4;
+    --sidebar-accent: #23301b;
+    --sidebar-accent-foreground: #d6f59a;
+    --sidebar-border: #262f21;
+  }
+}
+
+:root[data-theme="dark"] {
+  --background: #0b0f09;
+  --foreground: #eaefe4;
+  --card: #141a11;
+  --card-foreground: #eaefe4;
+  --popover: #171e14;
+  --popover-foreground: #eaefe4;
+
+  --primary: #c3f53c;
+  --primary-foreground: #14300f;
+
+  --secondary: #1d2519;
+  --secondary-foreground: #eaefe4;
+  --muted: #1a2117;
+  --muted-foreground: #8e9a86;
+  --accent: #23301b;
+  --accent-foreground: #d6f59a;
+
+  --destructive: #f2645b;
+  --border: #262f21;
+  --input: #2c3626;
+  --ring: #9ed42a;
+
+  --surface-deep: #12290e;
+  --surface-deep-foreground: #c3f53c;
+
+  --sidebar: #101509;
+  --sidebar-foreground: #eaefe4;
+  --sidebar-accent: #23301b;
+  --sidebar-accent-foreground: #d6f59a;
+  --sidebar-border: #262f21;
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 4px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 6px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-surface-deep: var(--surface-deep);
+  --color-surface-deep-foreground: var(--surface-deep-foreground);
+  --color-record: var(--record);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/40;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3 {
+    letter-spacing: -0.025em;
+    text-wrap: balance;
+  }
+}
+
+/* The one thing that must be visible from across a room. */
+@keyframes rec-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.animate-rec { animation: rec-pulse 1.3s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rec { animation: none; }
+}

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Cutline — editor check</title>
+    <style>
+      body { background:#0d0f12; color:#e6e9ee; font:13px/1.6 ui-monospace,monospace; padding:24px; }
+      pre { white-space:pre-wrap; }
+      .ok { color:#3ddc97; } .bad { color:#ff8080; } .dim { color:#8b94a3; }
+      canvas { border:1px solid #333; margin:8px 8px 0 0; vertical-align:top; }
+    </style>
+  </head>
+  <body>
+    <h1>Editor check</h1>
+    <p>Records a synthetic three-source take, builds a project from it, edits it,
+       exports it, then decodes the exported file back and inspects the pixels.</p>
+    <pre id="log"></pre>
+    <div id="shots"></div>
+    <script type="module" src="/src/dev-editor-check.ts"></script>
+  </body>
+</html>

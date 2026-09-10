@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Cutline — pipeline check</title>
+    <style>
+      body { background:#0d0f12; color:#e6e9ee; font:13px/1.6 ui-monospace,monospace; padding:24px; }
+      pre { white-space:pre-wrap; }
+      .ok { color:#3ddc97; } .bad { color:#ff8080; }
+    </style>
+  </head>
+  <body>
+    <h1>Pipeline check</h1>
+    <p>Records synthetic video and audio — no camera, no permission prompts — through
+       the real session, worker and OPFS path, then reads the files back.</p>
+    <pre id="log"></pre>
+    <script type="module" src="/src/dev-check.ts"></script>
+  </body>
+</html>
