@@ -15,56 +15,87 @@ already in this repo — a measurement, not a look.
 
 ## 0. How inference reaches the app
 
-One OpenAI-compatible client covers more of this list than it looks like, and
-building it first means most later items are a prompt rather than a project.
+Different tasks genuinely need different providers — Ollama cannot transcribe,
+only some endpoints generate images, local Whisper is free and private but
+slower than a cloud call. So the routing has to be per capability.
 
-- [ ] **An OpenAI-compatible client with a configurable base URL**
-  **Problem** — Every item below needs a model, and writing a separate
-  integration per provider is how this stalls.
-  **Approach** — One client, three destinations, no branching:
-  `https://api.openai.com/v1` with a key, `http://localhost:11434/v1` for
-  Ollama, `http://localhost:1234/v1` for LM Studio — and by the same token
-  Groq, OpenRouter, llama.cpp's server, vLLM, or anything else that speaks the
-  shape. Store base URL, key and model name in local storage; ship a "test
-  connection" button that calls `/v1/models` and names what came back.
-  **Test** — Point it at a local server and at a cloud endpoint with the same
-  code path; assert both list models and complete a trivial prompt.
+**The user must never see that.** A settings page with five endpoints to fill in
+before auto-captions works is where this feature dies. The resolution is that
+configuration is *discovered*, not declared: the user adds a provider, the app
+works out what it can do, and every capability routes itself.
 
-### What this covers
+### The model
 
-Everything whose input is text and whose output is text: chapters and titles,
-translation, retake grouping, highlight scoring, natural-language edits. Vision
-tasks — reading a screen, judging whether text is legible — go through the same
-chat endpoint as image content parts, so they come almost free wherever the
-model is vision-capable.
+- [ ] **Capabilities, providers, and automatic routing between them**
+  **Problem** — Per-task configuration is correct and unusable. One global
+  endpoint is usable and wrong.
+  **Approach** — Name the capabilities the app can want — `transcribe`, `text`,
+  `vision`, `image`, `video`, `speech`, `embed`. A provider is only a name, a
+  base URL and an optional key. Routing resolves each capability on its own, in
+  a fixed order: **in-browser first, then a local server, then cloud** — cheapest
+  and most private wins by default. An Advanced panel can pin a capability to a
+  specific provider and model, and nobody should ever have to open it.
+  **Test** — With two providers registered where only one transcribes, assert
+  the transcribe capability resolves to that one and text resolves to the higher
+  priority one.
 
-### What it does not cover, and why
+- [ ] **Adding a provider reports capabilities, not success**
+  **Problem** — "Connection successful" is what lets someone point the app at
+  Ollama, see a green tick, and discover only at the captions button that the
+  entire transcript half of this list is unavailable.
+  **Approach** — On add, probe `/v1/models` and the optional endpoints, then
+  show what came back as a capability list: *text ✓ · vision ✓ · transcription
+  ✗*. Say what is missing and what would provide it.
+  **Test** — Point it at an endpoint with no audio support; assert the report
+  marks transcription unavailable and the captions feature stays hidden rather
+  than failing on use.
 
-Two gaps. Both are real and neither is a reason to skip the client.
+- [ ] **Ask in context, never up front**
+  **Problem** — A setup wizard before the first recording is a wall in front of
+  a product whose whole point is that you press record.
+  **Approach** — No AI configuration exists until something needs it. The first
+  time a feature wants a missing capability, ask at that moment, in that panel,
+  with the cheapest option already selected — "Auto-captions needs speech to
+  text: **download the model once (142 MB), runs on this machine** · or connect
+  a provider".
+  **Test** — A fresh profile can record, edit and export end to end without
+  encountering a single AI setting.
 
-- [ ] **Transcription needs a provider that implements it**
-  **Problem** — `/v1/audio/transcriptions` is part of the standard, but not
-  everything that speaks OpenAI's chat API speaks its audio API. **Ollama does
-  not do speech-to-text at all**, so pointing the client at Ollama gives you
-  every item in section 2 except the transcript they all depend on.
-  **Approach** — Either a provider that has the endpoint (OpenAI, Groq,
-  whisper.cpp's server, faster-whisper-server), or Whisper in the browser via
-  transformers.js. In-browser is the only option that keeps the promise on the
-  README, and this machine already has `whisper-large-v3-turbo` cached from
-  earlier work.
-  **Test** — Whichever route, the test from section 1 is the same: known
-  script, assert word error rate and timestamp bounds. Run it against both so
-  the difference is measured rather than assumed.
+- [ ] **Features degrade, they do not error**
+  **Problem** — A panel full of controls that throw when pressed is worse than
+  a panel that is honest about not being ready.
+  **Approach** — Every AI-backed control checks its capability first. Missing
+  means the control is replaced by the one-line offer above, not disabled with a
+  tooltip and not present-but-broken.
+  **Test** — With no providers and no downloaded models, assert no AI control in
+  the interface can produce an error dialog.
 
-- [ ] **Per-frame work cannot go over HTTP**
-  **Problem** — Background removal, face tracking for auto-framing, and voice
-  denoise all run on every frame or every audio block. Thirty round-trips a
-  second to any endpoint, local or not, is not a design.
-  **Approach** — Those items are in-browser models regardless of what item 0
-  decides: MediaPipe or ONNX Runtime Web, WebGPU where available. They are
-  marked in sections 3 and 4 where they appear.
-  **Test** — Measure milliseconds per frame, not accuracy alone. Anything above
-  the frame budget is a feature that cannot be used while recording.
+- [ ] **Say where it will run, before it runs**
+  **Problem** — The README promises nothing leaves the machine. The moment a
+  cloud key exists, that promise needs to be visible per action rather than
+  taken on trust.
+  **Approach** — A small chip on every AI action naming the destination — *on
+  this machine* or *OpenAI* — decided by whether the resolved base URL is local.
+  **Test** — Assert the chip matches the resolved route for each capability, and
+  that a local route issues no external request.
+
+### What routes where, by default
+
+| capability | default | why |
+|---|---|---|
+| `transcribe` | in-browser Whisper | The foundation of section 2, and the case that must be zero-config. Free, private, one download. This machine already has `whisper-large-v3-turbo` cached. |
+| per-frame vision and audio | in-browser, never configurable | Segmentation, face tracking and denoise run every frame. Thirty HTTP round-trips a second is not a design, wherever the endpoint lives. |
+| `text`, `vision` | whatever provider exists | Chapters, titles, translation, retake grouping, natural-language edits. Genuine niceties — the editor works without them, so absence should hide the feature, not block the app. |
+| `image`, `video` | cloud, realistically | Generated b-roll and backgrounds. Nothing local generates these at usable quality yet; keep the capability defined so that changes without a rewrite. |
+| `speech` | either | Text-to-speech for narration replacement. Low priority. |
+
+### One client underneath
+
+Everything above rides on a single OpenAI-compatible client with a configurable
+base URL — `https://api.openai.com/v1`, `http://localhost:11434/v1` for Ollama,
+`http://localhost:1234/v1` for LM Studio, and equally Groq, OpenRouter,
+llama.cpp's server or vLLM. Capability detection is what turns that one client
+into per-task routing, without the user filling in a form per task.
 
 ### Gotchas worth knowing before the first request
 
@@ -73,20 +104,19 @@ Two gaps. Both are real and neither is a reason to skip the client.
   cross-origin request, and local runtimes reject it by default. The failure is
   an opaque network error that looks like the server is down.
   **Approach** — Ollama needs `OLLAMA_ORIGINS` set to include the app's origin;
-  LM Studio has a CORS switch in its server settings. Detect the failure and
-  say exactly this, with the setting named — do not report "could not connect".
-  **Test** — Assert the error message for a CORS failure differs from the one
-  for a genuinely unreachable server.
+  LM Studio has a CORS switch in its server settings. Detect this case and name
+  the setting — do not report "could not connect".
+  **Test** — Assert the message for a CORS failure differs from the one for a
+  genuinely unreachable server.
 
 - [ ] **Be honest about where the key goes**
   **Problem** — There is no backend here, so a cloud key sits in the browser
   and travels with every request from the page. That is the user's call to
   make, but only if they are told.
-  **Approach** — Say it plainly next to the field, and default the setup to a
-  local base URL so the privacy promise on the README holds unless the user
-  deliberately changes it.
-  **Test** — Assert nothing leaves the machine when the base URL is local, by
-  watching the network panel with a cloud key present but unused.
+  **Approach** — Say it plainly next to the field, and let the default routing
+  above mean most people never add one.
+  **Test** — Assert nothing leaves the machine when every capability resolves
+  locally, by watching the network panel with a cloud key present but unused.
 
 > Endpoint behaviour above is from documentation, not from a running server —
 > nothing here was verified against a live Ollama or LM Studio instance. Confirm
