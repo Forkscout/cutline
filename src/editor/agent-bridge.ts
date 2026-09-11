@@ -10,6 +10,7 @@
 
 import { z } from "zod";
 import { listSessions } from "@/lib/media-store";
+import { capabilities, transcribe } from "@/lib/ai";
 import { apiJson } from "@/lib/server";
 import {
   ACTION_TOOLS,
@@ -25,7 +26,7 @@ import { visibleClips } from "./compositor";
 import { createEffect } from "./effects";
 import { exportProject } from "./export";
 import { audioEnvelope, describeChange, leanProject } from "./inspect";
-import { wordsOnTimeline } from "./transcript";
+import { captionsForAsset, wordsOnTimeline, type Transcript } from "./transcript";
 import { readProperty } from "./keyframes";
 import { importSession } from "./media";
 import {
@@ -249,6 +250,21 @@ const holding = new Map<string, boolean>();
  */
 let live: AgentBridge | null = null;
 
+/**
+ * Transcriptions in flight, by asset. A long one outlasts the call that
+ * started it; asking again joins the same job instead of starting another.
+ */
+interface Transcribing {
+  promise: Promise<Transcript>;
+  progress: number;
+  note: string;
+  service: string;
+}
+const transcribing = new Map<string, Transcribing>();
+
+/** How long one transcribe call waits before answering "running". The server gives a relayed call 120 s. */
+const TRANSCRIBE_WAIT_MS = 90_000;
+
 const text = (t: string): BridgeContent => ({ type: "text", text: t });
 const json = (value: unknown): BridgeContent => text(JSON.stringify(value));
 const round = (n: number) => Math.round(n * 1000) / 1000;
@@ -367,7 +383,12 @@ export class AgentBridge {
   private async runAction(key: Action["type"], args: unknown): Promise<BridgeContent[]> {
     const executor = EXECUTORS[key] as (a: unknown, p: Project) => Action | Promise<Action>;
     const action = await executor(args, this.host.history().present);
+    const { label, change } = this.commit(action);
+    return [json({ ok: true, undoStep: label, ...change })];
+  }
 
+  /** Applies an action as the agent's edit, joining the turn's undo step. */
+  private commit(action: Action): { label: string; change: ReturnType<typeof describeChange> } {
     const now = Date.now();
     const turn = this.turn;
     const idle = turn.label ? TURN_IDLE_MS : LOOSE_IDLE_MS;
@@ -387,7 +408,27 @@ export class AgentBridge {
     }
     turn.lastAgentPresent = next.present;
     turn.lastAt = now;
-    return [json({ ok: true, undoStep: label, ...describeChange(prior.present, next.present) })];
+    return { label, change: describeChange(prior.present, next.present) };
+  }
+
+  /**
+   * Puts a finished transcript on its asset as the agent's edit, and the
+   * captions made from it when asked. Runs when the transcription finishes,
+   * which may be after the call that started it has answered "running".
+   */
+  private store(assetId: string, transcript: Transcript, withCaptions: boolean): void {
+    if (!this.lock.holder) return;
+    try {
+      this.commit({ type: "patchAsset", assetId, patch: { transcript } });
+      if (withCaptions) {
+        const project = this.host.history().present;
+        this.commit({ type: "setCaptions", cues: captionsForAsset(project, assetId, transcript).cues });
+        if (!project.captionsEnabled) this.commit({ type: "setProject", patch: { captionsEnabled: true } });
+      }
+    } catch {
+      // The project closed or the asset went away meanwhile. The transcript
+      // is cached beside the file, so the next call finds it at once.
+    }
   }
 
   private async runEditorTool(key: EditorToolKey, raw: Record<string, unknown>): Promise<BridgeContent[]> {
@@ -475,12 +516,79 @@ export class AgentBridge {
         const words = wordsOnTimeline(project).filter((w) => w.end > from && w.start < to);
         if (words.length === 0) {
           const any = project.assets.some((a) => a.transcript);
-          return [text(any ? "Nothing is said in that range." : "No transcript yet. Ask the user to right-click a clip with sound and choose Generate captions.")];
+          return [text(any ? "Nothing is said in that range." : "No transcript yet. Call transcribe with the asset id of a clip with sound.")];
         }
         return [
           json({
             text: words.map((w) => w.text).join(" "),
             words: words.map((w) => ({ start: round(w.start), end: round(w.end), text: w.text })),
+          }),
+        ];
+      }
+      case "transcribe": {
+        const assetId = String(raw.assetId);
+        const asset = project.assets.find((a) => a.id === assetId);
+        if (!asset) throw new ToolError(`No asset ${assetId} in this project. get_project lists them.`);
+        if (!asset.hasAudio) throw new ToolError(`${asset.name} has no sound to transcribe.`);
+        let job = transcribing.get(asset.id);
+        if (!job) {
+          const route = (await capabilities().catch(() => ({ transcribe: null }))).transcribe;
+          if (!route) {
+            throw new ToolError(
+              "No speech-to-text service is connected. Ask the user to connect one in the Captions panel: a whisper.cpp server on this machine, or OpenAI, Groq, OpenRouter or ElevenLabs with a key.",
+            );
+          }
+          const target =
+            asset.origin.type === "recording"
+              ? { sessionId: asset.origin.sessionId, fileName: asset.origin.fileName }
+              : { mediaId: asset.id };
+          const withCaptions = Boolean(raw.captions);
+          const entry: Transcribing = {
+            promise: Promise.resolve(null as unknown as Transcript),
+            progress: 0,
+            note: "starting",
+            service: `${route.name} · ${route.model}${route.local ? " · on this machine" : ""}`,
+          };
+          entry.promise = transcribe(
+            target,
+            { ...(raw.language ? { language: String(raw.language) } : {}), ...(raw.force ? { force: true } : {}) },
+            (fraction, note) => {
+              entry.progress = fraction;
+              entry.note = note;
+            },
+          )
+            .then((t) => {
+              (live ?? this).store(asset.id, t, withCaptions);
+              return t;
+            })
+            .finally(() => transcribing.delete(asset.id));
+          transcribing.set(asset.id, entry);
+          job = entry;
+        }
+        const done = await Promise.race([
+          job.promise,
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), TRANSCRIBE_WAIT_MS)),
+        ]);
+        if (!done) {
+          return [
+            json({
+              status: "running",
+              progress: round(job.progress),
+              note: job.note,
+              service: job.service,
+              next: "Call transcribe again with the same assetId to keep waiting on this job.",
+            }),
+          ];
+        }
+        return [
+          json({
+            status: "done",
+            asset: asset.name,
+            words: done.words.length,
+            language: done.language,
+            timing: done.timing,
+            service: `${done.provider} · ${done.model}`,
+            next: "Read it with transcript.",
           }),
         ];
       }

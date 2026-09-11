@@ -27,7 +27,8 @@ import type { ToCursor } from "../src/lib/cursor-protocol";
 import { TabBridge } from "./bridge";
 import { CursorService, type CursorRecording } from "./cursor";
 import { Remuxer } from "./remux";
-import { AiSettings, isLocal, probe } from "./ai";
+import { AiSettings, isLocal, type ProviderKind } from "./ai";
+import { PROVIDER_KINDS, probe } from "./stt";
 import { Jobs, transcribeFile } from "./transcribe";
 import { loadMcpToken, mcpHandler } from "./mcp";
 import { DiskMediaStore, TruncatedUpload, fileResponse } from "./media";
@@ -259,7 +260,16 @@ api.get("/ai/providers", async (c) => c.json(await ai.list()));
 api.put("/ai/providers/:id", async (c) => {
   const id = c.req.param("id");
   assertSafeId(id);
-  const body = await c.req.json<{ name?: string; baseUrl?: string; transcribeModel?: string; apiKey?: string }>();
+  const body = await c.req.json<{
+    kind?: ProviderKind;
+    name?: string;
+    baseUrl?: string;
+    transcribeModel?: string;
+    apiKey?: string;
+  }>();
+  if (body.kind !== undefined && !PROVIDER_KINDS.includes(body.kind)) {
+    return c.json({ error: `kind must be one of ${PROVIDER_KINDS.join(", ")}` }, 400);
+  }
   let url: URL;
   try {
     url = new URL(body.baseUrl ?? "");
@@ -268,6 +278,7 @@ api.put("/ai/providers/:id", async (c) => {
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return c.json({ error: "The base URL must be http or https." }, 400);
   const provider = await ai.upsert(id, {
+    ...(body.kind ? { kind: body.kind } : {}),
     name: body.name?.trim() || url.host,
     baseUrl: url.toString(),
     ...(body.transcribeModel ? { transcribeModel: body.transcribeModel } : {}),
@@ -292,7 +303,13 @@ api.get("/ai/capabilities", async (c) => {
   const provider = await ai.resolveTranscribe();
   return c.json({
     transcribe: provider
-      ? { providerId: provider.id, name: provider.name, model: provider.transcribeModel, local: isLocal(provider.baseUrl) }
+      ? {
+          providerId: provider.id,
+          kind: provider.kind,
+          name: provider.name,
+          model: provider.transcribeModel,
+          local: isLocal(provider.baseUrl),
+        }
       : null,
   });
 });
@@ -319,8 +336,15 @@ api.post("/transcribe", async (c) => {
     ? media.mediaFile(`${body.mediaId}.transcript.json`)
     : media.recordingFile(body.sessionId ?? "", `${body.fileName}.transcript.json`);
   if ((await media.size(source)) === null) return c.json({ error: "No such file" }, 404);
-  const provider = await ai.resolveTranscribe();
+  let provider = await ai.resolveTranscribe();
   if (!provider) return c.json({ error: "No transcription service is connected." }, 409);
+  // A local service connected before whisper.cpp was told apart carries no
+  // flavor, and would get none of its handling. Probing it again is free.
+  if (provider.kind === "openai" && !provider.capabilities?.flavor && isLocal(provider.baseUrl)) {
+    const capabilities = await probe(provider);
+    await ai.setCapabilities(provider.id, capabilities);
+    provider = { ...provider, capabilities };
+  }
   if (body.language !== undefined && !/^[a-z]{2,3}$/.test(body.language)) {
     return c.json({ error: "language must be an ISO 639 code, like hi or en" }, 400);
   }

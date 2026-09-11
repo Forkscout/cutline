@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { parseSubtitles, toSrt, toVtt } from "@/editor/captions";
 import type { Action } from "@/editor/project";
 import type { MediaAsset, Project } from "@/editor/types";
-import { capabilities, saveProvider, type Capabilities, type ProviderReport } from "@/lib/ai";
+import { capabilities, saveProvider, type Capabilities, type ProviderKind, type ProviderReport } from "@/lib/ai";
 import type { AutoCaptionOptions } from "@/components/editor/auto-captions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,18 +33,49 @@ const LANGUAGES = [
 ] as const;
 
 const WHISPER_SERVER =
-  "whisper-server -m ~/.cache/whisper-cpp/ggml-medium.bin --inference-path /v1/audio/transcriptions --convert -l auto --port 8178";
+  "whisper-server -m ~/.cache/whisper-cpp/ggml-large-v3-turbo.bin --inference-path /v1/audio/transcriptions --convert -l auto --port 8178";
+
+interface Preset {
+  label: string;
+  kind: ProviderKind;
+  baseUrl: string;
+  model: string;
+  needsKey: boolean;
+  note: string;
+}
+
+/**
+ * Where transcription can run. Not everyone has a machine that can run a large
+ * model, so the hosted services sit beside the local one as equals. Every field
+ * stays editable: any OpenAI-compatible endpoint works, not only these.
+ */
+const PRESETS: Preset[] = [
+  { label: "This Mac", kind: "openai", baseUrl: "http://127.0.0.1:8178/v1", model: "whisper-1", needsKey: false,
+    note: "A whisper.cpp server on this machine: free, and nothing leaves it. Long videos want a fast machine." },
+  { label: "OpenAI", kind: "openai", baseUrl: "https://api.openai.com/v1", model: "whisper-1", needsKey: true,
+    note: "Whisper, hosted. Billed per minute of audio." },
+  { label: "Groq", kind: "openai", baseUrl: "https://api.groq.com/openai/v1", model: "whisper-large-v3-turbo", needsKey: true,
+    note: "Whisper large-v3, fast and cheap." },
+  { label: "OpenRouter", kind: "openai", baseUrl: "https://openrouter.ai/api/v1", model: "openai/whisper-large-v3", needsKey: true,
+    note: "One key for many speech-to-text models." },
+  { label: "ElevenLabs", kind: "elevenlabs", baseUrl: "https://api.elevenlabs.io/v1", model: "scribe_v2", needsKey: true,
+    note: "Scribe: strong on Hindi and mixed-language speech." },
+];
 
 /**
  * Connecting a transcription service, in the place it is first needed —
- * never a settings page to visit before recording. Any OpenAI-compatible
- * /audio/transcriptions endpoint: a whisper.cpp server on this machine, or a
- * hosted one with a key.
+ * never a settings page to visit before recording.
  */
 function ConnectTranscription({ onConnected }: { onConnected: () => void }) {
-  const [baseUrl, setBaseUrl] = useState("http://127.0.0.1:8178/v1");
-  const [model, setModel] = useState("whisper-1");
+  const [preset, setPreset] = useState<Preset>(PRESETS[0]!);
+  const [baseUrl, setBaseUrl] = useState(PRESETS[0]!.baseUrl);
+  const [model, setModel] = useState(PRESETS[0]!.model);
   const [apiKey, setApiKey] = useState("");
+  const choose = (next: Preset) => {
+    setPreset(next);
+    setBaseUrl(next.baseUrl);
+    setModel(next.model);
+  };
   const [checking, setChecking] = useState(false);
   const [report, setReport] = useState<ProviderReport | null>(null);
 
@@ -53,7 +84,8 @@ function ConnectTranscription({ onConnected }: { onConnected: () => void }) {
     try {
       const host = new URL(baseUrl).host.replace(/[^A-Za-z0-9_-]+/g, "-");
       const result = await saveProvider(`transcribe-${host}`, {
-        name: new URL(baseUrl).host,
+        kind: preset.kind,
+        name: baseUrl === preset.baseUrl ? preset.label : new URL(baseUrl).host,
         baseUrl,
         transcribeModel: model,
         ...(apiKey ? { apiKey } : {}),
@@ -72,20 +104,27 @@ function ConnectTranscription({ onConnected }: { onConnected: () => void }) {
 
   return (
     <div className="space-y-1.5">
-      <p className="text-[10px] text-muted-foreground">
-        Auto-captions needs a speech-to-text service with an OpenAI-compatible API.
-      </p>
+      <p className="text-[10px] text-muted-foreground">Auto-captions needs a speech-to-text service. Where should it run?</p>
+      <div className="flex flex-wrap gap-1">
+        {PRESETS.map((p) => (
+          <Button key={p.label} size="sm" className="h-5 px-1.5 text-[10px]"
+            variant={preset.label === p.label ? "secondary" : "ghost"} onClick={() => choose(p)}>
+            {p.label}
+          </Button>
+        ))}
+      </div>
+      <p className="text-[10px] leading-snug text-muted-foreground">{preset.note}</p>
       <Input className="h-6 text-[10px]" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="Base URL" />
       <div className="grid grid-cols-2 gap-1">
         <Input className="h-6 text-[10px]" value={model} onChange={(e) => setModel(e.target.value)} placeholder="Model" />
         <Input className="h-6 text-[10px]" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
-          placeholder="API key (optional)" />
+          placeholder={preset.needsKey ? "API key" : "API key (optional)"} />
       </div>
       <p className="text-[10px] leading-snug text-muted-foreground">
         A key stays in ~/Cutline on this machine and is sent only to this URL.
       </p>
       <Button size="sm" className="h-6 w-full text-[10px]" disabled={checking || !baseUrl} onClick={() => void connect()}>
-        {checking ? "Checking…" : "Connect"}
+        {checking ? "Checking…" : `Connect ${preset.label === "This Mac" ? "" : preset.label}`.trim()}
       </Button>
       {report && !report.capabilities?.transcribe && (
         <div className="space-y-1 rounded-md border border-destructive/40 p-1.5 text-[10px] leading-snug">
@@ -93,10 +132,15 @@ function ConnectTranscription({ onConnected }: { onConnected: () => void }) {
             {report.capabilities?.reachable ? "Reachable, but it cannot transcribe." : "Could not reach it."}{" "}
             {report.capabilities?.message}
           </p>
-          <p className="text-muted-foreground">
-            LM Studio has no transcription endpoint yet. A whisper.cpp server on this machine does:
-          </p>
-          <code className="block break-all rounded bg-muted p-1 font-mono text-[9px]">{WHISPER_SERVER}</code>
+          {preset.label === "This Mac" && (
+            <>
+              <p className="text-muted-foreground">
+                LM Studio has no transcription endpoint yet. A whisper.cpp server on this machine does — or pick a
+                hosted service above if this machine is not fast enough:
+              </p>
+              <code className="block break-all rounded bg-muted p-1 font-mono text-[9px]">{WHISPER_SERVER}</code>
+            </>
+          )}
         </div>
       )}
     </div>

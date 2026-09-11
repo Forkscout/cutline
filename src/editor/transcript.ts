@@ -58,11 +58,15 @@ const NOT_SPEECH = /^\s*[[(].*[\])]\s*$/;
 /**
  * Words from a `verbose_json` response, shifted by `offset` seconds.
  *
- * Handles the shapes seen in practice. OpenAI puts whole words in a top-level
- * `words` array. whisper.cpp's server puts them under each segment as tokens —
- * " Cut", then "line" — where a piece without leading space continues the word
- * before it. Services that give no word times at all get their segments
- * spread across their words by length.
+ * Handles the shapes seen in practice. OpenAI, Groq and OpenRouter put whole
+ * words in a top-level `words` array. whisper.cpp's server puts them under each
+ * segment as tokens — " Cut", then "line" — where a piece without leading space
+ * continues the word before it. Those tokens are bytes, though: in Hindi or any
+ * other multi-byte script a character is split across two, and each half
+ * arrives as "\uFFFD". Then the segments are used instead — one word each when
+ * whisper.cpp was asked for `max_len=1`, which makes them word timings too.
+ * Services that give no word times at all get their segments spread across
+ * their words by length.
  */
 export function wordsFromVerboseJson(json: VerboseJson, offset = 0): { words: TranscriptWord[]; timing: Transcript["timing"] } {
   const out: TranscriptWord[] = [];
@@ -78,7 +82,8 @@ export function wordsFromVerboseJson(json: VerboseJson, offset = 0): { words: Tr
   }
 
   const tokens = json.segments?.flatMap((s) => s.words ?? []) ?? [];
-  if (tokens.length > 0) {
+  const broken = tokens.some((t) => (t.word ?? t.text ?? "").includes("\uFFFD"));
+  if (tokens.length > 0 && !broken) {
     let current: TranscriptWord | null = null;
     for (const token of tokens) {
       const raw = token.word ?? token.text ?? "";
@@ -95,8 +100,10 @@ export function wordsFromVerboseJson(json: VerboseJson, offset = 0): { words: Tr
     return { words: out, timing: "word" };
   }
 
+  let oneWordEach = true;
   for (const segment of json.segments ?? []) {
     const parts = segment.text.trim().split(/\s+/).filter(Boolean);
+    if (parts.length > 1) oneWordEach = false;
     const letters = parts.reduce((n, p) => n + p.length, 0) || 1;
     let at = segment.start;
     for (const part of parts) {
@@ -105,7 +112,38 @@ export function wordsFromVerboseJson(json: VerboseJson, offset = 0): { words: Tr
       at += length;
     }
   }
-  return { words: out, timing: "segment" };
+  return { words: out, timing: oneWordEach && out.length > 0 ? "word" : "segment" };
+}
+
+/**
+ * Drops a phrase a model got stuck repeating. Whisper-family models, given a
+ * long part, music or silence, can emit one word or phrase hundreds of times
+ * ("re re re …"). Speech almost never says the same one-to-six-word phrase more
+ * than three times running, so a longer run keeps its first occurrence.
+ */
+export function dropLoops(words: TranscriptWord[], maxRepeats = 3): TranscriptWord[] {
+  const key = (w: TranscriptWord) => w.text.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  const same = (a: number, b: number, n: number) => {
+    for (let k = 0; k < n; k += 1) if (key(words[a + k]!) !== key(words[b + k]!)) return false;
+    return true;
+  };
+  const out: TranscriptWord[] = [];
+  let i = 0;
+  scan: while (i < words.length) {
+    for (let n = 1; n <= 6; n += 1) {
+      if (words.slice(i, i + n).every((w) => key(w) === "")) continue;
+      let repeats = 1;
+      while (i + (repeats + 1) * n <= words.length && same(i, i + repeats * n, n)) repeats += 1;
+      if (repeats > maxRepeats) {
+        out.push(...words.slice(i, i + n));
+        i += repeats * n;
+        continue scan;
+      }
+    }
+    out.push(words[i]!);
+    i += 1;
+  }
+  return out;
 }
 
 /* ---------------------------------------------------------- on the timeline */
@@ -142,6 +180,30 @@ export function wordsOnTimeline(project: Project): TimelineWord[] {
     }
   }
   return out.sort((a, b) => a.start - b.start);
+}
+
+/**
+ * The project's captions with one asset's stretches rebuilt from its
+ * transcript. Cues where a clip of that asset is heard are replaced; every
+ * other cue — a second speaker's, an imported file's — is kept.
+ */
+export function captionsForAsset(
+  project: Project,
+  assetId: string,
+  transcript: Transcript,
+): { cues: CaptionCue[]; added: number } {
+  const clips = project.tracks.flatMap((t) => t.clips.filter((c) => c.assetId === assetId && c.enabled));
+  const clipIds = new Set(clips.map((c) => c.id));
+  const withTranscript: Project = {
+    ...project,
+    assets: project.assets.map((a) => (a.id === assetId ? { ...a, transcript } : a)),
+  };
+  const fresh = captionsFromWords(wordsOnTimeline(withTranscript).filter((w) => clipIds.has(w.clipId))).map(
+    (cue) => ({ id: crypto.randomUUID(), ...cue }),
+  );
+  const heard = (start: number, end: number) => clips.some((c) => start < c.start + c.duration && end > c.start);
+  const cues = [...project.captions.filter((c) => !heard(c.start, c.end)), ...fresh].sort((a, b) => a.start - b.start);
+  return { cues, added: fresh.length };
 }
 
 export interface CaptionRules {

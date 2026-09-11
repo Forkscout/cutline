@@ -128,12 +128,14 @@ viewers. Editing or deleting captions leaves the transcript alone, and it is
 the transcript an agent reads (the `transcript` tool) to time a cut, a title or
 an animation to a word.
 
-Transcription goes through a speech-to-text service with an OpenAI-compatible
-API — hosted with a key, or on your own machine. whisper.cpp's server is free
-and private:
+Choose where transcription runs in the Captions panel. On this Mac, a
+whisper.cpp server is free and nothing leaves the machine — but a long video
+wants a fast one. Otherwise, a hosted service with your key: OpenAI, Groq,
+OpenRouter or ElevenLabs (Scribe is strong on Hindi and mixed-language speech).
+Any OpenAI-compatible endpoint works. For the local route:
 
 ```bash
-whisper-server -m ~/.cache/whisper-cpp/ggml-medium.bin --inference-path /v1/audio/transcriptions --convert -l auto --port 8178
+whisper-server -m ~/.cache/whisper-cpp/ggml-large-v3-turbo.bin --inference-path /v1/audio/transcriptions --convert -l auto --port 8178
 ```
 
 Then press Connect in the Captions panel (the address is filled in). Asking for

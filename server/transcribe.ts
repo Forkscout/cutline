@@ -1,18 +1,19 @@
 /**
- * Transcribing a file through the connected OpenAI-compatible service.
+ * Transcribing a file through whichever speech-to-text service is connected.
  *
- * Long audio goes in parts. Hosted services cap an upload (OpenAI at 25 MB),
- * and an hour of microphone is well over that, so the file is cut into
- * ten-minute pieces — a copy of the packets, not a re-encode — and each
- * piece's words are shifted back by where it started. A file with video sends
- * only its audio.
+ * Long audio goes in parts, each as long as the service takes in one request —
+ * `stt.ts` says how long for each: hosted services cap an upload (OpenAI and
+ * OpenRouter at 25 MB) or a request's running time, and whisper.cpp drifts
+ * into repeating itself over a long one. A part is a copy of the packets, not a
+ * re-encode, and reaches a couple of seconds into its neighbours, so a word on
+ * a cut is heard whole in one of them; each word is kept from the part its
+ * middle falls in. A file with video sends only its audio.
  *
  * Results are cached beside the file, so the same recording opened in a
  * second project is not transcribed, or paid for, twice.
  */
 
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import {
   ALL_FORMATS,
   EncodedAudioPacketSource,
@@ -24,26 +25,33 @@ import {
   Output,
   WebMOutputFormat,
 } from "mediabunny";
-import { wordsFromVerboseJson, type Transcript, type TranscriptWord, type VerboseJson } from "../src/editor/transcript";
-import { authHeaders, endpoint, type Provider } from "./ai";
+import { dropLoops, type Transcript, type TranscriptWord } from "../src/editor/transcript";
+import type { Provider } from "./ai";
+import { adapterFor, uploadName } from "./stt";
 
 export interface TranscribeOptions {
   /** ISO 639-1, e.g. "hi" or "en". Omitted means the service detects it. */
   language?: string;
-  /** Length of each part, seconds. Ten minutes keeps Opus far under 25 MB. */
+  /** Longest part, seconds. The service's own limit applies when it is shorter. */
   chunkSeconds?: number;
   /** Ignore a cached transcript. */
   force?: boolean;
   onProgress?: (fraction: number, note: string) => void;
 }
 
-async function probeFile(file: string): Promise<{ duration: number; hasVideo: boolean; mime: string }> {
+/** How far each part reaches into its neighbours, seconds. */
+const OVERLAP_SECONDS = 2;
+
+async function probeFile(file: string): Promise<{ duration: number; hasVideo: boolean; mime: string; bitrate: number }> {
   const input = new Input({ source: new FilePathSource(file), formats: ALL_FORMATS });
   try {
+    const audio = await input.getPrimaryAudioTrack();
+    const stats = audio ? await audio.computePacketStats(300).catch(() => null) : null;
     return {
       duration: await input.computeDuration(),
       hasVideo: Boolean(await input.getPrimaryVideoTrack()),
       mime: await input.getMimeType(),
+      bitrate: stats?.averageBitrate ?? 0,
     };
   } finally {
     input.dispose();
@@ -98,35 +106,6 @@ async function cutAudio(file: string, start: number, end: number, mime: string):
   }
 }
 
-async function request(provider: Provider, file: string, language?: string): Promise<VerboseJson> {
-  const form = new FormData();
-  // The file name matters: services infer the format from its extension.
-  form.set("file", Bun.file(file), path.basename(file).replace(/^.*\.part\./, "audio."));
-  form.set("model", provider.transcribeModel);
-  form.set("response_format", "verbose_json");
-  form.append("timestamp_granularities[]", "word");
-  form.append("timestamp_granularities[]", "segment");
-  if (language) form.set("language", language);
-  let response: Response;
-  try {
-    response = await fetch(endpoint(provider, "audio/transcriptions"), {
-      method: "POST",
-      headers: authHeaders(provider),
-      body: form,
-      signal: AbortSignal.timeout(30 * 60_000),
-    });
-  } catch (err) {
-    // "fetch failed" tells nobody anything. The usual cause is a local server
-    // that was stopped since it was connected.
-    throw new Error(`Could not reach ${provider.baseUrl} — is the transcription service running? (${err instanceof Error ? err.message : String(err)})`);
-  }
-  if (!response.ok) {
-    const detail = (await response.text()).replace(/\s+/g, " ").slice(0, 200);
-    throw new Error(`${provider.name} answered ${response.status}: ${detail}`);
-  }
-  return (await response.json()) as VerboseJson;
-}
-
 export async function transcribeFile(
   source: string,
   cache: string,
@@ -141,10 +120,17 @@ export async function transcribeFile(
     }
   }
 
-  const { duration, hasVideo, mime } = await probeFile(source);
-  const chunk = Math.min(1800, Math.max(5, options.chunkSeconds ?? 600));
+  const adapter = adapterFor(provider);
+  const { duration, hasVideo, mime, bitrate } = await probeFile(source);
+  const maxBytes = adapter.maxBytes(provider);
+  let part = Math.min(adapter.partSeconds(provider), options.chunkSeconds ?? Number.POSITIVE_INFINITY);
+  // Keep every upload under the service's cap, going by the audio's own bitrate.
+  if (bitrate > 0 && Number.isFinite(maxBytes)) part = Math.min(part, (maxBytes * 8 * 0.9) / bitrate - OVERLAP_SECONDS * 2);
+  part = Math.max(5, part);
+
   const spans: [number, number][] = [];
-  for (let start = 0; start < duration; start += chunk) spans.push([start, Math.min(duration, start + chunk)]);
+  for (let start = 0; start < duration; start += part) spans.push([start, Math.min(duration, start + part)]);
+  const whole = spans.length === 1 && !hasVideo && (await stat(source)).size <= maxBytes;
 
   const words: TranscriptWord[] = [];
   let timing: Transcript["timing"] = "word";
@@ -152,17 +138,23 @@ export async function transcribeFile(
 
   for (const [index, [start, end]] of spans.entries()) {
     options.onProgress?.(index / spans.length, `part ${index + 1} of ${spans.length}`);
-    const whole = spans.length === 1 && !hasVideo;
-    const cut = whole ? { piece: source, offset: 0 } : await cutAudio(source, start, end, mime);
-    const file = cut.piece;
+    const cut = whole
+      ? { piece: source, offset: 0 }
+      : await cutAudio(source, Math.max(0, start - OVERLAP_SECONDS), Math.min(duration, end + OVERLAP_SECONDS), mime);
     try {
-      const json = await request(provider, file, options.language);
-      const got = wordsFromVerboseJson(json, cut.offset);
-      words.push(...got.words);
+      const got = await adapter.transcribe(provider, cut.piece, uploadName(cut.piece, mime), options.language);
+      const first = index === 0;
+      const last = index === spans.length - 1;
+      for (const w of dropLoops(got.words)) {
+        const shifted = { start: w.start + cut.offset, end: w.end + cut.offset, text: w.text };
+        const middle = (shifted.start + shifted.end) / 2;
+        // Each word from the part its middle falls in, so the overlap is heard once.
+        if ((first || middle >= start) && (last || middle < end)) words.push(shifted);
+      }
       if (got.timing === "segment") timing = "segment";
-      language ??= json.language ?? null;
+      language ??= got.language;
     } finally {
-      if (!whole) await rm(file, { force: true });
+      if (!whole) await rm(cut.piece, { force: true });
     }
   }
 

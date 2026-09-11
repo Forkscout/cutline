@@ -346,17 +346,36 @@ that the tab's JSON equals what autosave writes, byte for byte.
 
 ## Transcription and AI services
 
-**One API shape, whatever runs the model.** Every AI call goes through an
-OpenAI-compatible provider — a name, a base URL, an optional key — that the
-user connects where a feature first needs it (the Captions panel), never in a
-settings page before recording. The server makes every call and keeps keys in
-`~/Cutline/ai.json` (0600); the page never sees one. Adding a provider probes
-it: `/models`, and a quarter-second of silence sent to `/audio/transcriptions`,
-so the answer is *text ✓ · transcription ✗*, not "connected". LM Studio lists
-models but, as of September 2026, cannot transcribe; a whisper.cpp server can:
+**Not tied to one engine or one machine.** Transcription goes through a
+provider the user connects where a feature first needs it — the Captions panel,
+with presets for this Mac, OpenAI, Groq, OpenRouter and ElevenLabs — never a
+settings page before recording. Not everyone can run a large model, so the
+hosted services stand beside the local one as equals. `server/stt.ts` has one
+adapter per kind of API: OpenAI-compatible (OpenAI, Groq, OpenRouter,
+whisper.cpp, speaches, LocalAI) and ElevenLabs. Each says how long a part it
+takes and how big an upload; `transcribe.ts` does the rest the same for all.
+Adding a service is an adapter and a preset. The server makes every call and
+keeps keys in `~/Cutline/ai.json` (0600); the page never sees one. Adding a
+provider probes it with a quarter-second of silence, so the answer is
+*transcription ✗, and why*, not "connected". LM Studio, as of September 2026,
+cannot transcribe.
+
+**Services differ where it hurts, and the adapter absorbs it.** OpenAI and
+OpenRouter refuse uploads over 25 MB, and OpenRouter gives the model 60 s per
+request, so parts are sized from the audio's bitrate and the service's limits.
+whisper.cpp — recognised by its `Server: whisper.cpp` header — is sent two
+things no other service may be. Its word tokens are bytes, which split each
+Hindi character into two `\uFFFD` halves, so it is asked for one word per
+segment (`max_len=1`, `split_on_word`). And over a long part it falls into
+repeating a phrase — nine minutes of Hindi came back as "re re re…" from the
+thirtieth second — so its parts are two minutes. Every part reaches two seconds
+into its neighbours and each word is kept from the part its middle falls in;
+`dropLoops` removes any phrase repeated more than three times running, whatever
+produced it. Even so, whisper.cpp's medium model is weak on Hinglish;
+large-v3-turbo is the local model to run:
 
 ```
-whisper-server -m ~/.cache/whisper-cpp/ggml-medium.bin \
+whisper-server -m ~/.cache/whisper-cpp/ggml-large-v3-turbo.bin \
   --inference-path /v1/audio/transcriptions --convert -l auto --port 8178
 ```
 
@@ -378,7 +397,16 @@ as it is when the transcript *arrives* — read through `historyRef`, not the
 render that started it — so a caption edited during a minute of transcription
 survives, and it replaces only cues that overlap this asset's clips, so a
 second speaker's captions are kept. Transcript, captions and switching them on
-are one undo step.
+are one undo step. `captionsForAsset` in `editor/transcript.ts` is that rule,
+shared with the agent.
+
+**The agent transcribes through the same job.** MCP's `transcribe` starts it
+in the tab, waits up to 90 s (a relayed call gets 120), and answers `running`
+with progress if it is not done; calling again joins the same job rather than
+starting another. When it finishes, the transcript lands on the asset as the
+agent's edit, in its turn's undo step, and `transcript` reads it back as words
+at their timeline times — what an agent needs to time a cut, a title or an
+animation to a word.
 
 **Captions have a lane on the timeline**, under the ruler, once there are any.
 `trackAtClientY` counts its height: a row between the ruler and the tracks that

@@ -395,12 +395,24 @@ export const EDITOR_TOOLS = {
       buckets: z.number().int().min(4).max(400).optional().describe("Default 60"),
     },
   }),
+  transcribe: tool({
+    name: "transcribe",
+    title: "Transcribe",
+    description:
+      "Transcribes an asset's speech through the speech-to-text service the user connected — on this machine or hosted — and stores the word-timed transcript on the asset; read it with transcript. Long audio can outlast one call: while it runs this answers status 'running' with progress, and calling it again with the same assetId keeps waiting on the same job. A transcript already made is reused unless force is true. captions: true also rebuilds the captions where this asset is heard.",
+    input: {
+      assetId: z.string().min(1).describe("Asset id, from get_project"),
+      language: z.string().regex(/^[a-z]{2,3}$/).optional().describe("ISO 639 code, e.g. hi or en; omitted, the service detects it"),
+      force: z.boolean().optional().describe("Transcribe again even if a transcript exists"),
+      captions: z.boolean().optional().describe("Also rebuild the captions from it"),
+    },
+  }),
   transcript: tool({
     name: "transcript",
     title: "Transcript",
     readOnly: true,
     description:
-      "What is said on the timeline, word by word, each with its timeline time — from transcripts made by auto-captions (right-click a clip → Generate captions, or the Captions panel). Use it to find a moment by what was said, to cut on a word, or to check captions against speech. Empty until a transcript has been made.",
+      "What is said on the timeline, word by word, each with its timeline time — from the transcripts stored on the assets (made by transcribe, or by the user's Generate captions). Use it to find a moment by what was said, to cut on a word, to time a title or an animation to a word, or to check captions against speech.",
     input: {
       start: z.number().min(0).optional().describe("Range start, seconds; default the beginning"),
       end: z.number().min(0).optional().describe("Range end, seconds; default the end"),
@@ -448,7 +460,8 @@ Working rules:
 3. Ids come from get_project. Times are seconds on the timeline; positions are 0..1 of the frame.
 4. Prefer text and shape clips with keyframes for titles and motion — they stay editable.
 5. Verify before you report. After visual edits, render_frame or contact_sheet across the range you touched; after audio or timing edits, audio_envelope. Report what you saw, including anything wrong. Never call a change done from the JSON alone.
-6. export_video only once the checks above look right; give the user the path it returns.`;
+6. export_video only once the checks above look right; give the user the path it returns.
+7. To work from what is said, call transcribe for the clip's asset, then transcript for the words at their timeline times.`;
 
 /* ------------------------------------------------ server <-> tab protocol */
 

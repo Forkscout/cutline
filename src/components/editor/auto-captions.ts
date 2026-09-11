@@ -11,7 +11,7 @@
 
 import { toast } from "sonner";
 import type { Action } from "@/editor/project";
-import { captionsFromWords, wordsOnTimeline } from "@/editor/transcript";
+import { captionsForAsset } from "@/editor/transcript";
 import type { Project } from "@/editor/types";
 import { capabilities, transcribe } from "@/lib/ai";
 
@@ -59,24 +59,14 @@ export async function runAutoCaptions(params: {
     );
 
     const project = params.getProject();
-    const clips = project.tracks.flatMap((t) => t.clips.filter((c) => c.assetId === asset.id && c.enabled));
-    const clipIds = new Set(clips.map((c) => c.id));
-    const withTranscript: Project = {
-      ...project,
-      assets: project.assets.map((a) => (a.id === asset.id ? { ...a, transcript } : a)),
-    };
-    const fresh = captionsFromWords(wordsOnTimeline(withTranscript).filter((w) => clipIds.has(w.clipId))).map(
-      (cue) => ({ id: crypto.randomUUID(), ...cue }),
-    );
-    const heard = (start: number, end: number) => clips.some((c) => start < c.start + c.duration && end > c.start);
-    const cues = [...project.captions.filter((c) => !heard(c.start, c.end)), ...fresh].sort((a, b) => a.start - b.start);
+    const { cues, added } = captionsForAsset(project, asset.id, transcript);
 
     params.dispatch({ type: "patchAsset", assetId: asset.id, patch: { transcript } });
     // Coalesced: transcript, captions and switching them on are one undo step.
     params.dispatch({ type: "setCaptions", cues }, true);
     if (!project.captionsEnabled) params.dispatch({ type: "setProject", patch: { captionsEnabled: true } }, true);
 
-    toast.success(`${fresh.length} captions from ${transcript.words.length} words`, {
+    toast.success(`${added} captions from ${transcript.words.length} words`, {
       id,
       description:
         transcript.timing === "segment"

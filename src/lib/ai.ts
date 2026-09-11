@@ -6,8 +6,12 @@
 import type { Transcript } from "@/editor/transcript";
 import { apiJson } from "./server";
 
+/** Which API a provider speaks: OpenAI's (OpenAI, Groq, OpenRouter, whisper.cpp…) or ElevenLabs'. */
+export type ProviderKind = "openai" | "elevenlabs";
+
 export interface ProviderReport {
   id: string;
+  kind: ProviderKind;
   name: string;
   baseUrl: string;
   transcribeModel: string;
@@ -20,11 +24,12 @@ export interface ProviderReport {
     models: string[];
     transcribe: boolean;
     message?: string;
+    flavor?: "whisper.cpp" | "openrouter";
   };
 }
 
 export interface Capabilities {
-  transcribe: { providerId: string; name: string; model: string; local: boolean } | null;
+  transcribe: { providerId: string; kind: ProviderKind; name: string; model: string; local: boolean } | null;
 }
 
 export const listProviders = () => apiJson<ProviderReport[]>("/api/ai/providers");
@@ -36,7 +41,7 @@ export const capabilities = () => apiJson<Capabilities>("/api/ai/capabilities");
  */
 export function saveProvider(
   id: string,
-  provider: { name: string; baseUrl: string; transcribeModel?: string; apiKey?: string },
+  provider: { kind?: ProviderKind; name: string; baseUrl: string; transcribeModel?: string; apiKey?: string },
 ): Promise<ProviderReport> {
   return apiJson<ProviderReport>(`/api/ai/providers/${encodeURIComponent(id)}`, {
     method: "PUT",

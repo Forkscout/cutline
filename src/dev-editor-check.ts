@@ -32,7 +32,7 @@ import {
 import { createEffect } from "./editor/effects";
 import { clipAt, valueAt } from "./editor/keyframes";
 import { parseSubtitles, toSrt } from "./editor/captions";
-import { captionsFromWords, wordsOnTimeline } from "./editor/transcript";
+import { captionsForAsset, captionsFromWords, dropLoops, wordsFromVerboseJson, wordsOnTimeline } from "./editor/transcript";
 import { createProject as newProject, mediaClip as newMediaClip } from "./editor/project";
 import { exportProject } from "./editor/export";
 import type { ClipRef, MediaAsset, Project } from "./editor/types";
@@ -382,6 +382,45 @@ async function run() {
       lines.join(" | ") ===
         "Welcome to Cutline. | This take was recorded to test automatic captions. | Every word should appear on the timeline, | at the moment it is spoken.",
       lines.map((l) => `"${l}"`).join(", "));
+
+    // Recaptioning one voice must not take a second speaker's captions with it.
+    const rebuilt = captionsForAsset(
+      {
+        ...heard,
+        captions: [
+          { id: "stale", start: 10.5, end: 11, text: "old" },
+          { id: "other", start: 30, end: 32, text: "someone else" },
+        ],
+      },
+      "voice",
+      voice.transcript!,
+    );
+    check("recaptioning an asset replaces its cues and keeps everyone else's",
+      rebuilt.added === 2 && rebuilt.cues.some((c) => c.id === "other") && !rebuilt.cues.some((c) => c.id === "stale"),
+      rebuilt.cues.map((c) => `"${c.text}"`).join(", "));
+
+    // whisper.cpp's word tokens are bytes: a Hindi character's halves arrive as
+    // U+FFFD. Its segments, one word each under max_len=1, are whole.
+    const hindi = wordsFromVerboseJson({
+      segments: [
+        { start: 0, end: 0.5, text: " नमस्ते", words: [{ word: " न", start: 0, end: 0.2 }, { word: "\uFFFD\uFFFD", start: 0.2, end: 0.5 }] },
+        { start: 0.5, end: 1.1, text: " दोस्तों", words: [{ word: " द", start: 0.5, end: 0.8 }, { word: "\uFFFD", start: 0.8, end: 1.1 }] },
+      ],
+    });
+    check("broken byte tokens fall back to whole words from the segments",
+      hindi.words.map((w) => w.text).join(" ") === "नमस्ते दोस्तों" && hindi.timing === "word",
+      `${hindi.words.map((w) => w.text).join(" ")} (${hindi.timing})`);
+
+    const timed = (texts: string[]) => texts.map((text, i) => ({ text, start: i * 0.2, end: i * 0.2 + 0.15 }));
+    const looped = dropLoops(timed([
+      "no", "delay,", "no", "approval", ...Array<string>(40).fill("re"), "and", "then",
+      ...Array.from({ length: 12 }, () => ["one", "two"]).flat(), "end",
+    ]));
+    check("a phrase the model repeated in a loop is kept once",
+      looped.map((w) => w.text).join(" ") === "no delay, no approval re and then one two end",
+      looped.map((w) => w.text).join(" ").slice(0, 80));
+    check("a phrase said twice on purpose is kept",
+      dropLoops(timed(["cash,", "park,", "cash,", "park"])).length === 4);
   }
 
   /* --- record a real take ------------------------------------------ */

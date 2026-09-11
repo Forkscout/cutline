@@ -1,8 +1,9 @@
 /**
  * The AI services the user has connected, and what each can actually do.
  *
- * A provider is a name, an OpenAI-compatible base URL and an optional key —
- * OpenAI itself, Groq, a whisper.cpp server on this machine, LM Studio, Ollama.
+ * A provider is a kind of API, a base URL and an optional key. Most services
+ * speak OpenAI's — OpenAI itself, Groq, OpenRouter, a whisper.cpp server on
+ * this machine — and ElevenLabs has its own; `stt.ts` has one adapter per kind.
  * Keys live in `~/Cutline/ai.json`, readable only by the user, and never go
  * back to the page: this server makes every call, so the browser never holds a
  * key and local services never see a cross-origin request.
@@ -24,14 +25,23 @@ export interface Capabilities {
   transcribe: boolean;
   /** Why transcription is unavailable, in the service's own words where possible. */
   message?: string;
+  /**
+   * An OpenAI-compatible service that needs handling of its own: whisper.cpp
+   * (recognised by its Server header) and OpenRouter (by its host).
+   */
+  flavor?: "whisper.cpp" | "openrouter";
 }
+
+/** Which API the provider speaks; `stt.ts` has an adapter for each. */
+export type ProviderKind = "openai" | "elevenlabs";
 
 export interface Provider {
   id: string;
+  kind: ProviderKind;
   name: string;
   baseUrl: string;
   apiKey?: string;
-  /** The model name sent to /audio/transcriptions. */
+  /** The model to transcribe with: whisper-1, openai/whisper-large-v3, scribe_v2. */
   transcribeModel: string;
   capabilities?: Capabilities;
 }
@@ -50,15 +60,21 @@ export function isLocal(baseUrl: string): boolean {
 }
 
 export function authHeaders(provider: Provider): Record<string, string> {
-  return provider.apiKey ? { authorization: `Bearer ${provider.apiKey}` } : {};
+  if (!provider.apiKey) return {};
+  return provider.kind === "elevenlabs"
+    ? { "xi-api-key": provider.apiKey }
+    : { authorization: `Bearer ${provider.apiKey}` };
 }
+
+/** The model a kind of service is asked for when the user names none. */
+export const DEFAULT_MODEL: Record<ProviderKind, string> = { openai: "whisper-1", elevenlabs: "scribe_v2" };
 
 export function endpoint(provider: Provider, route: string): string {
   return `${provider.baseUrl.replace(/\/+$/, "")}/${route.replace(/^\/+/, "")}`;
 }
 
 /** A quarter-second of 16 kHz mono silence as a WAV: the cheapest honest probe. */
-function silentWav(seconds: number): Uint8Array {
+export function silentWav(seconds: number): Uint8Array {
   const rate = 16_000;
   const samples = Math.round(rate * seconds);
   const bytes = new Uint8Array(44 + samples * 2);
@@ -80,53 +96,6 @@ function silentWav(seconds: number): Uint8Array {
   return bytes;
 }
 
-/** Asks the service what it can do, by trying it. */
-export async function probe(provider: Provider): Promise<Capabilities> {
-  const headers = authHeaders(provider);
-  let reachable = false;
-  let models: string[] = [];
-  try {
-    const response = await fetch(endpoint(provider, "models"), { headers, signal: AbortSignal.timeout(5000) });
-    reachable = true;
-    if (response.ok) {
-      const body = (await response.json()) as { data?: { id: string }[] };
-      models = body.data?.map((m) => m.id) ?? [];
-    }
-  } catch {
-    // Some transcription servers have no /models at all; the next request decides.
-  }
-
-  let transcribe = false;
-  let message: string | undefined;
-  try {
-    const form = new FormData();
-    form.set("file", new Blob([silentWav(0.25)], { type: "audio/wav" }), "probe.wav");
-    form.set("model", provider.transcribeModel);
-    form.set("response_format", "json");
-    const response = await fetch(endpoint(provider, "audio/transcriptions"), {
-      method: "POST",
-      headers,
-      body: form,
-      signal: AbortSignal.timeout(30_000),
-    });
-    reachable = true;
-    transcribe = response.ok;
-    if (!response.ok) {
-      const detail = (await response.text()).replace(/\s+/g, " ").slice(0, 160);
-      message =
-        response.status === 404 || response.status === 405
-          ? `This service has no transcription endpoint (${response.status}).`
-          : `Transcription failed: ${response.status} ${detail}`;
-    }
-  } catch (err) {
-    message = reachable
-      ? `Transcription did not answer: ${err instanceof Error ? err.message : String(err)}`
-      : `Could not reach ${provider.baseUrl}.`;
-  }
-
-  return { checkedAt: Date.now(), reachable, models, transcribe, ...(message ? { message } : {}) };
-}
-
 interface Stored {
   providers: Provider[];
 }
@@ -141,7 +110,8 @@ export class AiSettings {
   private async read(): Promise<Stored> {
     try {
       const parsed = JSON.parse(await readFile(this.file, "utf8")) as Partial<Stored>;
-      return { providers: parsed.providers ?? [] };
+      // Providers saved before there was more than one kind spoke OpenAI's API.
+      return { providers: (parsed.providers ?? []).map((p) => ({ ...p, kind: p.kind ?? "openai" })) };
     } catch {
       return { providers: [] };
     }
@@ -175,15 +145,17 @@ export class AiSettings {
    */
   async upsert(
     id: string,
-    patch: { name: string; baseUrl: string; transcribeModel?: string; apiKey?: string },
+    patch: { kind?: ProviderKind; name: string; baseUrl: string; transcribeModel?: string; apiKey?: string },
   ): Promise<Provider> {
     const data = await this.read();
     const existing = data.providers.find((p) => p.id === id);
+    const kind = patch.kind ?? existing?.kind ?? "openai";
     const next: Provider = {
       id,
+      kind,
       name: patch.name,
       baseUrl: patch.baseUrl.replace(/\/+$/, ""),
-      transcribeModel: patch.transcribeModel || existing?.transcribeModel || "whisper-1",
+      transcribeModel: patch.transcribeModel || existing?.transcribeModel || DEFAULT_MODEL[kind],
     };
     const key = patch.apiKey === undefined ? existing?.apiKey : patch.apiKey;
     if (key) next.apiKey = key;
