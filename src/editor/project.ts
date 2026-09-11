@@ -26,6 +26,7 @@ import {
   type ClipRef,
   type ColorGrade,
   type EffectInstance,
+  type Fact,
   type Guides,
   type Keyframe,
   type Marker,
@@ -146,6 +147,7 @@ export function createProject(name = "Untitled project"): Project {
     brief: structuredClone(EMPTY_BRIEF),
     theme: null,
     storyboard: null,
+    facts: [],
   };
 }
 
@@ -373,7 +375,11 @@ export type Action =
       decision?: string;
     }
   | { type: "setTheme"; theme: Theme; restyle: boolean }
-  | { type: "setStoryboard"; storyboard: Storyboard | null };
+  | { type: "setStoryboard"; storyboard: Storyboard | null }
+  /** Adds or updates a fact to confirm, by id. */
+  | { type: "setFact"; fact: Fact }
+  /** Replaces a value everywhere it is shown — every text clip and the storyboard — and records the fact as corrected. */
+  | { type: "correctFact"; id: string; from: string; to: string; note?: string };
 
 /** Applies `fn` to every clip named in `refs`, wherever those clips live. */
 function mapClips(
@@ -416,6 +422,26 @@ function mapClip(project: Project, ref: ClipRef, fn: (clip: Clip) => Clip | Clip
           },
     ),
   };
+}
+
+/**
+ * `from` as a whole value: correcting 7 leaves the 7 in 17, in 7,000 and in
+ * 3.7 alone. The replacement is literal, so "$12" stays "$12".
+ */
+export function replaceValue(text: string, from: string, to: string): string {
+  if (!from) return text;
+  const escaped = from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.replace(new RegExp(`(?<![\\p{L}\\p{N}])(?<!\\d[.,])${escaped}(?![\\p{L}\\p{N}])(?![.,]\\d)`, "gu"), () => to);
+}
+
+/** Storyboard fields that name or anchor rather than show: a correction leaves them alone. */
+const NOT_SHOWN = new Set(["id", "type", "word", "layout", "side", "icon", "tone", "style", "orientation", "scale", "highlight", "size", "node", "parent"]);
+
+function replaceInStrings(value: unknown, swap: (text: string) => string, key = ""): unknown {
+  if (typeof value === "string") return NOT_SHOWN.has(key) ? value : swap(value);
+  if (Array.isArray(value)) return value.map((v) => replaceInStrings(v, swap, key));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, replaceInStrings(v, swap, k)]));
+  return value;
 }
 
 export function reduce(project: Project, action: Action): Project {
@@ -861,6 +887,39 @@ export function reduce(project: Project, action: Action): Project {
     }
     case "setStoryboard":
       return touched({ ...project, storyboard: action.storyboard });
+    case "setFact": {
+      const exists = project.facts.some((f) => f.id === action.fact.id);
+      return touched({
+        ...project,
+        facts: exists ? project.facts.map((f) => (f.id === action.fact.id ? action.fact : f)) : [...project.facts, action.fact],
+      });
+    }
+    case "correctFact": {
+      const swap = (text: string) => replaceValue(text, action.from, action.to);
+      const tracks = project.tracks.map((track) => ({
+        ...track,
+        clips: track.clips.map((clip) =>
+          clip.text && swap(clip.text.content) !== clip.text.content
+            ? { ...clip, name: swap(clip.name), text: { ...clip.text, content: swap(clip.text.content) } }
+            : clip,
+        ),
+      }));
+      // The storyboard too, or the next compile would put the old value back.
+      const storyboard = project.storyboard ? (replaceInStrings(project.storyboard, swap) as Storyboard) : null;
+      const previous = project.facts.find((f) => f.id === action.id);
+      const note = action.note ?? previous?.note;
+      const fact: Fact = {
+        source: previous?.source ?? "agent",
+        ...(previous?.time !== undefined ? { time: previous.time } : {}),
+        id: action.id,
+        value: action.to,
+        was: action.from,
+        status: "corrected",
+        ...(note ? { note } : {}),
+      };
+      const facts = previous ? project.facts.map((f) => (f.id === action.id ? fact : f)) : [...project.facts, fact];
+      return touched({ ...project, tracks, storyboard, facts });
+    }
     case "setTheme": {
       const theme = action.theme;
       if (!action.restyle) return touched({ ...project, theme });

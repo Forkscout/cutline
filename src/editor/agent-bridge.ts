@@ -27,6 +27,8 @@ import { createEffect } from "./effects";
 import { exportProject } from "./export";
 import { audioEnvelope, describeChange, leanProject } from "./inspect";
 import { captionsForAsset, wordsOnTimeline, type Transcript } from "./transcript";
+import { needsConfirming, scanNumbers } from "./facts";
+import { lintScene } from "./lint";
 import { readProperty } from "./keyframes";
 import { THEMES, brandOverrides, fontsInUse, mergeTheme, paletteOf, themeById, themeOf } from "./themes";
 import { themeSheet } from "./styleframes";
@@ -48,8 +50,7 @@ import {
   textClip,
   undo,
   type Action,
-  type History,
-} from "./project";
+  type History, replaceValue } from "./project";
 import { contactSheet, renderStill } from "./snapshot";
 import type { Clip, ClipRef, Project } from "./types";
 
@@ -224,6 +225,31 @@ const EXECUTORS: Executors = {
       }
     }
     return { type: "setStoryboard", storyboard: { version: 1, ...a.storyboard, compiledAt: null } };
+  },
+  setFact: (a, project) => {
+    const existing = project.facts.find((f) => (a.id ? f.id === a.id : f.value === a.value));
+    if (a.id && !existing) throw new ToolError(`There is no fact ${a.id}; list_facts shows them.`);
+    const note = a.note ?? existing?.note;
+    const time = a.time ?? existing?.time;
+    return {
+      type: "setFact",
+      fact: {
+        id: existing?.id ?? crypto.randomUUID(),
+        value: a.value,
+        status: a.status ?? (existing?.status === "corrected" ? "confirmed" : existing?.status) ?? "open",
+        source: existing?.source ?? "agent",
+        ...(note ? { note } : {}),
+        ...(time !== undefined ? { time } : {}),
+        ...(existing?.was ? { was: existing.was } : {}),
+      },
+    };
+  },
+  correctFact: (a, project) => {
+    if (a.value === a.to) throw new ToolError("The new value is the same as the one on screen.");
+    const shown = project.tracks.some((t) => t.clips.some((c) => c.text && replaceValue(c.text.content, a.value, a.to) !== c.text.content));
+    if (!shown) throw new ToolError(`${a.value} is not on screen as a whole value; list_facts shows the numbers on screen.`);
+    const existing = project.facts.find((f) => f.value === a.value);
+    return { type: "correctFact", id: existing?.id ?? crypto.randomUUID(), from: a.value, to: a.to, ...(a.note ? { note: a.note } : {}) };
   },
   setTheme: (a, project) => {
     const base = a.themeId ? themeById(a.themeId) : themeOf(project);
@@ -695,6 +721,57 @@ export class AgentBridge {
         return [json(await this.macro((ctx) => macros.addSplit(ctx, raw as unknown as macros.SplitArgs)))];
       case "addTree":
         return [json(await this.macro((ctx) => macros.addTree(ctx, raw as unknown as macros.TreeArgs)))];
+      case "lintScene": {
+        let report;
+        try {
+          report = await lintScene(project, {
+            ...(typeof raw.scene === "string" ? { scene: raw.scene } : {}),
+            ...(typeof raw.from === "number" ? { from: raw.from } : {}),
+            ...(typeof raw.to === "number" ? { to: raw.to } : {}),
+            contrast: raw.contrast !== false,
+          });
+        } catch (err) {
+          throw new ToolError(err instanceof Error ? err.message : String(err));
+        }
+        const errors = report.issues.filter((i) => i.severity === "error").length;
+        return [
+          json({
+            ...report,
+            issues: report.issues.slice(0, 60),
+            ...(report.issues.length > 60 ? { more: report.issues.length - 60 } : {}),
+            summary: report.issues.length ? `${errors} errors, ${report.issues.length - errors} warnings` : "clean",
+          }),
+        ];
+      }
+      case "listFacts": {
+        const numbers = scanNumbers(project);
+        const onScreen = new Set(numbers.flatMap((n) => (n.fact ? [n.fact.id] : [])));
+        const toConfirm = [
+          ...numbers.filter(needsConfirming).map((n) => ({
+            value: n.value,
+            shownAt: n.shown.map((x) => round(x.start)),
+            text: n.shown[0]!.text.slice(0, 120),
+            heardNearby: n.heard,
+            heard: n.excerpt,
+            ...(n.fact ? { factId: n.fact.id, note: n.fact.note } : {}),
+          })),
+          // Flagged by an agent but not a number on screen: a name, say.
+          ...project.facts
+            .filter((f) => f.status === "open" && !onScreen.has(f.id))
+            .map((f) => ({ value: f.value, factId: f.id, note: f.note, ...(f.time !== undefined ? { shownAt: [f.time] } : {}) })),
+        ];
+        return [
+          json({
+            toConfirm,
+            recorded: project.facts,
+            numbersOnScreen: numbers.length,
+            heardNearby: numbers.filter((n) => n.heard).length,
+            next: toConfirm.length
+              ? "Ask the client about each (ask_client), then set_fact({ value, status: \"confirmed\" }) or correct_fact({ value, to })."
+              : "Nothing needs confirming.",
+          }),
+        ];
+      }
       case "getStoryboard": {
         const board = project.storyboard;
         if (!board) return [text("No storyboard yet. set_storyboard writes one; guide('storyboard') has the format.")];

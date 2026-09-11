@@ -33,7 +33,9 @@ import { createEffect } from "./editor/effects";
 import { clipAt, valueAt } from "./editor/keyframes";
 import { parseSubtitles, toSrt } from "./editor/captions";
 import { captionsForAsset, captionsFromWords, dropLoops, wordsFromVerboseJson, wordsOnTimeline } from "./editor/transcript";
-import { createProject as newProject, mediaClip as newMediaClip, reduce, shapeClip } from "./editor/project";
+import { createProject as newProject, mediaClip as newMediaClip, reduce, replaceValue, shapeClip } from "./editor/project";
+import { needsConfirming, numbersIn, scanNumbers } from "./editor/facts";
+import { lintScene } from "./editor/lint";
 import { brandOverrides, contrast, mergeTheme, paletteOf, themeById } from "./editor/themes";
 import { AnchorError, findPhrase, resolveAnchor } from "./editor/storyboard";
 import { exportProject } from "./editor/export";
@@ -497,6 +499,99 @@ async function run() {
       missing = err instanceof AnchorError ? err.message : "";
     }
     check("a phrase never said is an error with suggestions", missing.includes("not said") && missing.includes("Closest"), missing.slice(0, 90));
+  }
+
+  /* --- facts to confirm ---------------------------------------------- */
+  log("\nfacts to confirm", "dim");
+  {
+    check("a correction replaces whole values only",
+      replaceValue("Level 7 costs 7 USDT, not 17, 7,000 or 3.7", "7", "60") === "Level 60 costs 60 USDT, not 17, 7,000 or 3.7");
+    check("a correction is literal", replaceValue("costs 12", "12", "$12") === "costs $12");
+    check("numbers are read off text as written", numbersIn("Row 9: 512 seats, 1,26,000 USDT and 5%.").join(" ") === "9 512 1,26,000 5%");
+
+    // Said: "Level 3 costs तीस and 21 ,600". Shown: 3, 30, 21,600 — and 60, which nobody said.
+    const said = [["Level", 0, 0.4], ["3", 0.5, 0.8], ["costs", 0.9, 1.2], ["तीस", 1.3, 1.6], ["and", 2, 2.2], ["21", 2.3, 2.6], [",600", 2.6, 2.9]] as const;
+    const voice: MediaAsset = {
+      id: "facts-voice", origin: { type: "file" }, name: "voice", kind: "audio", mimeType: "audio/webm",
+      bytes: 1, durationSec: 6, hasVideo: false, hasAudio: true, width: 0, height: 0, frameRate: 30,
+      createdAt: 0, binId: null, tags: [], rating: 0, colorLabel: null, favorite: false,
+      transcript: {
+        version: 1, provider: "check", model: "none", language: "hi", durationSec: 6, timing: "word", createdAt: 0,
+        words: said.map(([text, start, end]) => ({ text, start, end })),
+      },
+    };
+    let p = newProject("facts check");
+    p.assets = [voice];
+    p.tracks.find((t) => t.kind === "audio")!.clips = [newMediaClip(voice, 0)];
+    const shown = (content: string, start: number) => {
+      const c = textClip(start, 2);
+      c.text!.content = content;
+      return c;
+    };
+    const cheap = shown("Level 3 · 30 USDT", 1);
+    const pool = shown("Pool · 21,600 USDT", 2);
+    const dear = shown("Level 3 · 60 USDT", 3);
+    const titles = emptyTrack("video", "Titles");
+    titles.clips = [cheap, pool, dear];
+    p.tracks = [...p.tracks, titles];
+    const numbers = scanNumbers(p);
+    const heard = (v: string) => numbers.find((n) => n.value === v)?.heard;
+    check("a number said as digits, as a Hindi word, or split at its comma is heard",
+      heard("3") === true && heard("30") === true && heard("21,600") === true, numbers.map((n) => `${n.value}:${n.heard}`).join(" "));
+    check("a number nobody said is the one to confirm", numbers.filter(needsConfirming).map((n) => n.value).join() === "60");
+
+    p.storyboard = {
+      version: 1, compiledAt: null,
+      scenes: [{ id: "s", from: { time: 0 }, to: { time: 5 }, layout: "panel", components: [{ id: "t", type: "title", at: { word: "60 USDT" }, title: "Level 3 · 60 USDT" }] }],
+    };
+    p = reduce(p, { type: "correctFact", id: "f1", from: "60", to: "40" });
+    const text = (id: string) => p.tracks.flatMap((t) => t.clips).find((c) => c.id === id)?.text?.content;
+    const component = p.storyboard?.scenes[0]?.components[0];
+    check("a correction reaches every clip showing it, and no other",
+      text(dear.id) === "Level 3 · 40 USDT" && text(cheap.id) === "Level 3 · 30 USDT", `${text(dear.id)} / ${text(cheap.id)}`);
+    check("and the storyboard, leaving anchors alone",
+      component?.type === "title" && component.title === "Level 3 · 40 USDT" && "word" in component.at && component.at.word === "60 USDT");
+    check("the fact is recorded as corrected, with what it replaced",
+      p.facts[0]?.status === "corrected" && p.facts[0].value === "40" && p.facts[0].was === "60");
+  }
+
+  /* --- checks ---------------------------------------------------------- */
+  log("\nchecks", "dim");
+  {
+    const q = newProject("lint check");
+    const text = (content: string, start: number, duration: number, x = 0.5, color?: string) => {
+      const c = textClip(start, duration);
+      c.text!.content = content;
+      c.transform.x = x;
+      c.transform.y = 0.5;
+      if (color) c.text!.color = color;
+      return c;
+    };
+    const first = text("First line of text", 0, 4);
+    const second = text("Second line of text", 0, 4);
+    const off = text("Runs off the edge", 5, 4, 0.99);
+    const brief = text("Far too many words to read in so short a time", 10, 0.8);
+    const fine = text("Fine", 12, 4);
+    const dark = text("Dark", 17, 3, 0.5, "#101010");
+    const light = text("Light", 21, 3, 0.5, "#FFFFFF");
+    const a = emptyTrack("video", "A");
+    a.clips = [first, off, brief, fine, dark, light];
+    const b = emptyTrack("video", "B");
+    b.clips = [second];
+    q.tracks = [...q.tracks, a, b];
+    const report = await lintScene(q, { to: 16, contrast: false });
+    const about = (id: string) => report.issues.filter((i) => i.clips.some((c) => c.clipId === id)).map((i) => i.kind);
+    check("text on text is an overlap", about(first.id).includes("overlap") && about(second.id).includes("overlap"));
+    check("text running off the frame is caught", report.issues.some((i) => i.kind === "off-frame" && i.severity === "error" && i.clips[0]?.clipId === off.id));
+    check("text too brief to read is caught", about(brief.id).includes("too-brief"));
+    check("a clean title raises nothing", about(fine.id).length === 0, about(fine.id).join());
+    const range = await lintScene(q, { from: 11.5, to: 16, contrast: false });
+    check("a range lints only what is in it", range.checked === 1 && range.issues.length === 0);
+    // Measured on the rendered frame: one of these is the colour of the ground behind it.
+    const seen = await lintScene(q, { from: 16.5, to: 24 });
+    const low = seen.issues.filter((i) => i.kind === "contrast").map((i) => i.clips[0]?.text);
+    check("contrast is measured on the frame, and only the unreadable one fails",
+      seen.contrastMeasured === 2 && low.length === 1, `${seen.contrastMeasured} measured; low: ${low.join()} · ${seen.issues.map((i) => i.detail).join(" | ")}`);
   }
 
   /* --- record a real take ------------------------------------------ */

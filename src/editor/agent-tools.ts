@@ -356,6 +356,30 @@ export const ACTION_TOOLS = {
       "Writes the whole storyboard: scenes in order, each with a layout (panel, full, pip, backdrop) and components (title, points, chips, stat, statement, flow, cards, split, bars, tally, tree, lower_third) anchored to the words they land on. Nothing is drawn until compile_storyboard. Anchors: { word } is the first time that phrase is said after the previous anchor — copy it from the transcript tool, in the transcript's own spelling; { time } is a timeline time. guide('storyboard') has the format and a worked scene.",
     input: { storyboard: s.storyboard },
   }),
+  setFact: tool({
+    name: "set_fact",
+    title: "Set fact",
+    description:
+      "Records a number or name on screen that needs the client's word: flag one you are unsure of (status open, with a note saying why — \"the transcript heard 7\"), or record their answer (confirmed, or dismissed when it is not a fact). Matches an existing fact by id or value. To change the value everywhere it is shown, use correct_fact. list_facts shows what needs confirming.",
+    input: {
+      id: z.string().optional(),
+      value: z.string().min(1).max(80).describe("As it appears on screen: 21,000 or Level 7"),
+      status: s.factStatus.optional(),
+      note: z.string().max(300).optional(),
+      time: z.number().min(0).optional(),
+    },
+  }),
+  correctFact: tool({
+    name: "correct_fact",
+    title: "Correct fact",
+    description:
+      "Replaces a value everywhere it is shown — every text clip, and the storyboard so a recompile keeps it — and records it as corrected. Whole values only: correcting 7 leaves 17 and 7,000 alone. Use it once the client has given the right value.",
+    input: {
+      value: z.string().min(1).max(80).describe("As it is on screen now"),
+      to: z.string().min(1).max(80),
+      note: z.string().max(300).optional(),
+    },
+  }),
   setTheme: tool({
     name: "set_theme",
     title: "Set theme",
@@ -700,6 +724,27 @@ export const EDITOR_TOOLS = {
         .max(8),
     },
   }),
+  lintScene: tool({
+    name: "lint_scene",
+    title: "Lint scene",
+    readOnly: true,
+    description:
+      "Checks the graphics in a scene, a range or the whole timeline as the export will draw them: text overlapping text or running off its card, anything off-frame or outside title-safe, text below WCAG contrast against what is really behind it (measured on rendered frames), text over the speaker, and text on screen too briefly to read. Each issue names its clips — with scene and component, for compiled ones — and a fix. Run it on every scene after building, fix, and run it again until it is clean.",
+    input: {
+      scene: z.string().optional().describe("A storyboard scene id; default the whole timeline"),
+      from: z.number().min(0).optional(),
+      to: z.number().min(0).optional(),
+      contrast: z.boolean().optional().describe("Measure contrast on rendered frames (default true; slower)"),
+    },
+  }),
+  listFacts: tool({
+    name: "list_facts",
+    title: "List facts",
+    readOnly: true,
+    description:
+      "Every number on screen, checked against what was said around it, and every fact recorded: which need the client's word (flagged open, or not heard nearby as digits or a number word), where each is shown and what the transcript heard there. Ask the client about those (ask_client), then set_fact({ value, status: \"confirmed\" }) or correct_fact({ value, to }). Report any left unconfirmed.",
+    input: {},
+  }),
   startTurn: tool({
     name: "start_turn",
     title: "Start turn",
@@ -741,7 +786,7 @@ export const SERVER_INSTRUCTIONS = `Cutline is a video editor open in the user's
 3. Look at the source before deciding: analyze_media, transcribe then transcript, contact_sheet.
 4. Propose a treatment in a few lines and show the look with preview_themes. Build one scene as a styleframe and get a yes before the full build.
 5. Call start_turn with the instruction before editing, so the whole change is one undo step. Write the edit as a storyboard — set_storyboard, get_storyboard, compile_storyboard; guide('storyboard') — rather than hundreds of calls: scenes anchored to the words, compiled the same way every time, changed one scene at a time with set_scene. The macros (layout_move, add_title, add_points, add_chips, add_stat, add_flow, add_bars, add_lower_third) are the same vocabulary for one-off additions; raw tools remain for anything custom.
-6. Verify before you report: render_frame or contact_sheet across everything you touched, audio_envelope after timing edits. Report what you saw, including problems, and flag any on-screen number the transcript was unsure of.
+6. Verify before you report: lint_scene on what you built, fixing until it is clean; render_frame or contact_sheet across everything you touched; audio_envelope after timing edits. list_facts shows numbers on screen nobody said: ask the client, record answers with set_fact or correct_fact, and report any still unconfirmed.
 7. export_video only once the checks look right; give the user the path it returns.
 
 Ids come from get_project. Times are seconds on the timeline; positions are 0..1 of the frame; sizes are pixels at 1080p.`;

@@ -27,7 +27,7 @@ export const GUIDE: Record<string, GuideTopic> = {
 4. **Treatment** (checkpoint). Write the plan in a few lines: layout, which stretches get graphics and which stay full frame, the look. Show the look: preview_themes on a representative frame, three candidates. Record the choice (set_theme, and set_brief({ decision })).
 5. **Styleframe** (checkpoint). Build one scene fully — the storyboard's first scene, compile_storyboard({ only: [id] }) — render_frame it, and get a yes before building the rest. A long build on an unapproved look is the most expensive mistake there is.
 6. **Build.** start_turn, then write the edit as a storyboard and compile it (guide('storyboard')): one document of scenes, layouts and components anchored to the words, turned into clips the same way every time, and changed by editing a scene and compiling again. The macros — layout_move, add_title, add_points, add_chips, add_stat, add_flow, add_bars, add_lower_third — are the same vocabulary one call at a time, for one-off additions. Both style themselves from the theme and tag each clip's role, so the look can change later in one call. Raw tools (add_clip, add_keyframe…) remain for anything custom.
-7. **Review** (checkpoint). render_frame each scene just after its elements land, contact_sheet across each block, audio_envelope after timing edits. Fix what you find. guide('qa').
+7. **Review** (checkpoint). lint_scene on each scene — overlaps, off-frame, contrast, text over the speaker, text too brief — and fix until clean; render_frame each scene just after its elements land, contact_sheet across each block, audio_envelope after timing edits. Then list_facts: numbers nobody said go to the client before export. guide('qa').
 8. **Deliver.** export_video once the checks look right; give the client the path, and list anything you are unsure of — above all, numbers on screen.
 
 Log decisions as you go (set_brief({ decision })): the next agent reads them.`,
@@ -149,7 +149,11 @@ Look for:
 - a source's own graphics sliced by a crop;
 - the layout move leaving a sliver of something at the frame's edge.
 
-Then audio_envelope if you changed timing. Report what you checked and what you fixed, and anything still uncertain — numbers first.`,
+Then audio_envelope if you changed timing. Report what you checked and what you fixed, and anything still uncertain — numbers first.
+
+**Checks, then eyes.** lint_scene on every scene after building: overlapping text, off-frame and outside title-safe, contrast measured on the rendered frame against what is really behind the text, text over the speaker, text too brief to read. Fix what it finds and lint again until it is clean — then look, because a check cannot tell you a scene is dull.
+
+**Facts before export.** list_facts compares every number on screen with what was said around it. Anything nobody said nearby, and anything you flagged with set_fact, goes to the client (ask_client) before export; record their answer with set_fact({ status: "confirmed" }), or correct_fact({ value, to }) to change it everywhere it is shown. Never ship a figure the transcript did not support without saying so.`,
   },
 
   gotchas: {

@@ -402,3 +402,6 @@ export const assetPatch = z
     favorite: z.boolean(),
   })
   .partial();
+
+/** Where a fact to confirm stands; corrected comes only from correct_fact. */
+export const factStatus = z.enum(["open", "confirmed", "dismissed"]);

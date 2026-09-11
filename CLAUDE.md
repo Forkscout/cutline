@@ -490,6 +490,23 @@ so after a reload what was said goes back to the model as a recap.
 `bun scripts/director-check.ts` checks the translation against stand-in
 services; `serve` keeps a scripted model connected to drive the panel by hand.
 
+**Checks see the frame, and figures are confirmed.** `lint.ts` finds
+overlapping text, text running off its card, anything off-frame or outside
+title-safe, text over the speaker's face, and text on screen too briefly to
+read. Boxes come from `clipBox` at moments after entrances settle. The face is
+an estimate — a fifth of the source's width around `subjectX`, in the upper
+half of the picture — and the report says so when `subjectX` was guessed.
+Contrast is measured on frames `renderFrames` draws: the text's colour, mixed
+at its opacity, against the median of the box's pixels that are not that
+colour — so a card the theme meant to be dark but the video shows through is
+caught. `facts.ts` reads every number on screen and looks for it in what was
+said a few seconds around it, as digits (joining the transcript's "21 ,600"
+splits) or as a common English or Hindi number word; one nobody said, and
+anything an agent flagged with `set_fact`, is listed to confirm. `correctFact`
+replaces a whole value — the 7 in 17 and in 7,000 is left alone — in every
+text clip and in the storyboard, so a recompile keeps the fix. The Director tab
+shows both, with no model connected.
+
 ## Transcription and AI services
 
 **Not tied to one engine or one machine.** Transcription goes through a
@@ -644,7 +661,10 @@ are an order of magnitude low and still look like results.
 monitor overlay never computes layout of its own: a second implementation would
 line up the day it was written and drift the first time either side changed —
 the same failure the shared `drawFrame` prevents, one level down. If a handle
-sits off the picture, the bug is in `clipBox`, and it is also a rendering bug.
+sits off the picture, the bug is in `clipBox`, and it is also a rendering bug. Text boxes follow the line's alignment and letter
+spacing: every one used to be centred on its anchor, which put the handles of
+left-aligned titles half a line to their left — `lint_scene`, reading the
+same boxes, is what noticed.
 
 **The PlaybackEngine must outlive renders.** `Monitor` keeps its callbacks in a
 ref so the engine's effect depends only on the URL cache. When the callbacks

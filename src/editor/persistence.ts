@@ -138,6 +138,7 @@ function migrate(project: Project): Project {
     brief: { ...EMPTY_BRIEF, ...project.brief, brand: { ...EMPTY_BRIEF.brand, ...project.brief?.brand } },
     theme: project.theme ?? null,
     storyboard: project.storyboard ?? null,
+    facts: project.facts ?? [],
     assets: (project.assets ?? []).map((asset) => ({ ...asset, tags: asset.tags ?? [] })),
     tracks: (project.tracks ?? []).map((track) => ({
       ...track,

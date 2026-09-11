@@ -845,7 +845,7 @@ export function Editor({
                 </TabsList>
 
                 <TabsContent value="director" className="mt-2 min-h-0 flex-1">
-                  <DirectorPanel director={director} />
+                  <DirectorPanel director={director} project={project} dispatch={dispatch} onSeek={(t) => engineRef.current?.seek(t)} />
                 </TabsContent>
 
                 <TabsContent value="inspector" className="mt-2 min-h-0 flex-1">

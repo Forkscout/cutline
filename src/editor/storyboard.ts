@@ -13,7 +13,7 @@
 
 import * as macros from "./agent-macros";
 import { wordsOnTimeline, type TimelineWord } from "./transcript";
-import type { Anchor, StoryComponent, StoryScene } from "./types";
+import type { Anchor, Project, StoryComponent, StoryScene } from "./types";
 
 export class AnchorError extends Error {}
 
@@ -72,6 +72,24 @@ export function resolveAnchor(anchor: Anchor, words: TimelineWord[], after: numb
   const hit = findPhrase(words, anchor.word, after);
   if (!hit) throw new AnchorError(`"${anchor.word}" is not said after ${after.toFixed(1)} s.${nearest(words, anchor.word, after)}`);
   return Math.max(0, hit.start + (anchor.offset ?? 0));
+}
+
+/** Each scene's times as a compile would find them, or why its anchors do not resolve. */
+export function sceneTimes(project: Project): Map<string, { from: number; to: number } | { error: string }> {
+  const out = new Map<string, { from: number; to: number } | { error: string }>();
+  const words = wordsOnTimeline(project);
+  let cursor = 0;
+  for (const scene of project.storyboard?.scenes ?? []) {
+    try {
+      const from = resolveAnchor(scene.from, words, cursor);
+      const to = resolveAnchor(scene.to, words, from + 0.01);
+      out.set(scene.id, { from, to });
+      cursor = from;
+    } catch (err) {
+      out.set(scene.id, { error: message(err) });
+    }
+  }
+  return out;
 }
 
 export interface CompiledScene {

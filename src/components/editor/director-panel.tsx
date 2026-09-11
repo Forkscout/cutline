@@ -10,6 +10,9 @@ import { ArrowUp, Check, LoaderCircle, RotateCcw, Square, X } from "lucide-react
 import { toast } from "sonner";
 import { PROMPTS } from "@/editor/agent-guide";
 import { PHASES, type Director, type ThreadItem } from "@/editor/director";
+import type { Action } from "@/editor/project";
+import type { Project } from "@/editor/types";
+import { FactsAndChecks } from "@/components/editor/checks-panel";
 import { capabilities, listProviders, saveProvider, type Capabilities, type ProviderKind, type ProviderReport } from "@/lib/ai";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -194,7 +197,29 @@ function Item({ item }: { item: ThreadItem }) {
   }
 }
 
-export function DirectorPanel({ director }: { director: Director }) {
+/** The Director tab: facts and checks, which need no model, above the thread with the agent. */
+export function DirectorPanel({
+  director,
+  project,
+  dispatch,
+  onSeek,
+}: {
+  director: Director;
+  project: Project;
+  dispatch: (action: Action, coalesce?: boolean) => void;
+  onSeek: (time: number) => void;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <FactsAndChecks project={project} dispatch={dispatch} onSeek={onSeek} />
+      <div className="min-h-0 flex-1 overflow-y-auto pt-1.5">
+        <DirectorThread director={director} />
+      </div>
+    </div>
+  );
+}
+
+function DirectorThread({ director }: { director: Director }) {
   const state = useSyncExternalStore(director.subscribe, director.getSnapshot);
   const [caps, setCaps] = useState<Capabilities | null>(null);
   const [changing, setChanging] = useState(false);

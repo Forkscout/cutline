@@ -24,7 +24,7 @@ Status as of 12 Sep 2026. ✅ done · 🟡 in progress · ⬜ next.
 | Director panel inside the editor (no Claude Code or MCP setup needed), ⌘K | ✅ | `editor/director.ts`, `director-panel.tsx`, `server/chat.ts` |
 | `analyze_media` (burned-in graphics, subject from motion, cuts, silences) | ✅ | `editor/analyze.ts` |
 | `preview_themes` sheet, `theme_from_media`, `ask_client` form | ✅ | `editor/styleframes.ts`, `themes.ts`, `client-questions.ts` |
-| Self-QA (`lint_scene`) and facts to confirm | ⬜ | §6 |
+| Self-QA (`lint_scene`) and facts to confirm | ✅ | `editor/lint.ts`, `editor/facts.ts`, `checks-panel.tsx` |
 | Styleframes, note pins, versions, locks | ⬜ | §4 |
 | Workspace Studio: brand kits, looks, recipes, references | ⬜ | §3 |
 | Create flow, Settings (AI services, agents, usage) | ⬜ | §3 |
@@ -228,7 +228,7 @@ calls. Export runs in the user's browser, so there is no render bill.
 2. ✅ Storyboard compiler, and a Storyboard view — rebuild the TreeFlux
    edit from one JSON as the acceptance test.
 3. ✅ Director panel and ⌘K command bar, bring-your-own key first.
-4. `analyze_media`, `lint_scene`, facts cards.
+4. ✅ `analyze_media`, `lint_scene`, facts cards.
 5. Styleframe compare, note pins, versions, locks.
 6. Studio (brand kits, looks, references), the import flows of §5, Create
    with recipes.

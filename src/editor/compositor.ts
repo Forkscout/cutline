@@ -715,6 +715,10 @@ function textMetrics(project: Project, clip: Clip): { w: number; h: number } {
   const lines = style.content.split("\n");
   if (!measureCtx) return { w: fontSize * 6, h: fontSize * lines.length * style.lineHeight };
   measureCtx.font = `${style.italic ? "italic " : ""}${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
+  // Spaced the way it is drawn: a tracked-out kicker is measurably wider.
+  if ("letterSpacing" in measureCtx) {
+    (measureCtx as unknown as { letterSpacing: string }).letterSpacing = `${style.letterSpacing * unit * clip.transform.scale}px`;
+  }
   const width = Math.max(...lines.map((l) => measureCtx!.measureText(l).width), 1);
   return { w: width, h: lines.length * fontSize * style.lineHeight };
 }
@@ -731,7 +735,13 @@ export function clipBox(
 
   if (clip.kind === "text") {
     const { w, h } = textMetrics(project, clip);
-    return { cx, cy, x: -w / 2, y: -h / 2, w, h, rotation: t.rotation };
+    // Lines are drawn from the anchor by their alignment: a left-aligned line
+    // starts there and a right-aligned one ends there. Centring every box put
+    // the handles of left-aligned text half a line to the left of it, and
+    // lint_scene found titles "off-frame" that were on screen.
+    const align = clip.text?.align ?? "center";
+    const x = align === "left" ? 0 : align === "right" ? -w : -w / 2;
+    return { cx, cy, x, y: -h / 2, w, h, rotation: t.rotation };
   }
 
   if (clip.kind === "shape") {

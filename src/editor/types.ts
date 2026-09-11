@@ -397,6 +397,26 @@ export interface Guides {
   snapToGuides: boolean;
 }
 
+/**
+ * A number or name on screen that someone should confirm before the video
+ * ships. An agent flags what it was unsure of; the facts check adds figures
+ * nobody said nearby; the client confirms or corrects.
+ */
+export interface Fact {
+  id: string;
+  /** As it appears on screen: "21,000", "Level 7", "Priya Shah". */
+  value: string;
+  status: "open" | "confirmed" | "corrected" | "dismissed";
+  /** Why it is in doubt, or what the client said: "the transcript heard 7". */
+  note?: string;
+  /** What it replaced, once corrected. */
+  was?: string;
+  /** An agent that was unsure, or the check that found it unheard. */
+  source: "agent" | "scan";
+  /** When it is on screen, for a play button. */
+  time?: number;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -430,6 +450,8 @@ export interface Project {
   theme: Theme | null;
   /** What the video shows, scene by scene; compiled into clips. */
   storyboard: Storyboard | null;
+  /** Numbers and names on screen to confirm before the video ships. */
+  facts: Fact[];
 }
 
 /* ------------------------------------------------------------- storyboard */
