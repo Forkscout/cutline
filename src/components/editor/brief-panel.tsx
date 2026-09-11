@@ -4,9 +4,14 @@
  * line typed here reaches the next agent session too.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Action } from "@/editor/project";
 import { THEMES, themeById } from "@/editor/themes";
+import { RECIPES } from "@/editor/recipes";
+import { applyBrandKit, applyRecipe, attachReference, lookFromProject, type ApplyContext } from "@/editor/workspace-apply";
+import { listItems, newItemId, saveItem } from "@/lib/workspace";
+import type { BrandKit, Recipe, WorkspaceReference } from "@/editor/types";
+import { toast } from "sonner";
 import type { Brief, LayoutStyle, Project, Theme } from "@/editor/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,15 +51,43 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 export function BriefPanel({
   project,
   dispatch,
- onCompareLooks,}: {
+ onCompareLooks, studio,}: {
   project: Project;
   dispatch: (action: Action, coalesce?: boolean) => void;
   onCompareLooks?: () => void;
+  /** The live project and one undo step, so applying a Studio item is one step. */
+  studio?: ApplyContext;
 }) {
   const b = project.brief;
   const theme = project.theme;
   const builtIn = theme ? THEMES.some((t) => t.id === theme.id) : false;
   const [reference, setReference] = useState("");
+  const [kits, setKits] = useState<BrandKit[]>([]);
+  const [saved, setSaved] = useState<Recipe[]>([]);
+  const [refs, setRefs] = useState<WorkspaceReference[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  useEffect(() => {
+    void listItems("brand-kits").then(setKits).catch(() => setKits([]));
+    void listItems("recipes").then(setSaved).catch(() => setSaved([]));
+    void listItems("references").then(setRefs).catch(() => setRefs([]));
+  }, []);
+  const sources = b.sources ?? {};
+  const kitNow = sources.brandKit ? kits.find((k) => k.id === sources.brandKit!.id) : undefined;
+  const kitBehind = kitNow && sources.brandKit && kitNow.version > sources.brandKit.version ? kitNow : null;
+
+  /** Every apply is the same: one undo step, and what it did in a toast. */
+  const run = async (what: string, apply: (ctx: ApplyContext) => Promise<unknown> | unknown) => {
+    if (!studio) return;
+    setBusy(what);
+    try {
+      await apply(studio);
+      toast.success(`${what} — one undo step`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : `Could not apply ${what}.`);
+    } finally {
+      setBusy(null);
+    }
+  };
   const set = (patch: Extract<Action, { type: "setBrief" }>["patch"]) => dispatch({ type: "setBrief", patch }, true);
   const images = project.assets.filter((a) => a.kind === "image");
 
@@ -98,6 +131,93 @@ export function BriefPanel({
           </p>
         )}
       </section>
+
+      {studio && (
+        <section className="space-y-1.5">
+          <div className="flex items-center">
+            <Label className="text-[11px] font-medium">From the Studio</Label>
+            {busy && <span className="ml-auto text-[10px] text-muted-foreground">{busy}…</span>}
+          </div>
+          <p className="text-[10px] leading-snug text-muted-foreground">
+            {[
+              sources.brandKit ? `Brand kit ${sources.brandKit.name} v${sources.brandKit.version}` : null,
+              sources.recipe ? `recipe ${sources.recipe.name}` : null,
+              sources.look ? `look ${sources.look.name}` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ") || "Nothing applied yet. What comes in is copied, so editing it in the Studio later leaves this video alone."}
+          </p>
+          {kitBehind && (
+            <button
+              className="w-full rounded-md border border-amber-400/40 bg-amber-400/10 px-1.5 py-1 text-left text-[10px] text-amber-500"
+              onClick={() => void run(`${kitBehind.name} v${kitBehind.version}`, (ctx) => applyBrandKit(ctx, kitBehind))}
+            >
+              {kitBehind.name} has been edited since — now v{kitBehind.version}. Apply the update.
+            </button>
+          )}
+          <div className="grid gap-1">
+            <select
+              className={selectClass}
+              value=""
+              disabled={Boolean(busy) || kits.length === 0}
+              onChange={(e) => {
+                const kit = kits.find((k) => k.id === e.target.value);
+                if (kit) void run(`Brand kit ${kit.name}`, (ctx) => applyBrandKit(ctx, kit));
+              }}
+            >
+              <option value="">{kits.length ? "Apply a brand kit…" : "No brand kits in the Studio"}</option>
+              {kits.map((k) => (
+                <option key={k.id} value={k.id}>
+                  {k.name} · v{k.version}
+                </option>
+              ))}
+            </select>
+            <select
+              className={selectClass}
+              value=""
+              disabled={Boolean(busy)}
+              onChange={(e) => {
+                const recipe = [...RECIPES, ...saved].find((r) => r.id === e.target.value);
+                if (recipe) void run(`Recipe ${recipe.name}`, (ctx) => applyRecipe(ctx, recipe));
+              }}
+            >
+              <option value="">Use a recipe…</option>
+              {[...RECIPES, ...saved].map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+            <select
+              className={selectClass}
+              value=""
+              disabled={Boolean(busy) || refs.length === 0}
+              onChange={(e) => {
+                const ref = refs.find((r) => r.id === e.target.value);
+                if (ref) void run(`Reference ${ref.name}`, (ctx) => attachReference(ctx, ref));
+              }}
+            >
+              <option value="">{refs.length ? "Add a reference…" : "No references in the Studio"}</option>
+              {refs.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className="text-left text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+              onClick={() => {
+                const name = `${project.name} look`;
+                void saveItem("looks", lookFromProject(project, newItemId(name), name))
+                  .then((look) => toast.success(`Saved “${look.name}” to the Studio`))
+                  .catch((err: unknown) => toast.error(err instanceof Error ? err.message : "Could not save the look."));
+              }}
+            >
+              Save this look to the Studio
+            </button>
+          </div>
+        </section>
+      )}
 
       <section className="space-y-1.5">
         <Label className="text-[11px] font-medium">Brief</Label>

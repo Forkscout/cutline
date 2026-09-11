@@ -48,7 +48,9 @@ Log decisions as you go (set_brief({ decision })): the next agent reads them.`,
 8. **Captions** — wanted? In which language?
 9. **Rules** — anything that must or must not happen. Always propose one: "Numbers on screen are checked with you first."
 
-Then the theme: preview_themes, let them pick, set_theme.`,
+Then the theme: preview_themes, let them pick, set_theme.
+
+**From the Studio.** Much of a brief may already exist: list_recipes for the kind of video (apply_recipe fills the brief's gaps and tells you what to ask and how the storyboard usually goes), list_brand_kits for the client's brand (apply_brand_kit copies its colours, faces, logo and rules in), list_references for what they pointed at before (attach_reference). Everything comes in as a copy, and the brief records which version.`,
   },
 
   source: {

@@ -34,6 +34,7 @@ import { PROVIDER_KINDS } from "./stt";
 import { Jobs, transcribeFile } from "./transcribe";
 import { loadMcpToken, mcpHandler } from "./mcp";
 import { DiskMediaStore, TruncatedUpload, fileResponse } from "./media";
+import { BadFileName, WorkspaceStore, isWorkspaceKind } from "./workspace";
 import { BadId, DiskProjectStore, assertSafeId, cutlineHome } from "./store";
 import { SESSION_COOKIE, guard, hostGuard, localhostPairs } from "./security";
 
@@ -55,6 +56,7 @@ const MAX_PROJECT_BYTES = 20 * 1024 * 1024;
 const DIST = path.resolve(import.meta.dir, "../dist");
 
 const projects = new DiskProjectStore(cutlineHome(), WORKSPACE);
+const workspace = new WorkspaceStore(cutlineHome(), WORKSPACE);
 const media = new DiskMediaStore(cutlineHome(), WORKSPACE);
 const bridge = new TabBridge();
 const cursor = new CursorService();
@@ -170,6 +172,61 @@ api.post("/projects/:id/versions", async (c) => {
   const parsed = JSON.parse(body) as { label?: string; version?: number; project?: { id?: string } };
   if (parsed.project?.id !== id) return c.json({ error: "Project id does not match the URL" }, 400);
   return c.json(await projects.putVersion(id, parsed.label ?? "", JSON.stringify({ version: parsed.version, project: parsed.project })));
+});
+
+/* --- the workspace: brand kits, looks, recipes, references --- */
+
+/** One route set for the four kinds: they differ in what they hold, not in how they are kept. */
+api.get("/workspace/:kind", async (c) => {
+  const kind = c.req.param("kind");
+  if (!isWorkspaceKind(kind)) return c.json({ error: "No such kind" }, 404);
+  return c.json(await workspace.list(kind));
+});
+
+api.get("/workspace/:kind/:id", async (c) => {
+  const kind = c.req.param("kind");
+  if (!isWorkspaceKind(kind)) return c.json({ error: "No such kind" }, 404);
+  const doc = await workspace.get(kind, c.req.param("id"));
+  return doc ? c.json(doc) : c.json({ error: "Not found" }, 404);
+});
+
+api.put("/workspace/:kind/:id", async (c) => {
+  const kind = c.req.param("kind");
+  if (!isWorkspaceKind(kind)) return c.json({ error: "No such kind" }, 404);
+  const body = await c.req.text();
+  if (body.length > MAX_PROJECT_BYTES) return c.json({ error: "Too large" }, 413);
+  const parsed = JSON.parse(body) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return c.json({ error: "Send a JSON object" }, 400);
+  return c.json(await workspace.put(kind, c.req.param("id"), parsed as Record<string, unknown>));
+});
+
+api.delete("/workspace/:kind/:id", async (c) => {
+  const kind = c.req.param("kind");
+  if (!isWorkspaceKind(kind)) return c.json({ error: "No such kind" }, 404);
+  await workspace.remove(kind, c.req.param("id"));
+  return c.json({ ok: true });
+});
+
+api.on(["GET", "HEAD"], "/workspace/:kind/:id/files/:name", async (c) => {
+  const kind = c.req.param("kind");
+  if (!isWorkspaceKind(kind)) return c.json({ error: "No such kind" }, 404);
+  try {
+    return await fileResponse(await workspace.file(kind, c.req.param("id"), c.req.param("name")), c.req.method, c.req.header("range"));
+  } catch (err) {
+    if (err instanceof BadFileName) return c.json({ error: err.message }, 400);
+    throw err;
+  }
+});
+
+api.put("/workspace/:kind/:id/files/:name", async (c) => {
+  const kind = c.req.param("kind");
+  if (!isWorkspaceKind(kind)) return c.json({ error: "No such kind" }, 404);
+  try {
+    return await upload(c, await workspace.file(kind, c.req.param("id"), c.req.param("name"), true));
+  } catch (err) {
+    if (err instanceof BadFileName) return c.json({ error: err.message }, 400);
+    throw err;
+  }
 });
 
 /* --- recordings --- */
@@ -474,7 +531,7 @@ const app = new Hono();
 // would read the token straight out of it.
 app.use("*", hostGuard(hosts));
 app.route("/api", api);
-app.all("/mcp", mcpHandler({ bridge, media, token: MCP_TOKEN, allowedOrigins: origins }));
+app.all("/mcp", mcpHandler({ bridge, media, workspace, token: MCP_TOKEN, allowedOrigins: origins }));
 
 if (existsSync(path.join(DIST, "index.html"))) {
   app.use("/assets/*", serveStatic({ root: path.relative(process.cwd(), DIST) }));

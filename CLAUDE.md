@@ -521,6 +521,23 @@ never pick it, and a compile leaves compiled clips on it alone. Compare looks
 draws the frame at the playhead in three themes through `renderStill`; one
 click restyles the edit.
 
+**The workspace holds what is reused; a project copies it.** Brand kits,
+looks, recipes and references live under
+`~/Cutline/workspaces/local/{brand-kits,looks,recipes,references}/` — a JSON
+document per item, its files in a folder beside it, and a `version` bumped on
+every save (`server/workspace.ts`). Applying one *copies* it in: a recipe fills
+the brief's gaps and never overwrites what the client said; a brand kit's
+colours and faces become the theme (the accent kept readable) and its logo,
+intro and outro are imported into the project's media, in a *Brand* bin; a
+reference is attached to the brief with its file beside the footage. The brief
+records `sources` — which kit, recipe and look, and which version — so a kit
+edited later can be offered as an update instead of changing a finished video
+behind the client's back. The same functions serve the Brief tab's buttons and
+the agent's tools (`list_brand_kits`, `apply_brand_kit`, `list_recipes`,
+`apply_recipe`, `list_references`, `attach_reference`), as the macros do.
+Create is the front door: an instruction, the footage, a recipe, a kit and a
+look, then the editor opens with the Director already working on it.
+
 ## Transcription and AI services
 
 **Not tied to one engine or one machine.** Transcription goes through a

@@ -30,6 +30,9 @@ import { captionsForAsset, wordsOnTimeline, type Transcript } from "./transcript
 import { needsConfirming, scanNumbers } from "./facts";
 import { lintScene } from "./lint";
 import { listVersions, loadVersion, saveVersion } from "./persistence";
+import { RECIPES, recipeById } from "./recipes";
+import { applyBrandKit, applyRecipe, attachReference, type ApplyContext } from "./workspace-apply";
+import { getItem, listItems } from "@/lib/workspace";
 import { clipAt, readProperty } from "./keyframes";
 import { THEMES, brandOverrides, fontsInUse, mergeTheme, paletteOf, themeById, themeOf } from "./themes";
 import { themeSheet } from "./styleframes";
@@ -266,8 +269,10 @@ const EXECUTORS: Executors = {
     }
     return { type: "restoreVersion", project: doc, label: a.versionId };
   },
-  setTheme: (a, project) => {
-    const base = a.themeId ? themeById(a.themeId) : themeOf(project);
+  setTheme: async (a, project) => {
+    const look = a.lookId ? await getItem("looks", a.lookId).catch(() => null) : null;
+    if (a.lookId && !look) throw new ToolError(`There is no look ${a.lookId}; list_themes shows them.`);
+    const base = look ? look.theme : a.themeId ? themeById(a.themeId) : themeOf(project);
     return { type: "setTheme", theme: mergeTheme(base, a.overrides ?? {}), restyle: a.restyle ?? true };
   },
 };
@@ -609,6 +614,11 @@ export class AgentBridge {
     }
   }
 
+  /** The live project and the agent's commit, for applying workspace items inside the turn. */
+  private get workspace(): ApplyContext {
+    return { project: () => this.host.history().present, commit: (action) => void this.commit(action) };
+  }
+
   private commit(action: Action): { label: string; change: ReturnType<typeof describeChange> } {
     const bridge = this.current();
     if (bridge !== this) return bridge.commit(action);
@@ -780,6 +790,55 @@ export class AgentBridge {
         return [json(await this.macro((ctx) => macros.addSplit(ctx, raw as unknown as macros.SplitArgs)))];
       case "addTree":
         return [json(await this.macro((ctx) => macros.addTree(ctx, raw as unknown as macros.TreeArgs)))];
+      case "listBrandKits":
+        return [
+          json(
+            (await listItems("brand-kits")).map((k) => ({
+              id: k.id, name: k.name, version: k.version, colors: k.colors, fonts: k.fonts, tone: k.tone,
+              rules: k.rules, layout: k.layout, lowerThird: k.lowerThird, files: k.files, notes: k.notes,
+            })),
+          ),
+        ];
+      case "applyBrandKit": {
+        const kit = await getItem("brand-kits", String(raw.id)).catch(() => null);
+        if (!kit) throw new ToolError(`There is no brand kit ${String(raw.id)}; list_brand_kits shows them.`);
+        const done = await applyBrandKit(this.workspace, kit);
+        return [json({ ok: true, kit: kit.name, version: kit.version, copiedIn: done.copiedIn, notes: done.notes, next: "render_frame a scene to see the restyle." })];
+      }
+      case "listRecipes": {
+        const saved = await listItems("recipes").catch(() => []);
+        return [
+          json(
+            [...RECIPES, ...saved].map((r) => ({
+              id: r.id, name: r.name, description: r.description, builtIn: Boolean(r.builtIn),
+              brief: r.brief, questions: r.questions, patterns: r.patterns, qa: r.qa, exports: r.exports,
+            })),
+          ),
+        ];
+      }
+      case "applyRecipe": {
+        const recipe = recipeById(String(raw.id)) ?? (await getItem("recipes", String(raw.id)).catch(() => null));
+        if (!recipe) throw new ToolError(`There is no recipe ${String(raw.id)}; list_recipes shows them.`);
+        applyRecipe(this.workspace, recipe);
+        return [json({ ok: true, recipe: recipe.name, ask: recipe.questions, patterns: recipe.patterns, qa: recipe.qa, exports: recipe.exports })];
+      }
+      case "listReferences": {
+        const tag = typeof raw.tag === "string" ? raw.tag.toLowerCase() : null;
+        const refs = await listItems("references");
+        return [
+          json(
+            refs
+              .filter((r) => !tag || r.tags.some((t) => t.toLowerCase() === tag))
+              .map((r) => ({ id: r.id, name: r.name, url: r.url, file: r.file ?? null, note: r.note, tags: r.tags })),
+          ),
+        ];
+      }
+      case "attachReference": {
+        const ref = await getItem("references", String(raw.id)).catch(() => null);
+        if (!ref) throw new ToolError(`There is no reference ${String(raw.id)}; list_references shows them.`);
+        const done = await attachReference(this.workspace, ref, typeof raw.note === "string" ? raw.note : undefined);
+        return [json({ ok: true, reference: ref.name, notes: done.notes })];
+      }
       case "saveVersion": {
         const saved = await saveVersion(project, String(raw.label));
         return [json({ ok: true, ...saved, next: "restore_version({ versionId }) puts it back." })];

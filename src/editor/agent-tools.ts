@@ -391,7 +391,8 @@ export const ACTION_TOOLS = {
     name: "set_theme",
     title: "Set theme",
     description: `Chooses the design theme — palette, fonts, type scale, shapes, motion, how the speaker's panel sits — that every add_* macro styles itself from. themeId picks a built-in theme (${THEME_IDS.join(", ")}; list_themes describes them, preview_themes shows them on a frame); overrides adjusts tokens on top of it, or on top of the current theme when themeId is omitted. restyle (default true) also restyles every clip a macro made, the background and the captions — so a finished edit changes its look in one call.`,
-    input: { themeId: s.themeId.optional(), overrides: s.themePatch.optional(), restyle: z.boolean().optional() },
+    input: {
+      lookId: z.string().optional().describe("A look saved in the Studio — list_themes marks them — instead of themeId"), themeId: s.themeId.optional(), overrides: s.themePatch.optional(), restyle: z.boolean().optional() },
   }),
 } as const;
 
@@ -780,6 +781,47 @@ export const EDITOR_TOOLS = {
     description:
       "Marks a note dealt with and records what you did, in a sentence the client will read beside it. Resolve only what you changed; answer a question without resolving it.",
     input: { id: z.string(), reply: z.string().min(1).max(500) },
+  }),
+  listBrandKits: tool({
+    name: "list_brand_kits",
+    title: "List brand kits",
+    readOnly: true,
+    description: "Brand kits kept in the Studio: name, colours, fonts, tone, rules, default layout, and the files kept with each (logo, intro, outro). apply_brand_kit brings one into this project.",
+    input: {},
+  }),
+  applyBrandKit: tool({
+    name: "apply_brand_kit",
+    title: "Apply brand kit",
+    description:
+      "Brings a brand kit into this project as a copy: its colours and faces into the theme (the accent kept readable) with every graphic made from the theme restyled, its logo, intro and outro copied into the media's Brand bin, and its name, rules, tone and layout into the brief. The brief records which version was used.",
+    input: { id: z.string() },
+  }),
+  listRecipes: tool({
+    name: "list_recipes",
+    title: "List recipes",
+    readOnly: true,
+    description:
+      "Recipes, built in and saved in the Studio, for kinds of video — explainer, screen tutorial, shorts, podcast clips, product demo, ad: brief defaults, the questions worth asking, how the storyboard usually goes, checks before export, and delivery formats.",
+    input: {},
+  }),
+  applyRecipe: tool({
+    name: "apply_recipe",
+    title: "Apply recipe",
+    description: "Fills the brief's gaps from a recipe — never over what the client said — adds its rules, and records it. Then ask its questions and follow its patterns.",
+    input: { id: z.string() },
+  }),
+  listReferences: tool({
+    name: "list_references",
+    title: "List references",
+    readOnly: true,
+    description: "References kept in the Studio — videos, images and links — each with what to take from it and its tags.",
+    input: { tag: z.string().optional() },
+  }),
+  attachReference: tool({
+    name: "attach_reference",
+    title: "Attach reference",
+    description: "Attaches a Studio reference to this brief. Its file, if it has one, is copied into the media's References bin, for contact_sheet to look at — not to be placed on the timeline.",
+    input: { id: z.string(), note: z.string().max(300).optional() },
   }),
   startTurn: tool({
     name: "start_turn",

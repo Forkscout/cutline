@@ -23,6 +23,7 @@ import { ACTION_TOOLS, EDITOR_TOOLS, SERVER_INSTRUCTIONS, type ToolSpec } from "
 import { THEMES } from "../src/editor/themes";
 import type { TabBridge } from "./bridge";
 import type { DiskMediaStore } from "./media";
+import type { WorkspaceStore } from "./workspace";
 import { sameSecret } from "./security";
 
 /** Reads the MCP token, creating it (owner-only) on first run. */
@@ -42,7 +43,7 @@ export async function loadMcpToken(home: string): Promise<string> {
   return token;
 }
 
-function buildServer(bridge: TabBridge, media: DiskMediaStore): McpServer {
+function buildServer(bridge: TabBridge, media: DiskMediaStore, workspace: WorkspaceStore): McpServer {
   const server = new McpServer({ name: "cutline", version: "0.1.0" }, { instructions: SERVER_INSTRUCTIONS });
 
   const relay = (spec: ToolSpec) =>
@@ -112,7 +113,7 @@ function buildServer(bridge: TabBridge, media: DiskMediaStore): McpServer {
     "list_themes",
     {
       title: "List themes",
-      description: "The built-in design themes: what each is for, its palette, faces and motion. Show them on the video with preview_themes; choose with set_theme.",
+      description: "The design themes: the built-in ones — what each is for, its palette, faces and motion — and looks saved in the Studio, marked with a lookId. Show them on the video with preview_themes; choose with set_theme({ themeId }) or set_theme({ lookId }).",
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -120,8 +121,8 @@ function buildServer(bridge: TabBridge, media: DiskMediaStore): McpServer {
       content: [
         {
           type: "text",
-          text: JSON.stringify(
-            THEMES.map((t) => ({
+          text: JSON.stringify([
+            ...THEMES.map((t) => ({
               id: t.id,
               name: t.name,
               description: t.description,
@@ -131,7 +132,12 @@ function buildServer(bridge: TabBridge, media: DiskMediaStore): McpServer {
               fonts: { display: t.fonts.display.split(",")[0], body: t.fonts.body.split(",")[0] },
               motion: t.motion.enter,
             })),
-          ),
+            ...((await workspace.list("looks").catch(() => [])) as { id: string; name?: string; description?: string }[]).map((l) => ({
+              lookId: l.id,
+              name: l.name,
+              description: l.description,
+            })),
+          ]),
         },
       ],
     }),
@@ -164,6 +170,7 @@ function buildServer(bridge: TabBridge, media: DiskMediaStore): McpServer {
 export function mcpHandler(options: {
   bridge: TabBridge;
   media: DiskMediaStore;
+  workspace: WorkspaceStore;
   token: string;
   allowedOrigins: string[];
 }) {
@@ -180,7 +187,7 @@ export function mcpHandler(options: {
       return c.json({ error: "Missing or wrong bearer token — see ~/Cutline/mcp-token" }, 401);
     }
 
-    const server = buildServer(options.bridge, options.media);
+    const server = buildServer(options.bridge, options.media, options.workspace);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       // One JSON body per request: nothing here streams, and a plain response

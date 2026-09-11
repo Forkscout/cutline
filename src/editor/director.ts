@@ -18,6 +18,7 @@ import type { ChatBlock, ChatMessage, ChatTool, ToolResultBlock, ToolUseBlock } 
 import { GUIDE, GUIDE_TOPICS, guideIndex } from "./agent-guide";
 import { SERVER_INSTRUCTIONS, TAB_TOOLS, type BridgeContent, type Shape } from "./agent-tools";
 import { THEMES } from "./themes";
+import { listItems } from "@/lib/workspace";
 
 export const PHASES = ["Brief", "Source", "Treatment", "Styleframe", "Build", "Review", "Deliver"] as const;
 export type Phase = (typeof PHASES)[number];
@@ -277,7 +278,7 @@ export class Director {
     host.onActivity(use.name);
     try {
       if (use.invalidJson !== undefined) throw new Error(`The arguments were not valid JSON: ${use.invalidJson.slice(0, 200)}`);
-      const content = this.local(use.name, use.input) ?? (await host.execute(use.name, use.input));
+      const content = (await this.local(use.name, use.input)) ?? (await host.execute(use.name, use.input));
       const first = content.find((c) => c.type === "text");
       const image = content.find((c) => c.type === "image");
       this.updateTool(use.id, {
@@ -299,7 +300,7 @@ export class Director {
     }
   }
 
-  private local(name: string, input: unknown): BridgeContent[] | null {
+  private async local(name: string, input: unknown): Promise<BridgeContent[] | null> {
     const spec = LOCAL_TOOLS[name];
     if (!spec) return null;
     const args = z.object(spec.input).parse(input ?? {}) as Record<string, unknown>;
@@ -321,7 +322,9 @@ export class Director {
                 accent: t.palette.accent,
                 fonts: { display: t.fonts.display.split(",")[0], body: t.fonts.body.split(",")[0] },
                 motion: t.motion.enter,
-              })),
+              })).concat(
+                (await listItems("looks").catch(() => [])).map((l) => ({ lookId: l.id, name: l.name, description: l.description }) as never),
+              ),
             ),
           ),
         ];

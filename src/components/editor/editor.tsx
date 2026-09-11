@@ -21,6 +21,7 @@ import { runAutoCaptions, type AutoCaptionOptions } from "@/components/editor/au
 import { BriefPanel } from "@/components/editor/brief-panel";
 import { DirectorCommand, DirectorPanel } from "@/components/editor/director-panel";
 import { StyleframeCompare } from "@/components/editor/styleframe-compare";
+import type { ApplyContext } from "@/editor/workspace-apply";
 import { VersionsMenu } from "@/components/editor/versions-menu";
 import { Director } from "@/editor/director";
 import { StoryboardView } from "@/components/editor/storyboard-view";
@@ -91,9 +92,12 @@ export function Editor({
   initial,
   onClose,
   onProjectChange,
+  initialRequest,
 }: {
   initial: Project;
   onClose: () => void;
+  /** What the project was asked for in Create: handed to the Director as the editor opens. */
+  initialRequest?: string;
   /** Lets the error boundary above snapshot the live document if a render throws. */
   onProjectChange?: (project: Project) => void;
 }) {
@@ -160,6 +164,14 @@ export function Editor({
       else delete root.dataset.theme;
     };
   }, []);
+
+  /** The live project and one undo step, for applying Studio items from the Brief tab. */
+  const studioContext = useMemo<ApplyContext>(
+    () => ({ project: () => historyRef.current.present, commit: (action) => dispatch(action, true) }),
+    // dispatch is defined below and stable through update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   const dispatch = useCallback(
     (action: Action, coalesce = false) => {
@@ -254,6 +266,20 @@ export function Editor({
     [initial.id],
   );
   useEffect(() => () => director.stop(), [director]);
+
+  // A project made in Create arrives with its instruction: the Director takes
+  // it as soon as the bridge is up, so the user watches it start.
+  useEffect(() => {
+    if (!initialRequest) return;
+    setRightTab("director");
+    let waited = 0;
+    const timer = window.setInterval(() => {
+      if (!bridgeRef.current && (waited += 100) < 4000) return;
+      window.clearInterval(timer);
+      void director.send(initialRequest);
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [initialRequest, director]);
 
   // Only the tab that saves takes agent edits — the same rule as autosave, for
   // the same reason: two tabs applying them would fork the project.
@@ -812,7 +838,7 @@ export function Editor({
                   />
                 </TabsContent>
                 <TabsContent value="brief" className="mt-2 min-h-0 flex-1">
-                  <BriefPanel onCompareLooks={() => setCompareOpen(true)} project={project} dispatch={dispatch} />
+                  <BriefPanel onCompareLooks={() => setCompareOpen(true)} studio={studioContext} project={project} dispatch={dispatch} />
                 </TabsContent>
               </Tabs>
             </ResizablePanel>

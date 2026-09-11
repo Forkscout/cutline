@@ -22,6 +22,8 @@ const Editor = lazy(() =>
 const Projects = lazy(() =>
   import("@/components/editor/projects").then((m) => ({ default: m.Projects })),
 );
+const Create = lazy(() => import("@/components/create").then((m) => ({ default: m.Create })));
+const WorkspaceStudio = lazy(() => import("@/components/workspace-studio").then((m) => ({ default: m.WorkspaceStudio })));
 const EditorErrorBoundary = lazy(() =>
   import("@/components/editor/error-boundary").then((m) => ({ default: m.EditorErrorBoundary })),
 );
@@ -34,7 +36,9 @@ export function App() {
   const { theme, toggle } = useTheme();
   const support = useMemo(checkSupport, []);
   const missing = useMemo(() => missingRequirements(support), [support]);
-  const [tab, setTab] = useState("record");
+  const [tab, setTab] = useState("create");
+  /** What Create was asked for, handed to the Director when the editor opens. */
+  const [request, setRequest] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [phase, setPhase] = useState<RecorderPhase>("idle");
   const [elapsed, setElapsed] = useState(0);
@@ -79,6 +83,7 @@ export function App() {
   }, []);
   const handleEditorClose = useCallback(() => {
     setEditing(null);
+    setRequest(null);
     setReloadKey((k) => k + 1);
   }, []);
 
@@ -114,6 +119,7 @@ export function App() {
             <Editor
               key={editing.id}
               initial={editing}
+              {...(request ? { initialRequest: request } : {})}
               onClose={handleEditorClose}
               onProjectChange={handleProjectChange}
             />
@@ -142,9 +148,11 @@ export function App() {
         <TabsList className="absolute left-1/2 h-11 -translate-x-1/2 rounded-full border bg-card p-1 shadow-sm">
           {(
             [
+              ["create", "Create"],
               ["record", "Record"],
               ["library", "Library"],
               ["edit", "Edit"],
+              ["studio", "Studio"],
             ] as const
           ).map(([value, label]) => (
             <TabsTrigger
@@ -200,6 +208,17 @@ export function App() {
       </header>
 
       <main className="mx-auto w-full max-w-[1400px] flex-1 px-6 pb-16">
+        <TabsContent value="create" className="mt-0">
+          <Suspense fallback={<Loading label="Loading…" />}>
+            <Create
+              onRecord={() => setTab("record")}
+              onStart={(project, asked) => {
+                setRequest(asked);
+                setEditing(project);
+              }}
+            />
+          </Suspense>
+        </TabsContent>
         <TabsContent value="record" className="mt-0">
           <Studio
             onPhaseChange={setPhase}
@@ -214,6 +233,11 @@ export function App() {
         <TabsContent value="edit" className="mt-6">
           <Suspense fallback={<Loading label="Loading projects…" />}>
             <Projects onOpen={setEditing} />
+          </Suspense>
+        </TabsContent>
+        <TabsContent value="studio" className="mt-2">
+          <Suspense fallback={<Loading label="Loading the studio…" />}>
+            <WorkspaceStudio />
           </Suspense>
         </TabsContent>
       </main>

@@ -560,6 +560,8 @@ export interface Brief {
   rules: string[];
   /** What was decided and why, oldest first. */
   decisions: BriefDecision[];
+  /** Where the brand kit, recipe and look came from, and which version: copies, not links. */
+  sources: BriefSources;
   updatedAt: number;
 }
 
@@ -770,6 +772,7 @@ export const EMPTY_BRIEF: Brief = {
   references: [],
   rules: [],
   decisions: [],
+  sources: {},
   updatedAt: 0,
 };
 
@@ -787,4 +790,72 @@ export const DEFAULT_GUIDES: Guides = {
 export interface ClipRef {
   trackId: string;
   clipId: string;
+}
+
+/* -------------------------------------------------------------- workspace */
+
+/** Where a project's brand kit, recipe and look came from, and which version of each. */
+export interface BriefSources {
+  brandKit?: { id: string; name: string; version: number };
+  recipe?: { id: string; name: string; version: number };
+  look?: { id: string; name: string; version: number };
+}
+
+/** Anything kept in the workspace: reused across videos, copied into each project that uses it. */
+export interface WorkspaceItem {
+  id: string;
+  name: string;
+  /** Bumped on every save: a project whose copy is older can offer the update. */
+  version: number;
+  updatedAt: number;
+}
+
+export interface BrandKit extends WorkspaceItem {
+  /** Files kept with the kit, by what they are for; the values are file names in its folder. */
+  files: { logo?: string; logoDark?: string; intro?: string; outro?: string; watermark?: string };
+  colors: string[];
+  /** Google Fonts families, or faces installed on the machine: display first, then body. */
+  fonts: string[];
+  tone: string;
+  /** Standing instructions: "never show prices without a date". */
+  rules: string[];
+  layout: LayoutStyle | null;
+  /** How a lower third names the speaker, unless the brief says otherwise. */
+  lowerThird: { name: string; role: string };
+  notes: string;
+}
+
+export interface Look extends WorkspaceItem {
+  description: string;
+  theme: Theme;
+}
+
+export interface Recipe extends WorkspaceItem {
+  description: string;
+  /** Defaults for the brief; they never overwrite what the client said. */
+  brief: {
+    platform?: string;
+    layout?: LayoutStyle;
+    captions?: "yes" | "no";
+    tone?: string;
+    audience?: string;
+    rules?: string[];
+  };
+  /** Worth asking the client, beyond the brief's own questions. */
+  questions: string[];
+  /** How the storyboard usually goes. */
+  patterns: string[];
+  /** Checks before export. */
+  qa: string[];
+  exports: { name: string; width: number; height: number }[];
+  builtIn?: boolean;
+}
+
+export interface WorkspaceReference extends WorkspaceItem {
+  url: string | null;
+  /** A video or image kept with the reference. */
+  file?: string;
+  /** What to take from it: "the pacing", "these lower thirds". */
+  note: string;
+  tags: string[];
 }
