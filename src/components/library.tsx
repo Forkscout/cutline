@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import type { SessionMeta, SourceKind, TrackMeta } from "@/recorder/types";
 import { deleteSession, estimateUsage, listSessions, sessionFileUrl } from "@/lib/media-store";
 import { syncLocalRecordings } from "@/lib/sync";
+import { discardTake, findInterruptedTakes, recoverTake, type InterruptedTake } from "@/recorder/recover";
 import {
   Accordion,
   AccordionContent,
@@ -104,6 +105,8 @@ export function Library({
   const [usage, setUsage] = useState({ usage: 0, quota: 0 });
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState<string | null>(null);
+  const [interrupted, setInterrupted] = useState<InterruptedTake[]>([]);
+  const [busyTake, setBusyTake] = useState<string | null>(null);
 
   const reload = useCallback(() => {
     // Anything the recorder left in the browser goes up first, so a take that
@@ -113,11 +116,20 @@ export function Library({
         toast.error(err instanceof Error ? err.message : "Could not move recordings to disk.");
       })
       .finally(() => setSyncing(null))
-      .then(() => Promise.all([listSessions(), estimateUsage()]))
-      .then(([list, disk]) => {
+      .then(() =>
+        Promise.all([
+          listSessions(),
+          estimateUsage(),
+          // After the sync, so anything finished has already gone; what is
+          // left without a meta.json and without a live lock is a dead take.
+          findInterruptedTakes().catch((): InterruptedTake[] => []),
+        ]),
+      )
+      .then(([list, disk, dead]) => {
         setError(null);
         setSessions(list);
         setUsage(disk);
+        setInterrupted(dead);
       })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : "Could not reach the Cutline server.");
@@ -133,6 +145,38 @@ export function Library({
       toast(`Deleted ${formatDate(session.createdAt)}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not delete the recording.");
+    }
+    reload();
+  };
+
+  const recover = async (take: InterruptedTake) => {
+    setBusyTake(take.sessionId);
+    try {
+      const { meta, unreadable } = await recoverTake(take.sessionId);
+      toast.success(
+        unreadable.length > 0
+          ? `Recovered ${meta.tracks.length} track(s); ${unreadable.join(", ")} could not be read.`
+          : `Recovered ${meta.tracks.length} track(s), ${formatDuration(meta.durationMs)}.`,
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not recover the take.");
+    } finally {
+      setBusyTake(null);
+    }
+    reload();
+  };
+
+  const discardInterrupted = async (take: InterruptedTake) => {
+    setBusyTake(take.sessionId);
+    try {
+      await discardTake(take.sessionId);
+      // The server may hold this take's cursor track; nothing else of it.
+      await deleteSession(take.sessionId).catch(() => undefined);
+      toast("Interrupted take discarded.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not discard the take.");
+    } finally {
+      setBusyTake(null);
     }
     reload();
   };
@@ -156,6 +200,61 @@ export function Library({
           {usage.quota > 0 && ` of ${formatBytes(usage.quota)} available`}
         </span>
       </div>
+
+      {interrupted.length > 0 && (
+        <Alert>
+          <AlertTitle>
+            {interrupted.length === 1 ? "A take did not finish" : `${interrupted.length} takes did not finish`}
+          </AlertTitle>
+          <AlertDescription className="space-y-2 text-xs">
+            <p>
+              The tab closed or crashed while recording. Everything written before that is still in this
+              browser — recover it, or discard it to free the space.
+            </p>
+            {interrupted.map((take) => (
+              <div key={take.sessionId} className="flex flex-wrap items-center gap-2 rounded-lg border bg-background p-2">
+                <span className="font-medium text-foreground">{formatDate(take.lastModified)}</span>
+                <span className="text-muted-foreground">
+                  {take.files.map((f) => f.name).join(", ")} · {formatBytes(take.bytes)}
+                </span>
+                <div className="ml-auto flex gap-1.5">
+                  {take.recoverable && (
+                    <Button
+                      size="sm"
+                      className="h-7 text-xs"
+                      disabled={busyTake !== null}
+                      onClick={() => void recover(take)}
+                    >
+                      {busyTake === take.sessionId ? "Recovering…" : "Recover"}
+                    </Button>
+                  )}
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button variant="ghost" size="sm" className="h-7 text-xs" disabled={busyTake !== null}>
+                        Discard
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Discard this interrupted take?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          {formatBytes(take.bytes)} in this browser. This cannot be undone.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction variant="destructive" onClick={() => void discardInterrupted(take)}>
+                          Discard
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </div>
+              </div>
+            ))}
+          </AlertDescription>
+        </Alert>
+      )}
 
       {error && (
         <Alert variant="destructive">

@@ -40,7 +40,7 @@ export class OpfsWriter {
   }
 
   private receive(msg: {
-    type: "opened" | "wrote" | "closed" | "aborted" | "error";
+    type: "opened" | "wrote" | "closed" | "aborted" | "truncated" | "error";
     id: string;
     bytes?: number;
     message?: string;
@@ -91,6 +91,14 @@ export class OpfsWriter {
 
   abort(id: string): Promise<number> {
     return this.request(id, () => this.worker.postMessage({ type: "abort", id }));
+  }
+
+  /** Shortens an existing file in place — no swap copy, unlike `createWritable`. */
+  truncate(sessionId: string, fileName: string, size: number): Promise<number> {
+    const id = `truncate:${sessionId}:${fileName}`;
+    return this.request(id, () =>
+      this.worker.postMessage({ type: "truncate", id, sessionId, fileName, size }),
+    );
   }
 
   bytesWritten(id: string): number {
@@ -178,6 +186,16 @@ export async function getLocalTrackFile(sessionId: string, fileName: string): Pr
   const dir = await namedDir(RECORDINGS_DIR);
   const sessionDir = await dir.getDirectoryHandle(sessionId);
   return (await sessionDir.getFileHandle(fileName)).getFile();
+}
+
+/** Cuts a local file back to `size` bytes. Used only by recovery. */
+export async function truncateLocalFile(sessionId: string, fileName: string, size: number): Promise<void> {
+  const writer = new OpfsWriter();
+  try {
+    await writer.truncate(sessionId, fileName, size);
+  } finally {
+    writer.dispose();
+  }
 }
 
 export async function deleteLocalSession(sessionId: string): Promise<void> {

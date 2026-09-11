@@ -15,13 +15,15 @@ type OpenMsg = { type: "open"; id: string; sessionId: string; fileName: string }
 type WriteMsg = { type: "write"; id: string; buffer: ArrayBuffer };
 type CloseMsg = { type: "close"; id: string };
 type AbortMsg = { type: "abort"; id: string };
-type InMsg = OpenMsg | WriteMsg | CloseMsg | AbortMsg;
+type TruncateMsg = { type: "truncate"; id: string; sessionId: string; fileName: string; size: number };
+type InMsg = OpenMsg | WriteMsg | CloseMsg | AbortMsg | TruncateMsg;
 
 type OutMsg =
   | { type: "opened"; id: string }
   | { type: "wrote"; id: string; bytes: number }
   | { type: "closed"; id: string; bytes: number }
   | { type: "aborted"; id: string }
+  | { type: "truncated"; id: string; bytes: number }
   | { type: "error"; id: string; message: string };
 
 interface OpenFile {
@@ -87,6 +89,24 @@ async function handleAbort(msg: AbortMsg) {
   post({ type: "aborted", id: msg.id });
 }
 
+/**
+ * Shortens an existing file in place. Recovery uses it to cut a crashed take
+ * back to its last complete block; through a sync handle that is instant,
+ * where `createWritable` would first copy a multi-gigabyte file to a swap file.
+ */
+async function handleTruncate(msg: TruncateMsg) {
+  const dir = await sessionDir(msg.sessionId);
+  const fileHandle = await dir.getFileHandle(msg.fileName);
+  const handle = await fileHandle.createSyncAccessHandle();
+  try {
+    handle.truncate(msg.size);
+    handle.flush();
+  } finally {
+    handle.close();
+  }
+  post({ type: "truncated", id: msg.id, bytes: msg.size });
+}
+
 self.onmessage = async (event: MessageEvent<InMsg>) => {
   const msg = event.data;
   try {
@@ -102,6 +122,9 @@ self.onmessage = async (event: MessageEvent<InMsg>) => {
         break;
       case "abort":
         await handleAbort(msg);
+        break;
+      case "truncate":
+        await handleTruncate(msg);
         break;
     }
   } catch (err) {

@@ -9,9 +9,22 @@
 
 import type { ArmedSource, SessionMeta, TrackMeta } from "./types";
 import { pickMimeForStream } from "./mime";
-import { OpfsWriter, writeSessionMeta } from "./storage";
+import { OpfsWriter, deleteLocalSession, writeSessionMeta } from "./storage";
 import { TrackRecorder } from "./track-recorder";
 import { newId, watchForEnd } from "./sources";
+
+/**
+ * The Web Lock a session holds for as long as it is recording.
+ *
+ * A take being recorded and a take whose tab died look identical on disk —
+ * files, and no meta.json — so recovery needs another way to tell them apart.
+ * The browser releases the lock the moment the tab goes, and `navigator.locks`
+ * is shared across the origin's tabs, so a take recording in another window is
+ * still seen as live.
+ */
+export function recordingLockName(sessionId: string): string {
+  return `cutline-recording:${sessionId}`;
+}
 
 export interface SessionOptions {
   name: string;
@@ -34,6 +47,7 @@ export class RecordingSession {
   private pausedAt = 0;
   private pausedTotal = 0;
   private stopped = false;
+  private releaseLock: (() => void) | null = null;
 
   private constructor(id: string, name: string, writer: OpfsWriter) {
     this.id = id;
@@ -53,6 +67,9 @@ export class RecordingSession {
     if (sources.length === 0) throw new Error("A recording needs at least one source.");
 
     const session = new RecordingSession(newId(), options.name, new OpfsWriter());
+    // Before any file exists, so there is no moment where the take's files
+    // are on disk without the lock that says it is live.
+    await session.holdLock();
 
     session.writer.onProgress = (id, bytes) => options.onProgress?.(id, bytes);
     session.writer.onError = (_id, message) => options.onStorageError?.(message);
@@ -86,6 +103,23 @@ export class RecordingSession {
   /** The clock's origin as wall-clock ms, for anything recorded outside this page. */
   get clockOriginWall(): number {
     return performance.timeOrigin + this.clockOrigin;
+  }
+
+  private holdLock(): Promise<void> {
+    if (typeof navigator === "undefined" || !navigator.locks) return Promise.resolve();
+    return new Promise((acquired) => {
+      void navigator.locks.request(recordingLockName(this.id), () => {
+        acquired();
+        return new Promise<void>((release) => {
+          this.releaseLock = release;
+        });
+      });
+    });
+  }
+
+  private unlock(): void {
+    this.releaseLock?.();
+    this.releaseLock = null;
   }
 
   get trackCount(): number {
@@ -156,6 +190,8 @@ export class RecordingSession {
     };
     await writeSessionMeta(meta);
     this.writer.dispose();
+    // Only now: with meta.json written, the take is finished rather than live.
+    this.unlock();
     return meta;
   }
 
@@ -165,5 +201,10 @@ export class RecordingSession {
     this.unwatchers.forEach((off) => off());
     for (const recorder of this.recorders) await recorder.abort();
     this.writer.dispose();
+    // The whole directory, not just the files: an abort that races the final
+    // chunk has left a 0-byte file behind, and an empty directory would still
+    // read as a take to anything that lists them.
+    await deleteLocalSession(this.id).catch(() => undefined);
+    this.unlock();
   }
 }

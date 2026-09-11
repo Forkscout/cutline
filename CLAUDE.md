@@ -466,6 +466,23 @@ WebM header after the fact, so the file reports an infinite duration and seeks
 badly. `TrackMeta.durationMs` is our own measurement and is the number the
 editor must use. Files will need a remux pass on import.
 
+**A live take holds a Web Lock; a dead one does not.** Both have files in OPFS
+and no `meta.json`, so nothing else tells them apart. `RecordingSession` takes
+`cutline-recording:<id>` before it opens a file and releases it only after
+`meta.json` is written (or on abort); the browser releases it if the tab dies,
+and `navigator.locks` spans the origin's tabs. `recover.ts` offers a take only
+when neither meta nor lock exists, and quietly deletes takes whose every file is
+0 bytes — an abort that races the final chunk leaves exactly that.
+
+**A crash cuts a file mid-block, and a demuxer then drops the whole last
+cluster.** Measured on a still screen capture: 300 bytes missing from a
+57-second file read back as 30 seconds. MediaRecorder writes unknown-size
+clusters, which are valid wherever they end on an element boundary, so
+`webm-salvage.ts` walks the final cluster and recovery truncates the file to its
+last complete element — 56 of the 57 seconds come back. The truncate goes
+through the OPFS worker's sync handle; `createWritable` would first copy the
+whole file to a swap file.
+
 **`offsetMs` is what makes separate files one take.** Every track measures its
 start against the session's clock. Measured, not assumed — in practice it lands
 under a few milliseconds.

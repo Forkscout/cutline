@@ -125,10 +125,11 @@ into, kept because the reasoning is the part worth reading.
 - **Import remuxes in the browser's memory.** The remux and the proxy are built
   into an `ArrayBuffer` and uploaded whole. Move both to the server, reading and
   writing files directly, so an hour-long take costs no browser memory at all.
-- **Interrupted takes are invisible.** A take whose tab died before stop has its
-  chunks in OPFS but no `meta.json`, so the sync rightly leaves it alone — and
-  nothing shows it or can recover it. It needs a "recover / discard" prompt that
-  rebuilds the metadata by probing the files.
+- ~~Interrupted takes are invisible.~~ Done: the library finds takes with no
+  `meta.json` and no live recording lock, and offers to recover (rebuild the
+  metadata by probing the files, after cutting each back to its last complete
+  block) or discard them. What recovery cannot rebuild — track offsets and
+  pauses — it sets to zero and none.
 - **A truncated upload gets no reply.** The server stores nothing — the length
   check holds — but when a client hangs up mid-body the request waits for Bun's
   idle timeout instead of failing at once.
