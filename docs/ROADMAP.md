@@ -115,13 +115,17 @@ into, kept because the reasoning is the part worth reading.
 
 ### Still open
 
-- **Long recordings are still unmeasured.** `/dev-stress-check.html` exists and
-  records a minute of 1440p, then reports write throughput, heap growth against
-  file size, storage headroom, proxy ratio, and whether the far end of the file
-  can be seeked — but it has not been run against a real multi-gigabyte take.
-  It refuses to run in a background tab, because a throttled tab makes every one
-  of those numbers wrong by an order of magnitude while still looking like a
-  result. It now also has an upload to measure.
+- ~~Long recordings are unmeasured.~~ Measured on a 10-minute 2560×1440 take
+  (467 MB, run headless with `bun scripts/headless-check.ts
+  dev-stress-check.html?seconds=600`): the heap grew 0.8 MB while recording;
+  import took 45.7 s (0.08× realtime — server remux 0.3 s, proxy 44.3 s,
+  waveform 1.0 s) and left 12.6 MB held after a collection, against 89 MB of
+  peak garbage at one minute and 160 MB at ten; the proxy is 129 MB against
+  456 MB; the far end decodes in 181 ms and a `<video>` seeks to it. On the
+  server a 2 GB upload streams in 0.58 s without moving its memory, and a
+  726 MB remux raises the physical footprint from 59 to 83 MB, back to 62 MB
+  once the idle worker ends. Still projected rather than run: a real two-hour
+  take, and a real screen instead of a synthetic canvas.
 - ~~Import remuxes in the browser's memory.~~ Done: the remux runs on the server
   file to file, on a worker; proxies (which need the browser's encoder) stream
   up in positional pieces; waveforms decode a batch at a time.

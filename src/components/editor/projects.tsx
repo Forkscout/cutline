@@ -94,12 +94,17 @@ export function Projects({ onOpen }: { onOpen: (project: Project) => void }) {
   const fromRecording = async (session: SessionMeta) => {
     setBusy(`Preparing ${session.name}…`);
     try {
-      const assets = await importSession(session, (p) => {
-        // Proxy generation is a transcode and is by far the slowest stage, so
-        // it is the one that has to show a number rather than a spinner.
-        const pct = p.fraction === undefined ? "" : ` ${Math.round(p.fraction * 100)}%`;
-        setBusy(`${p.stage}${pct} · ${p.name} (${p.index + 1}/${p.total})`);
-      });
+      const assets = await importSession(
+        session,
+        (p) => {
+          // Proxy generation is a transcode and is by far the slowest stage, so
+          // it is the one that has to show a number rather than a spinner.
+          const pct = p.fraction === undefined ? "" : ` ${Math.round(p.fraction * 100)}%`;
+          setBusy(`${p.stage}${pct} · ${p.name} (${p.index + 1}/${p.total})`);
+        },
+        // The rest of the take still opens; say which part did not, and why.
+        (fileName, reason) => toast.warning(`Left out ${fileName}: ${reason}`),
+      );
       const project = projectFromSession(session, assets);
       await saveProject(project);
       onOpen(project);

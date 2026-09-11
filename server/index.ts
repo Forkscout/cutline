@@ -163,10 +163,18 @@ api.post("/recordings/:sid/remux", async (c) => {
   const { from, to } = await c.req.json<{ from: string; to: string }>();
   const source = media.recordingFile(sid, from);
   const target = media.recordingFile(sid, to);
-  if ((await media.size(source)) === null) return c.json({ error: "No such file" }, 404);
+  const size = await media.size(source);
+  if (size === null) return c.json({ error: "No such file" }, 404);
+  // 422, not 500: an empty or damaged file fails exactly the same way in the
+  // page, so the caller must report it rather than retry the remux there.
+  if (size === 0) return c.json({ error: `${from} is empty — nothing was recorded on that track.` }, 422);
   const started = performance.now();
-  const bytes = await remuxer.remux(source, target);
-  return c.json({ ok: true, bytes, ms: Math.round(performance.now() - started) });
+  try {
+    const bytes = await remuxer.remux(source, target);
+    return c.json({ ok: true, bytes, ms: Math.round(performance.now() - started) });
+  } catch (err) {
+    return c.json({ error: `${from} could not be read (${err instanceof Error ? err.message : String(err)}).` }, 422);
+  }
 });
 
 api.put("/recordings/:sid/files/:name", (c) =>

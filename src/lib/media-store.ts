@@ -93,21 +93,30 @@ export const writeSessionFile = (sessionId: string, fileName: string, data: Blob
 export const writeMediaFile = (fileId: string, data: Blob | ArrayBuffer) => put(mediaFileUrl(fileId), data);
 
 /**
- * Asks the server to remux a take's file into an indexed copy. False when it
- * cannot — an older server, or a file it failed to read — so the caller can
- * fall back to doing it in the page.
+ * Asks the server to remux a take's file into an indexed copy.
+ *
+ * True when done. False when the server cannot do it — one without the route,
+ * or down — so the page can. Throws when the file itself is empty or
+ * unreadable: the page would fail on it the same way, and retrying there only
+ * turned the real reason into a confusing range error.
  */
 export async function remuxOnServer(sessionId: string, from: string, to: string): Promise<boolean> {
+  let response: Response;
   try {
-    const response = await api(`/api/recordings/${enc(sessionId)}/remux`, {
+    response = await api(`/api/recordings/${enc(sessionId)}/remux`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ from, to }),
     });
-    return response.ok;
   } catch {
     return false;
   }
+  if (response.ok) return true;
+  if (response.status === 422) {
+    const body = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `${from} could not be read.`);
+  }
+  return false;
 }
 
 /**

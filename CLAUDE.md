@@ -161,6 +161,16 @@ while the renderer was correct.
 
 **Front the browser tab before trusting a result.** A hidden tab suspends
 `requestAnimationFrame` and clamps `setTimeout` to one second.
+`bun scripts/headless-check.ts <harness page>` runs any harness in headless
+Chrome instead — visible to the page, with a throwaway profile, autoplay
+allowed (or the synthetic microphone records nothing) and `gc` exposed so heap
+figures mean what is held rather than what is uncollected. It is how a long
+take is measured unattended: `dev-stress-check.html?seconds=600`.
+
+**Judge server memory by physical footprint, not RSS.** `ps` showed the server
+at 372 MB after a remux; `vmmap -summary` showed a 59 MB footprint — the rest
+was clean, reclaimable pages. The remux worker is ended after 30 s idle, which
+gives its heap back.
 
 ## The local server
 
@@ -208,6 +218,13 @@ defect the remux exists to fix. Chrome only streams request bodies over HTTP/2,
 hence pieces rather than one streamed request. Waveforms decode through
 `AudioSampleSink` a batch at a time, all channels, instead of `decodeAudioData`
 on the whole file.
+
+**A bad track is refused, not retried, and never sinks the take.** An empty or
+unreadable file makes the remux route answer 422 with the reason — not 500,
+which the page read as "server cannot" and retried itself, turning the real
+reason into a range error. `importSession` leaves such a track out, reports it
+through `onSkip`, and fails only if nothing is left; the studio warns at stop
+when a device delivered nothing.
 
 **Bun is for the server, not for speed.** The heavy work — capture, decode,
 composite, encode — happens in the browser and never touches it. Bun earns its

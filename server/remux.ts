@@ -6,6 +6,14 @@
 
 import type { RemuxJob, RemuxResult } from "./remux-worker";
 
+/**
+ * How long an idle worker is kept. A remux leaves tens of megabytes behind in
+ * the worker's heap (measured: +47 MB after a 361 MB file, never returned);
+ * ending the worker when nothing is queued gives it back, and starting a new
+ * one for the next import costs milliseconds.
+ */
+const IDLE_MS = 30_000;
+
 interface Pending {
   resolve: (bytes: number) => void;
   reject: (err: Error) => void;
@@ -15,8 +23,11 @@ export class Remuxer {
   private worker: Worker | null = null;
   private pending = new Map<string, Pending>();
   private running = new Map<string, Promise<number>>();
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   private spawn(): Worker {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
     if (this.worker) return this.worker;
     const worker = new Worker(new URL("./remux-worker.ts", import.meta.url).href);
     worker.onmessage = (event: MessageEvent<RemuxResult>) => {
@@ -26,6 +37,7 @@ export class Remuxer {
       this.pending.delete(result.id);
       if (result.ok) job.resolve(result.bytes);
       else job.reject(new Error(result.error));
+      if (this.pending.size === 0) this.scheduleIdle();
     };
     worker.onerror = (event) => {
       // Every job in flight is lost with the worker; fail them all loudly and
@@ -36,6 +48,16 @@ export class Remuxer {
     };
     this.worker = worker;
     return worker;
+  }
+
+  private scheduleIdle(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => {
+      if (this.pending.size > 0 || !this.worker) return;
+      this.worker.terminate();
+      this.worker = null;
+      this.idleTimer = null;
+    }, IDLE_MS);
   }
 
   /** Remuxes `from` into `to`, resolving the size written. */

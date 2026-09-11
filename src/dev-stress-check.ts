@@ -12,18 +12,26 @@
  * the part most likely to be quietly broken: seeking to the far end.
  */
 
-import { ALL_FORMATS, BlobSource, Input, VideoSampleSink } from "mediabunny";
+import { ALL_FORMATS, Input, UrlSource, VideoSampleSink } from "mediabunny";
 import type { ArmedSource } from "./recorder/types";
 import { RecordingSession } from "./recorder/session";
-import { deleteSession, estimateUsage } from "./lib/media-store";
+import { deleteSession, estimateUsage, sessionFileSize } from "./lib/media-store";
 import { startSession } from "./lib/server";
 import { syncLocalRecordings } from "./lib/sync";
 import { importSession } from "./editor/media";
-import { assetFile, assetUrl } from "./editor/media";
+import { assetUrl } from "./editor/media";
 
 const out = document.getElementById("log")!;
-const log = (msg: string, cls = "") =>
-  (out.innerHTML += cls ? `<span class="${cls}">${msg}</span>\n` : `${msg}\n`);
+/** Text, never markup: a message mentioning a <video> element used to create one. */
+const log = (msg: string, cls = "") => {
+  const line = document.createElement("span");
+  if (cls) line.className = cls;
+  line.textContent = `${msg}\n`;
+  out.appendChild(line);
+};
+
+/** Collects garbage when the browser allows it (Chrome with --js-flags=--expose-gc). */
+const collect = () => (globalThis as { gc?: () => void }).gc?.();
 
 let failures = 0;
 function check(label: string, pass: boolean, detail = "") {
@@ -31,8 +39,11 @@ function check(label: string, pass: boolean, detail = "") {
   log(`${pass ? "PASS" : "FAIL"}  ${label}${detail ? `  — ${detail}` : ""}`, pass ? "ok" : "bad");
 }
 
-/** Long enough for throughput and heap trends to be real, short enough to run. */
-const RECORD_SECONDS = 60;
+/**
+ * Long enough for throughput and heap trends to be real, short enough to run.
+ * `?seconds=600` for a genuinely long take.
+ */
+const RECORD_SECONDS = Number(new URLSearchParams(location.search).get("seconds") ?? 60);
 /** Above the proxy threshold, so the proxy path is exercised too. */
 const WIDTH = 2560;
 const HEIGHT = 1440;
@@ -155,7 +166,10 @@ async function run() {
   const elapsed = (performance.now() - started) / 1000;
   // Measured after the timing above, so upload time does not pollute the
   // write-throughput figure.
-  await syncLocalRecordings();
+  const syncStart = performance.now();
+  const synced = await syncLocalRecordings();
+  const syncSeconds = (performance.now() - syncStart) / 1000;
+  log(`uploaded ${mb(synced.bytes)} to the server in ${syncSeconds.toFixed(1)}s — ${mb(synced.bytes / syncSeconds)}/s`);
 
   const bytes = meta.tracks.reduce((n, t) => n + t.bytes, 0);
   const perSecond = bytes / elapsed;
@@ -163,6 +177,8 @@ async function run() {
   log(`one hour at this rate would be ${gb(perSecond * 3600)}`, "dim");
 
   check("the take recorded", meta.tracks.length === 2 && bytes > 1_000_000, mb(bytes));
+  check("every track has data", meta.tracks.every((t) => t.bytes > 0),
+    meta.tracks.map((t) => `${t.fileName} ${mb(t.bytes)}`).join(", "));
   check(
     "duration is what was asked for",
     Math.abs(meta.durationMs / 1000 - RECORD_SECONDS) < 3,
@@ -190,33 +206,66 @@ async function run() {
 
   /* --- import, including the proxy transcode ------------------------ */
   log(`\nimporting (remux, probe, proxy)`, "dim");
+  // Import used to build the remux and the proxy in memory; it streams now,
+  // and this is where that shows — or does not.
+  collect();
+  const importHeapStart = heap()?.used ?? 0;
+  const importHeap = { used: importHeapStart };
+  const importSampler = window.setInterval(() => {
+    const h = heap();
+    if (h && h.used > importHeap.used) importHeap.used = h.used;
+  }, 500);
+  const stageMs: Record<string, number> = {};
+  let stage = "";
+  let stageAt = performance.now();
+  let lastQuarter = -1;
   const importStart = performance.now();
   const assets = await importSession(meta, (p) => {
-    if (p.stage === "proxy" && p.fraction !== undefined && Math.round(p.fraction * 100) % 25 === 0) {
-      log(`  proxy ${Math.round(p.fraction * 100)}%`, "dim");
+    const key = `${p.name} ${p.stage}`;
+    if (key !== stage) {
+      const now = performance.now();
+      if (stage) stageMs[stage] = (stageMs[stage] ?? 0) + (now - stageAt);
+      stage = key;
+      stageAt = now;
+    }
+    const quarter = p.fraction === undefined ? -1 : Math.floor(p.fraction * 4);
+    if (p.stage === "proxy" && quarter > lastQuarter) {
+      lastQuarter = quarter;
+      log(`  proxy ${quarter * 25}%`, "dim");
     }
   });
+  if (stage) stageMs[stage] = (stageMs[stage] ?? 0) + (performance.now() - stageAt);
+  window.clearInterval(importSampler);
   const importSeconds = (performance.now() - importStart) / 1000;
   log(`import took ${importSeconds.toFixed(1)}s (${(importSeconds / (meta.durationMs / 1000)).toFixed(2)}× realtime)`);
+  for (const [key, ms] of Object.entries(stageMs)) log(`  ${key}: ${(ms / 1000).toFixed(1)}s`, "dim");
+  if (importHeapStart) {
+    // The peak includes garbage not yet collected, so it is reported, not
+    // judged. What must not scale with the file is what is still held after
+    // a collection — and comparing runs of different lengths is what shows it.
+    collect();
+    const retained = (heap()?.used ?? 0) - importHeapStart;
+    log(`  heap peaked ${mb(importHeap.used - importHeapStart)} above the start during import`, "dim");
+    check("import holds nothing like the file in memory", retained < Math.max(64 * 1024 * 1024, bytes * 0.1),
+      `${mb(retained)} still held after import of ${mb(bytes)}${"gc" in globalThis ? "" : " (no forced GC)"}`);
+  }
 
   const video = assets.find((a) => a.hasVideo);
   check("a proxy was generated above the threshold", Boolean(video?.proxyName), video?.proxyName ?? "none");
 
-  if (video?.proxyName) {
-    const original = await assetFile(video, false);
-    const proxy = await assetFile(video, true);
-    check(
-      "the proxy is materially smaller",
-      proxy.size < original.size * 0.6,
-      `${mb(proxy.size)} vs ${mb(original.size)}`,
-    );
+  if (video?.proxyName && video.origin.type === "recording") {
+    // Sizes by HEAD: reading both files in to compare them would be exactly
+    // the whole-file load this check exists to rule out.
+    const original = (await sessionFileSize(meta.id, video.origin.fileName)) ?? 0;
+    const proxy = (await sessionFileSize(meta.id, video.proxyName)) ?? 0;
+    check("the proxy is materially smaller", proxy > 0 && proxy < original * 0.6, `${mb(proxy)} vs ${mb(original)}`);
   }
 
   /* --- the thing most likely to be quietly broken ------------------- */
   log(`\nseeking`, "dim");
   if (video) {
-    const file = await assetFile(video, false);
-    const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+    // Range reads, as the exporter does — never the whole file.
+    const input = new Input({ source: new UrlSource(assetUrl(video, false)), formats: ALL_FORMATS });
     try {
       const track = await input.getPrimaryVideoTrack();
       const sink = track ? new VideoSampleSink(track) : null;

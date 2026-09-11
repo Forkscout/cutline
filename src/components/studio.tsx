@@ -285,6 +285,10 @@ export function Studio({
     try {
       const problems = session.errors();
       const meta = await session.stop();
+      // A device that delivered nothing — unplugged, or muted at the OS — is
+      // worth hearing about now, not when the edit comes up silent.
+      const empty = meta.tracks.filter((t) => t.bytes === 0).map((t) => t.label);
+      if (empty.length > 0) problems.push(`Nothing was recorded from ${empty.join(" and ")}.`);
       const cursor = cursorRef.current;
       cursorRef.current = null;
       await cursor?.stop();

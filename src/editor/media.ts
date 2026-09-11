@@ -326,12 +326,41 @@ function baseAsset(name: string, kind: AssetKind, mimeType: string, bytes: numbe
 export async function importSession(
   session: SessionMeta,
   onProgress?: (p: ImportProgress) => void,
+  /** Called for each track left out, with why. Without it they are only logged. */
+  onSkip?: (fileName: string, reason: string) => void,
 ): Promise<MediaAsset[]> {
   const assets: MediaAsset[] = [];
+  const skipped: string[] = [];
 
   for (const [index, track] of session.tracks.entries()) {
-    const total = session.tracks.length;
-    const editName = editableName(track.fileName);
+    // One bad track — a microphone that was unplugged as the take began, a
+    // file cut short — must not cost the user every other track of the take.
+    try {
+      assets.push(await importTrack(session, index, onProgress));
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      skipped.push(`${track.fileName}: ${reason}`);
+      if (onSkip) onSkip(track.fileName, reason);
+      else console.warn(`Skipped ${track.fileName}: ${reason}`);
+    }
+  }
+
+  if (assets.length === 0) throw new Error(`None of this take's tracks could be imported (${skipped.join("; ")}).`);
+  return assets;
+}
+
+async function importTrack(
+  session: SessionMeta,
+  index: number,
+  onProgress?: (p: ImportProgress) => void,
+): Promise<MediaAsset> {
+  const track = session.tracks[index]!;
+  const total = session.tracks.length;
+  const editName = editableName(track.fileName);
+  {
+    if ((await sessionFileSize(session.id, track.fileName)) === 0) {
+      throw new Error("the file is empty — nothing was recorded on this track");
+    }
 
     if (!(await sessionFileExists(session.id, editName))) {
       onProgress?.({ name: track.fileName, index, total, stage: "remuxing" });
@@ -383,10 +412,8 @@ export async function importSession(
       asset.peaks = await computePeaks(editUrl, asset.durationSec);
     }
 
-    assets.push(asset);
+    return asset;
   }
-
-  return assets;
 }
 
 /**
