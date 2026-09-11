@@ -19,6 +19,11 @@ import { toast } from "sonner";
 import { AgentBridge } from "@/editor/agent-bridge";
 import { runAutoCaptions, type AutoCaptionOptions } from "@/components/editor/auto-captions";
 import { BriefPanel } from "@/components/editor/brief-panel";
+import { StoryboardView } from "@/components/editor/storyboard-view";
+import { compileStoryboard } from "@/editor/storyboard";
+import { measureOnCanvas, type MacroContext } from "@/editor/agent-macros";
+import { fontsInUse } from "@/editor/themes";
+import { loadFonts } from "@/lib/fonts";
 import { ClientQuestionsDialog } from "@/components/editor/client-questions-dialog";
 import { AssetUrls } from "@/editor/media";
 import {
@@ -76,6 +81,8 @@ const AUTOSAVE_IDLE_MS = 1500;
 /** Crash copies are cheap and go to localStorage; this can be frequent. */
 const RECOVERY_INTERVAL_MS = 5000;
 
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
 export function Editor({
   initial,
   onClose,
@@ -106,6 +113,7 @@ export function Editor({
   const [scope, setScope] = useState<ScopeKind>("histogram");
   const [rightTab, setRightTab] = useState("inspector");
   const [leftTab, setLeftTab] = useState("media");
+  const [bottomView, setBottomView] = useState<"timeline" | "storyboard">("timeline");
   const [saving, setSaving] = useState<"idle" | "saving" | "saved">("saved");
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
   const [scopeVersion, setScopeVersion] = useState(0);
@@ -151,7 +159,48 @@ export function Editor({
 
   const dispatch = useCallback(
     (action: Action, coalesce = false) => {
-      update((prev) => apply(prev, action, coalesce));
+      update((prev) => {
+        // The user's own edits to compiled clips stick: the clip is marked, and
+        // a clip deleted by hand locks its scene, so no compile brings it back.
+        const ref = "ref" in action ? (action.ref as ClipRef) : null;
+        const clip = ref ? findClip(prev.present, ref) : undefined;
+        let next = apply(prev, action, coalesce);
+        if (ref && clip?.scene) {
+          if (action.type === "deleteClip" || action.type === "rippleDelete") {
+            const board = next.present.storyboard;
+            if (board) {
+              next = apply(next, { type: "setStoryboard", storyboard: { ...board, scenes: board.scenes.map((s) => (s.id === clip.scene ? { ...s, locked: true } : s)) } }, true);
+            }
+          } else if (!clip.userEdited && findClip(next.present, ref)) {
+            next = apply(next, { type: "patchClip", ref, patch: { userEdited: true } }, true);
+          }
+        }
+        return next;
+      });
+    },
+    [update],
+  );
+
+  /** Compiles the storyboard from the editor: one undo step, named for what it did. */
+  const compileBoard = useCallback(
+    async (only?: string[]) => {
+      await loadFonts(fontsInUse(historyRef.current.present)).catch(() => []);
+      let first = true;
+      const ctx: MacroContext = {
+        project: () => historyRef.current.present,
+        commit: (action) => {
+          update((h) => apply(h, action, !first, only ? `Regenerate ${only.join(", ")}` : "Compile storyboard"));
+          first = false;
+        },
+        measure: measureOnCanvas,
+      };
+      try {
+        const report = compileStoryboard(ctx, only ? { only } : {});
+        if (report.errors.length) toast.error("The storyboard did not compile cleanly", { description: report.errors.slice(0, 3).join("\n") });
+        else toast.success(`Compiled ${plural(report.scenes.filter((s) => !s.skipped).length, "scene")}`, { description: report.kept ? `${plural(report.kept, "clip")} you edited by hand ${report.kept === 1 ? "was" : "were"} left alone.` : undefined });
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Could not compile the storyboard.");
+      }
     },
     [update],
   );
@@ -799,6 +848,32 @@ export function Editor({
         <ResizableHandle withHandle />
 
         <ResizablePanel defaultSize="38" minSize="15">
+          <div className="flex h-full min-h-0 flex-col">
+          <div className="flex h-7 shrink-0 items-center gap-0.5 border-b px-2">
+            {(["timeline", "storyboard"] as const).map((view) => (
+              <button
+                key={view}
+                className={cn(
+                  "rounded px-2 py-0.5 text-[10px] capitalize",
+                  bottomView === view ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+                onClick={() => setBottomView(view)}
+              >
+                {view}
+                {view === "storyboard" && project.storyboard ? ` · ${project.storyboard.scenes.length}` : ""}
+              </button>
+            ))}
+          </div>
+          <div className="min-h-0 flex-1">
+          {bottomView === "storyboard" ? (
+            <StoryboardView
+              project={project}
+              time={time}
+              onSeek={(t) => engineRef.current?.seek(t)}
+              onCompile={(only) => void compileBoard(only)}
+              dispatch={dispatch}
+            />
+          ) : (
           <Timeline
             project={project}
             time={time}
@@ -812,6 +887,9 @@ export function Editor({
             onOpenCaptions={() => setLeftTab("captions")}
             onAutoCaption={(id, options) => void autoCaption(id, options)}
           />
+          )}
+          </div>
+          </div>
         </ResizablePanel>
       </ResizablePanelGroup>
     </div>

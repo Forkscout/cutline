@@ -25,8 +25,8 @@ export const GUIDE: Record<string, GuideTopic> = {
 2. **Brief** (checkpoint). Ask what is unanswered — ask_client shows a form in their editor, or ask in chat — and record each answer with set_brief. Never build on a guess about layout, brand or tone. guide('brief') has the questions and sensible defaults.
 3. **Look at the source.** analyze_media on each video (burned-in graphics, where the subject sits, cuts, silences), transcribe then transcript for what is said, contact_sheet to see it. guide('source').
 4. **Treatment** (checkpoint). Write the plan in a few lines: layout, which stretches get graphics and which stay full frame, the look. Show the look: preview_themes on a representative frame, three candidates. Record the choice (set_theme, and set_brief({ decision })).
-5. **Styleframe** (checkpoint). Build one scene fully, render_frame it, and get a yes before building the rest. A long build on an unapproved look is the most expensive mistake there is.
-6. **Build.** start_turn, then the macros — layout_move, add_title, add_points, add_chips, add_stat, add_flow, add_bars, add_lower_third. They style themselves from the theme, pick free tracks and tag each clip's role, so the look can change later in one call. Raw tools (add_clip, add_keyframe…) remain for anything custom.
+5. **Styleframe** (checkpoint). Build one scene fully — the storyboard's first scene, compile_storyboard({ only: [id] }) — render_frame it, and get a yes before building the rest. A long build on an unapproved look is the most expensive mistake there is.
+6. **Build.** start_turn, then write the edit as a storyboard and compile it (guide('storyboard')): one document of scenes, layouts and components anchored to the words, turned into clips the same way every time, and changed by editing a scene and compiling again. The macros — layout_move, add_title, add_points, add_chips, add_stat, add_flow, add_bars, add_lower_third — are the same vocabulary one call at a time, for one-off additions. Both style themselves from the theme and tag each clip's role, so the look can change later in one call. Raw tools (add_clip, add_keyframe…) remain for anything custom.
 7. **Review** (checkpoint). render_frame each scene just after its elements land, contact_sheet across each block, audio_envelope after timing edits. Fix what you find. guide('qa').
 8. **Deliver.** export_video once the checks look right; give the client the path, and list anything you are unsure of — above all, numbers on screen.
 
@@ -101,6 +101,41 @@ Rhythm, from the TreeFlux edit:
 - Keep graphics clear of faces and inside the margins; the macros do both when the speaker is in a panel.`,
   },
 
+  storyboard: {
+    title: "Storyboards: the whole edit as one document",
+    summary: "The format, anchors, compiling, and changing one scene.",
+    body: `Build anything longer than a few graphics as a storyboard, not as hundreds of calls. It is data: scenes in order, each with a layout and what is on screen, anchored to the words they land on. compile_storyboard turns it into clips through the macros and the theme — the same result every time — and a change is an edit to one scene and another compile.
+
+**A scene.**
+
+\`\`\`json
+{ "id": "pricing", "from": { "word": "so what does it cost" }, "to": { "word": "let's talk about", "offset": -0.3 }, "layout": "panel",
+  "note": "The price, and what it includes",
+  "components": [
+    { "id": "title", "type": "title", "at": { "word": "what does it cost" }, "kicker": "Pricing", "title": "One plan, everything included" },
+    { "id": "price", "type": "stat", "at": { "word": "twelve dollars" }, "value": "$12", "label": "a month" },
+    { "id": "what", "type": "points", "items": [
+      { "at": { "word": "unlimited" }, "text": "Unlimited projects", "icon": "check" },
+      { "at": { "word": "export" }, "text": "4K export", "icon": "check" } ] } ] }
+\`\`\`
+
+Around the scenes: \`{ "version": 1, "footer": "Brand · Topic", "subjectX": 0.54, "scenes": [...], "compiledAt": null }\`. footer runs along the bottom of every graphics scene; subjectX (from analyze_media) centres the speaker in the panel.
+
+**Anchors.** \`{ word }\` is the first time that phrase is said after the previous anchor: a scene's from is searched after the previous scene's start, and each anchor in a component after the one before it. Copy phrases from transcript in the transcript's own spelling and script — a Hindi talk may be transcribed in Devanagari with English words in Latin. Two or three words are safer than one; a match allows one letter off or a word that begins the other, so a short fragment can match the wrong word. \`{ time }\` is seconds on the timeline, for moments without words. offset shifts either (−0.3 lands just before the word).
+
+**Layouts.** panel — the speaker in a rounded side card (side, subjectX), graphics beside it. full — the speaker full frame, no graphics region (lower thirds only). pip — a small speaker in a corner. backdrop — a full-frame graphic background over the speaker, for B-roll style scenes. The speaker's moves are rebuilt from the whole storyboard on every compile: into each scene's layout 0.3 s before it starts, and back to full frame across any gap of 3 s or more between scenes — so leave gaps where the speaker should be seen.
+
+**Components.** title, points, chips, stat, statement, flow, cards, split, bars, tally, tree, lower_third — the add_* macros, with anchors in place of times. Each stacks below the one before it in the scene; y places one by hand; until (an anchor) ends one before the scene does. Component ids are unique within a scene.
+
+**The loop.**
+1. transcript, then set_storyboard with the whole thing.
+2. get_storyboard: every scene's time, or why its anchor did not match (with the closest words heard). Fix those first — nothing compiles while any scene is unresolved.
+3. compile_storyboard, and read the report: a note like "reaches y=961 of 1080: it is full" means split the scene or cut items, not shrink the type.
+4. render_frame late in each scene, when everything has landed; contact_sheet across blocks.
+5. To change one scene: set_scene (replaces by id; after places a new one), then compile_storyboard({ only: [id] }).
+
+**What a compile keeps.** Every clip it makes carries its scene and component. A compile removes and rebuilds only its own scenes' clips: a clip the user edited by hand is kept and counted in the report, a locked scene is skipped, and deleting a compiled clip in the editor locks its scene. Clips you add with the macros or raw tools outside the storyboard are never touched.`,
+  },
   qa: {
     title: "Reviewing an edit",
     summary: "What to render and what to look for before calling it done.",

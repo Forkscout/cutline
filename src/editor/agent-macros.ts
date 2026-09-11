@@ -32,6 +32,8 @@ export interface Font {
 export interface MacroContext {
   /** The live project, read again after every commit. */
   project(): Project;
+  /** Stamped on every clip made, when a storyboard compile is making them. */
+  tag?: { scene: string; component: string };
   commit(action: Action): void;
   /** Width of one line of text, in the project's pixels. */
   measure(text: string, font: Font): number;
@@ -39,6 +41,17 @@ export interface MacroContext {
 
 /** A mistake the agent can fix, reported back as the tool's error. */
 export class MacroError extends Error {}
+
+let measurer: CanvasRenderingContext2D | null = null;
+
+/** Width of a line of text as the compositor will draw it: the same canvas font string. */
+export function measureOnCanvas(text: string, font: Font): number {
+  measurer ??= typeof document === "undefined" ? null : document.createElement("canvas").getContext("2d");
+  if (!measurer) return text.length * font.size * 0.55;
+  measurer.font = `${font.weight} ${font.size}px ${font.family}`;
+  if ("letterSpacing" in measurer) (measurer as unknown as { letterSpacing: string }).letterSpacing = `${font.letterSpacing ?? 0}px`;
+  return Math.max(...text.split("\n").map((line) => measurer!.measureText(line).width));
+}
 
 export interface Placed {
   role: ClipRole;
@@ -82,13 +95,17 @@ function frameOf(ctx: MacroContext): Frame {
   return { project, theme: themeOf(project), W: project.width, H: project.height, u: project.height / REFERENCE_HEIGHT };
 }
 
-interface Speaker {
+export interface Speaker {
   track: Track;
   trackIndex: number;
   clip: Clip;
 }
 
 /** The speaker at a time: the clip tagged so, or the lowest video clip that shows pictures. */
+export function findSpeaker(project: Project, time: number): Speaker | null {
+  return speakerAt(project, time);
+}
+
 function speakerAt(project: Project, time: number): Speaker | null {
   const visible = visibleClips(project, time).filter(({ track, clip }) => {
     if (track.kind !== "video" || clip.kind !== "media") return false;
@@ -213,6 +230,10 @@ class Build {
 
   add(clip: Clip, role: ClipRole): Placed {
     clip.role = role;
+    if (this.ctx.tag) {
+      clip.scene = this.ctx.tag.scene;
+      clip.component = this.ctx.tag.component;
+    }
     const trackId = this.trackFor(clip.start, clip.start + clip.duration);
     this.ctx.commit({ type: "addClip", trackId, clip });
     const placed: Placed = { role, trackId, clipId: clip.id, start: clip.start, end: clip.start + clip.duration };
@@ -328,7 +349,7 @@ const fontOf = (theme: Theme, role: "display" | "body", weight: number, size: nu
 
 /* --------------------------------------------------------------- macros */
 
-const MOVED = ["transform.x", "transform.y", "transform.scale", "transform.crop.left", "transform.crop.right", "transform.radius"] as const;
+export const MOVED = ["transform.x", "transform.y", "transform.scale", "transform.crop.left", "transform.crop.right", "transform.radius"] as const;
 
 export interface LayoutMoveArgs {
   at: number;
@@ -466,7 +487,7 @@ export function addTitle(ctx: MacroContext, a: TitleArgs): MacroResult {
 
 export interface PointsArgs {
   end: number;
-  items: { at: number; text: string; icon?: "check" | "cross" | "dot" | "number" | "none" }[];
+  items: { at: number; text: string; icon?: "check" | "cross" | "dot" | "number" | "none"; lead?: string }[];
   y?: number;
   size?: number;
 }
@@ -478,10 +499,14 @@ export function addPoints(ctx: MacroContext, a: PointsArgs): MacroResult {
   const { theme, u } = f;
   const size = a.size ?? theme.type.body;
   const font = fontOf(theme, "body", theme.weights.body, size, u);
+  const leadFont = fontOf(theme, "body", 700, size, u);
+  const leadCol = a.items.some((i) => i.lead) ? Math.max(...a.items.map((i) => (i.lead ? ctx.measure(i.lead, leadFont) : 0))) + 28 * u : 0;
   let top = y0;
   a.items.forEach((item, i) => {
-    const icon = item.icon ?? "dot";
-    const column = icon === "none" ? 0 : size * u * 1.7;
+    const icon = item.icon ?? (leadCol ? "none" : "dot");
+    const iconCol = icon === "none" ? 0 : size * u * 1.7;
+    const column = iconCol + leadCol;
+    if (item.lead) build.text("label-accent", item.lead, { x: zone.x0 + iconCol, y: top + (size * u * 1.25) / 2 }, size, item.at, a.end, { anim: "fade" });
     const lines = wrap(ctx, item.text, zone.x1 - zone.x0 - column, font);
     const h = lines.length * size * u * 1.25;
     const cy = top + h / 2;
@@ -564,7 +589,7 @@ export function addStat(ctx: MacroContext, a: StatArgs): MacroResult {
 
 export interface FlowArgs {
   end: number;
-  steps: { at: number; text: string }[];
+  steps: { at: number; text: string; style?: "box" | "pill" }[];
   y?: number;
   highlight?: "last" | "none";
 }
@@ -585,8 +610,12 @@ export function addFlow(ctx: MacroContext, a: FlowArgs): MacroResult {
   a.steps.forEach((step, i) => {
     const cx = zone.x0 + boxW / 2 + i * (boxW + gap);
     const lit = (a.highlight ?? "last") === "last" && i === n - 1;
-    build.shape(lit ? "card-accent" : "card", "rectangle", { cx, cy, w: boxW, h: boxH }, step.at, a.end, "rise");
-    build.text(lit ? "label-accent" : "label", wrapped[i]!.join("\n"), { x: cx, y: cy }, size, step.at + 0.15, a.end, { align: "center", anim: "fade", lineHeight: 1.25 });
+    if (step.style === "pill") {
+      build.text("chip", step.text, { x: cx, y: cy }, Math.round(size * 1.15), step.at, a.end, { align: "center", anim: "pop", pad: 16 });
+    } else {
+      build.shape(lit ? "card-accent" : "card", "rectangle", { cx, cy, w: boxW, h: boxH }, step.at, a.end, "rise");
+      build.text(lit ? "label-accent" : "label", wrapped[i]!.join("\n"), { x: cx, y: cy }, size, step.at + 0.15, a.end, { align: "center", anim: "fade", lineHeight: 1.25 });
+    }
     if (i < n - 1) {
       const next = a.steps[i + 1]!;
       build.shape("arrow", "arrow", { cx: cx + boxW / 2 + gap / 2, cy, w: 60 * u, h: 36 * u }, Math.max(step.at, next.at - 0.35), a.end, "grow");
@@ -704,5 +733,288 @@ export function addBackdrop(ctx: MacroContext, a: BackdropArgs): MacroResult {
     void clip;
     ctx.commit({ type: "setTransform", ref: { trackId: placed.trackId, clipId: placed.clipId }, patch: { opacity: Math.max(0, Math.min(1, a.opacity)) } });
   }
+  return build.result();
+}
+
+export interface StatementArgs {
+  end: number;
+  lines: { at: number; text: string; tone?: "text" | "accent" | "muted" }[];
+  size?: "hero" | "stat" | "title";
+  y?: number;
+}
+
+/** A few words, very large: a term being named ("Spillover"), a sum ("6 × 100 = 600"), a verdict. */
+export function addStatement(ctx: MacroContext, a: StatementArgs): MacroResult {
+  const first = Math.min(...a.lines.map((l) => l.at));
+  const { f, zone, build, top: y0 } = start(ctx, first, a.end, a.y);
+  const { theme, u } = f;
+  const t = theme.type;
+  const size = a.size === "stat" ? t.stat : a.size === "title" ? Math.round(t.title * 1.3) : Math.round(t.stat * 0.78);
+  let top = y0;
+  for (const line of a.lines) {
+    const role: ClipRole = line.tone === "muted" ? "muted" : line.tone === "accent" ? "stat" : "title";
+    const weight = role === "muted" ? theme.weights.body : role === "stat" ? theme.weights.stat : theme.weights.display;
+    const lines = wrap(ctx, line.text, zone.x1 - zone.x0, fontOf(theme, role === "muted" ? "body" : "display", weight, size, u));
+    const h = lines.length * size * u * 1.08;
+    build.text(role, lines.join("\n"), { x: zone.x0, y: top + h / 2 }, size, line.at, a.end, { anim: "pop", lineHeight: 1.08, weight });
+    top += h + 8 * u;
+  }
+  return build.result(top);
+}
+
+export interface TallyArgs {
+  end: number;
+  items: { at: number; label: string; count: number; value: string }[];
+  y?: number;
+}
+
+/** Rows of dots that show a count doubling or growing, with the number beside each. */
+export function addTally(ctx: MacroContext, a: TallyArgs): MacroResult {
+  const first = Math.min(...a.items.map((i) => i.at));
+  const { f, zone, build, top } = start(ctx, first, a.end, a.y);
+  const { theme, u } = f;
+  const size = theme.type.body;
+  const labelFont = fontOf(theme, "body", theme.weights.body, size, u);
+  const dotFont = fontOf(theme, "body", 500, Math.round(size * 0.8), u, 10);
+  const dots = (n: number) => "●".repeat(Math.min(Math.max(0, Math.round(n)), 24)) + (n > 24 ? " …" : "");
+  const labelCol = Math.max(...a.items.map((i) => ctx.measure(i.label, labelFont))) + 36 * u;
+  const dotCol = Math.max(...a.items.map((i) => ctx.measure(dots(i.count), dotFont))) + 40 * u;
+  const rowH = size * u * 2.1;
+  a.items.forEach((item, i) => {
+    const cy = top + rowH / 2 + i * rowH;
+    build.text("muted", item.label, { x: zone.x0, y: cy }, size, item.at, a.end, { anim: "fade" });
+    build.text("label-accent", dots(item.count), { x: zone.x0 + labelCol, y: cy }, Math.round(size * 0.8), item.at + 0.1, a.end, { anim: "fade", spacing: 10, weight: 500 });
+    build.text("label", item.value, { x: zone.x0 + labelCol + dotCol, y: cy }, size, item.at + 0.25, a.end, { anim: "fade" });
+  });
+  return build.result(top + a.items.length * rowH);
+}
+
+export interface CardsArgs {
+  end: number;
+  cards: { at: number; kicker?: string; title: string; body?: string }[];
+  highlight?: "last" | "first" | "none";
+  y?: number;
+}
+
+/** Two to four cards side by side — options, halves of a system, a comparison. */
+export function addCards(ctx: MacroContext, a: CardsArgs): MacroResult {
+  const first = Math.min(...a.cards.map((c) => c.at));
+  const { f, zone, build, top } = start(ctx, first, a.end, a.y);
+  const { theme, u } = f;
+  const t = theme.type;
+  const n = a.cards.length;
+  const gap = 40 * u;
+  const cardW = (zone.x1 - zone.x0 - gap * (n - 1)) / n;
+  const pad = 36 * u;
+  const titleSize = Math.round(t.subtitle * 1.25);
+  const bodySize = Math.round(t.body * 0.9);
+  const titleFont = fontOf(theme, "display", theme.weights.display, titleSize, u);
+  const bodyFont = fontOf(theme, "body", theme.weights.body, bodySize, u);
+  const laid = a.cards.map((c) => ({
+    title: wrap(ctx, c.title, cardW - 2 * pad, titleFont),
+    body: c.body ? wrap(ctx, c.body, cardW - 2 * pad, bodyFont) : [],
+  }));
+  const kickerH = a.cards.some((c) => c.kicker) ? t.kicker * u + 16 * u : 0;
+  const cardH = pad * 2 + kickerH + Math.max(...laid.map((l) => l.title.length * titleSize * u * 1.15 + (l.body.length ? 16 * u + l.body.length * bodySize * u * 1.3 : 0)));
+  a.cards.forEach((card, i) => {
+    const x0 = zone.x0 + i * (cardW + gap);
+    const lit = (a.highlight ?? "none") === "last" ? i === n - 1 : a.highlight === "first" ? i === 0 : false;
+    build.shape(lit ? "card-accent" : "card", "rectangle", { cx: x0 + cardW / 2, cy: top + cardH / 2, w: cardW, h: cardH }, card.at, a.end, "rise");
+    let y = top + pad;
+    if (card.kicker) {
+      build.text("kicker", t.kickerUppercase ? card.kicker.toUpperCase() : card.kicker, { x: x0 + pad, y: y + (t.kicker * u) / 2 }, t.kicker, card.at + 0.15, a.end, { anim: "fade", spacing: t.kickerSpacing });
+    }
+    y += kickerH;
+    const titleH = laid[i]!.title.length * titleSize * u * 1.15;
+    build.text(lit ? "label-accent" : "title", laid[i]!.title.join("\n"), { x: x0 + pad, y: y + titleH / 2 }, titleSize, card.at + 0.25, a.end, { anim: "fade", lineHeight: 1.15, weight: theme.weights.display });
+    y += titleH + 16 * u;
+    if (laid[i]!.body.length) {
+      const bodyH = laid[i]!.body.length * bodySize * u * 1.3;
+      build.text("muted", laid[i]!.body.join("\n"), { x: x0 + pad, y: y + bodyH / 2 }, bodySize, card.at + 0.4, a.end, { anim: "fade", lineHeight: 1.3 });
+    }
+  });
+  return build.result(top + cardH);
+}
+
+export interface SplitArgs {
+  end: number;
+  source: { at: number; text: string };
+  branches: { at: number; title: string; body?: string }[];
+  y?: number;
+}
+
+/** One thing dividing into two or three — a payment split in half, a choice. */
+export function addSplit(ctx: MacroContext, a: SplitArgs): MacroResult {
+  const { f, zone, build, top } = start(ctx, a.source.at, a.end, a.y);
+  const { theme, u } = f;
+  const size = Math.round(theme.type.body);
+  const srcW = Math.min(420 * u, zone.x1 - zone.x0);
+  const srcH = 100 * u;
+  const cx = (zone.x0 + zone.x1) / 2;
+  build.shape("card-accent", "rectangle", { cx, cy: top + srcH / 2, w: srcW, h: srcH }, a.source.at, a.end, "rise");
+  build.text("label-accent", a.source.text, { x: cx, y: top + srcH / 2 }, size, a.source.at + 0.15, a.end, { align: "center", anim: "fade" });
+  const cardsTop = top + srcH + 110 * u;
+  const n = a.branches.length;
+  const gap = 60 * u;
+  const cardW = (zone.x1 - zone.x0 - gap * (n - 1)) / n;
+  const result = addCards(
+    { ...ctx },
+    { end: a.end, cards: a.branches.map((b) => ({ at: b.at, title: b.title, ...(b.body ? { body: b.body } : {}) })), y: cardsTop / u },
+  );
+  a.branches.forEach((b, i) => {
+    const bx = zone.x0 + cardW / 2 + i * (cardW + gap);
+    build.shape("connector-accent", "line", lineBox(cx, top + srcH, bx, cardsTop), Math.max(a.source.at, b.at - 0.4), a.end, "grow");
+  });
+  return { clips: [...build.clips, ...result.clips], bottom: result.bottom ?? Math.round(cardsTop), notes: [...build.notes, ...result.notes] };
+}
+
+/** A line from one point to another, as a shape box. */
+function lineBox(x1: number, y1: number, x2: number, y2: number, r1 = 0, r2 = 0) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
+  const ax = x1 + ux * r1;
+  const ay = y1 + uy * r1;
+  const bx = x2 - ux * r2;
+  const by = y2 - uy * r2;
+  return { cx: (ax + bx) / 2, cy: (ay + by) / 2, w: Math.max(1, Math.hypot(bx - ax, by - ay)), h: 4, rotation: (Math.atan2(dy, dx) * 180) / Math.PI };
+}
+
+export interface TreeArgs {
+  end: number;
+  nodes: { id: string; label: string; parent?: string | null; at: number; tone?: "accent" | "positive" | "neutral"; note?: string }[];
+  moves?: { node: string; parent: string; at: number }[];
+  y?: number;
+  size?: number;
+}
+
+/**
+ * A tree of nodes — a referral matrix, seats under a member — drawn level by
+ * level, each node arriving on its word. A move carries a node from where it
+ * arrived to a new parent: the TreeFlux spill, where a third referral drops
+ * to the first empty seat below.
+ */
+export function addTree(ctx: MacroContext, a: TreeArgs): MacroResult {
+  const first = Math.min(...a.nodes.map((n) => n.at));
+  const { f, zone, build, top } = start(ctx, first, a.end, a.y);
+  const { theme, u } = f;
+  const ids = new Set(a.nodes.map((n) => n.id));
+  if (ids.size !== a.nodes.length) throw new MacroError("Every tree node needs its own id.");
+  for (const n of a.nodes) if (n.parent && !ids.has(n.parent)) throw new MacroError(`Node ${n.id} names a parent ${n.parent} that is not in the tree.`);
+  for (const m of a.moves ?? []) if (!ids.has(m.node) || !ids.has(m.parent)) throw new MacroError(`A move names a node that is not in the tree: ${m.node} → ${m.parent}.`);
+
+  const d = (a.size ?? 96) * u;
+  const gapY = 190 * u;
+  const layout = (parents: Map<string, string | null>) => {
+    const children = new Map<string | null, string[]>();
+    for (const n of a.nodes) {
+      const p = parents.get(n.id) ?? null;
+      children.set(p, [...(children.get(p) ?? []), n.id]);
+    }
+    const leaves = (id: string): number => {
+      const kids = children.get(id) ?? [];
+      return kids.length ? kids.reduce((s, k) => s + leaves(k), 0) : 1;
+    };
+    const roots = children.get(null) ?? [];
+    const total = roots.reduce((s, r) => s + leaves(r), 0);
+    const pos = new Map<string, { x: number; y: number; depth: number }>();
+    const place = (id: string, x0: number, x1: number, depth: number) => {
+      pos.set(id, { x: (x0 + x1) / 2, y: top + d / 2 + depth * gapY, depth });
+      const kids = children.get(id) ?? [];
+      let cursor = x0;
+      for (const k of kids) {
+        const w = ((x1 - x0) * leaves(k)) / Math.max(1, leaves(id));
+        place(k, cursor, cursor + w, depth + 1);
+        cursor += w;
+      }
+    };
+    let cursor = zone.x0;
+    for (const r of roots) {
+      const w = ((zone.x1 - zone.x0) * leaves(r)) / Math.max(1, total);
+      place(r, cursor, cursor + w, 0);
+      cursor += w;
+    }
+    return pos;
+  };
+
+  const initialParents = new Map(a.nodes.map((n) => [n.id, n.parent ?? null] as const));
+  const finalParents = new Map(initialParents);
+  for (const m of a.moves ?? []) finalParents.set(m.node, m.parent);
+  const moving = new Map((a.moves ?? []).map((m) => [m.node, m] as const));
+  // Stable layout without the movers, then the movers: where they arrive (beside
+  // the first root when they come in unattached) and where they end up.
+  const settled = layout(finalParents);
+  const withoutMovers = new Map([...initialParents].map(([k, v]) => [k, moving.has(k) ? "__floating__" : v] as const));
+  const base = layout(new Map([...withoutMovers].filter(([, v]) => v !== "__floating__")));
+  const root = [...base.values()].find((p) => p.depth === 0);
+  const start0 = (id: string) => {
+    const parent = initialParents.get(id);
+    if (parent && base.get(parent)) {
+      const p = base.get(parent)!;
+      return { x: p.x + (settled.get(id)!.x - settled.get(finalParents.get(id)!)!.x), y: p.y + gapY };
+    }
+    return { x: Math.min(zone.x1 - d, (root?.x ?? zone.x0) + 3.4 * d), y: root?.y ?? top + d / 2 };
+  };
+  const positionOf = (id: string) => (moving.has(id) ? start0(id) : settled.get(id)!);
+  const MOVE = 1.8;
+
+  // Connectors first, so the nodes cover their ends.
+  for (const n of a.nodes) {
+    const parent = finalParents.get(n.id);
+    if (!parent) continue;
+    const p = settled.get(parent)!;
+    const c = settled.get(n.id)!;
+    const move = moving.get(n.id);
+    const at = move ? move.at + MOVE : n.at - 0.2;
+    build.shape(n.tone === "accent" ? "connector-accent" : "connector", "line", lineBox(p.x, p.y, c.x, c.y, d / 2, d / 2), Math.max(0, at), a.end, "grow");
+  }
+  for (const n of a.nodes) {
+    const from = positionOf(n.id);
+    const to = settled.get(n.id)!;
+    const move = moving.get(n.id);
+    const isRoot = !finalParents.get(n.id) && settled.get(n.id)!.depth === 0;
+    const tone = n.tone ?? (isRoot ? "accent" : "neutral");
+    const size = isRoot ? d * 1.15 : d;
+    const nodeRole: ClipRole = tone === "accent" ? "node-accent" : tone === "positive" ? "node-positive" : "node";
+    const textRole: ClipRole = tone === "accent" ? "label-accent" : tone === "positive" ? "label-positive" : "label";
+    const placed = [
+      build.shape(nodeRole, "ellipse", { cx: from.x, cy: from.y, w: size, h: size }, n.at, a.end, "pop"),
+      build.text(textRole, n.label, { x: from.x, y: from.y }, Math.round(theme.type.body * 0.9), n.at + 0.1, a.end, { align: "center", anim: "fade" }),
+      ...(n.note ? [build.text("muted", n.note, { x: from.x, y: from.y + size / 2 + 30 * u }, Math.round(theme.type.body * 0.8), n.at + 0.3, a.end, { align: "center", anim: "fade" })] : []),
+    ];
+    if (move) {
+      const project = ctx.project();
+      for (const p of placed) {
+        const clip = project.tracks.find((t) => t.id === p.trackId)?.clips.find((c) => c.id === p.clipId);
+        if (!clip) continue;
+        const dy = (clip.transform.y * f.H) - from.y;
+        const local = (t: number) => Math.max(0, t - clip.start);
+        const keys = clip.keyframes.filter((k) => k.property !== "transform.x" && k.property !== "transform.y");
+        keys.push(
+          keyframe("transform.x", local(move.at), from.x / f.W, "ease"),
+          keyframe("transform.x", local(move.at + MOVE), to.x / f.W, "linear"),
+          keyframe("transform.y", local(move.at), (from.y + dy) / f.H, "ease"),
+          keyframe("transform.y", local(move.at + MOVE), (to.y + dy) / f.H, "linear"),
+        );
+        ctx.commit({ type: "patchClip", ref: { trackId: p.trackId, clipId: p.clipId }, patch: { keyframes: keys } });
+      }
+    }
+  }
+  const depth = Math.max(...[...settled.values()].map((p) => p.depth));
+  return build.result(top + depth * gapY + d + (a.nodes.some((n) => n.note) ? 60 * u : 0));
+}
+
+export interface FooterArgs {
+  start: number;
+  end: number;
+  text: string;
+}
+
+/** A small line at the foot of the graphics' space: the video's name, a source. */
+export function addFooter(ctx: MacroContext, a: FooterArgs): MacroResult {
+  const { f, zone, build } = start(ctx, a.start, a.end);
+  build.text("footer", a.text.toUpperCase(), { x: zone.x0, y: (REFERENCE_HEIGHT - 68) * f.u }, 16, a.start, a.end, { anim: "fade", spacing: 3 });
   return build.result();
 }

@@ -349,6 +349,13 @@ export const ACTION_TOOLS = {
       "Records what the video is for and how it should feel — goal, audience, platform, tone, layout, on-screen language, captions, brand, references, standing rules — in the project, where every later agent reads it with get_brief. Pass only what changed. decision appends one line to the decisions log: what was decided, and why.",
     input: { patch: s.briefPatch.optional(), decision: z.string().min(1).max(400).optional() },
   }),
+  setStoryboard: tool({
+    name: "set_storyboard",
+    title: "Set storyboard",
+    description:
+      "Writes the whole storyboard: scenes in order, each with a layout (panel, full, pip, backdrop) and components (title, points, chips, stat, statement, flow, cards, split, bars, tally, tree, lower_third) anchored to the words they land on. Nothing is drawn until compile_storyboard. Anchors: { word } is the first time that phrase is said after the previous anchor — copy it from the transcript tool, in the transcript's own spelling; { time } is a timeline time. guide('storyboard') has the format and a worked scene.",
+    input: { storyboard: s.storyboard },
+  }),
   setTheme: tool({
     name: "set_theme",
     title: "Set theme",
@@ -368,6 +375,26 @@ export const EDITOR_TOOLS = {
     readOnly: true,
     description: "Which project is open, its length, where the playhead is and what is selected. When the user says 'here' or 'this', they mean the playhead and the selection — call this first.",
     input: {},
+  }),
+  getStoryboard: tool({
+    name: "get_storyboard",
+    title: "Get storyboard",
+    readOnly: true,
+    description: "The project's storyboard, with the time each scene resolves to (or why it does not), and when it was last compiled.",
+    input: {},
+  }),
+  setScene: tool({
+    name: "set_scene",
+    title: "Set scene",
+    description: "Adds one scene to the storyboard, or replaces the scene with the same id — to change a scene without rewriting the rest. Place a new one after an existing scene with after; default the end. Lock a scene by setting locked. Then compile_storyboard({ only: [id] }).",
+    input: { scene: s.storyScene, after: z.string().optional().describe("Id of the scene it follows") },
+  }),
+  compileStoryboard: tool({
+    name: "compile_storyboard",
+    title: "Compile storyboard",
+    description:
+      "Turns the storyboard into clips through the macros and the theme: resolves every anchor, removes what earlier compiles made for these scenes (never clips the user edited by hand, never locked scenes), rebuilds the speaker's layout moves from the whole storyboard, and builds each component. Nothing changes if a scene's times cannot be resolved; the report says why. only compiles just those scenes.",
+    input: { only: z.array(z.string()).optional().describe("Scene ids; default every scene not locked") },
   }),
   getBrief: tool({
     name: "get_brief",
@@ -477,7 +504,14 @@ export const EDITOR_TOOLS = {
     input: {
       end: s.seconds("When the scene ends"),
       items: z
-        .array(z.object({ at: s.seconds("When it arrives"), text: z.string().min(1), icon: z.enum(["check", "cross", "dot", "number", "none"]).optional() }))
+        .array(
+          z.object({
+            at: s.seconds("When it arrives"),
+            text: z.string().min(1),
+            icon: z.enum(["check", "cross", "dot", "number", "none"]).optional(),
+            lead: z.string().max(30).optional().describe("A bold accent word before the text, e.g. 'Level 4'"),
+          }),
+        )
         .min(1)
         .max(10),
       y: z.number().min(0).optional(),
@@ -516,7 +550,10 @@ export const EDITOR_TOOLS = {
     description: "Two to five boxes left to right with arrows between — a sequence, a cause and effect — each arriving on its word; the last highlighted unless highlight is none.",
     input: {
       end: s.seconds("When the scene ends"),
-      steps: z.array(z.object({ at: s.seconds("When it arrives — the word it belongs to"), text: z.string().min(1) })).min(2).max(5),
+      steps: z
+        .array(z.object({ at: s.seconds("When it arrives — the word it belongs to"), text: z.string().min(1), style: z.enum(["box", "pill"]).optional().describe("pill: an amount or a token between boxes") }))
+        .min(2)
+        .max(5),
       y: z.number().min(0).optional(),
       highlight: z.enum(["last", "none"]).optional(),
     },
@@ -544,6 +581,65 @@ export const EDITOR_TOOLS = {
     title: "Add lower third",
     description: "A name and a role on a plate at the bottom of the graphics' space — for introducing a speaker or a place.",
     input: { start: s.seconds("When it arrives"), end: s.seconds("When it leaves"), name: z.string().min(1).max(60), role: z.string().max(80).optional() },
+  }),
+  addStatement: tool({
+    name: "add_statement",
+    title: "Add statement",
+    description: "A few words, very large — a term being named ('Spillover'), a sum ('6 × 100 USDT' / '= 600 USDT'), a verdict. One to four lines, each arriving on its word; tone accent for the one that matters.",
+    input: {
+      end: s.seconds("When the scene ends"),
+      lines: z.array(z.object({ at: s.seconds("When it arrives"), text: z.string().min(1).max(80), tone: z.enum(["text", "accent", "muted"]).optional() })).min(1).max(4),
+      size: z.enum(["hero", "stat", "title"]).optional().describe("hero (default) is between a title and a stat"),
+      y: z.number().min(0).optional(),
+    },
+  }),
+  addTally: tool({
+    name: "add_tally",
+    title: "Add tally",
+    description: "Rows of dots showing a count — 'Row 1 ●● 2 seats', 'Row 2 ●●●● 4 seats' — with the number in a column beside them.",
+    input: {
+      end: s.seconds("When the scene ends"),
+      items: z.array(z.object({ at: s.seconds("When it arrives"), label: z.string().min(1).max(30), count: z.number().int().min(0).max(999), value: z.string().max(30) })).min(1).max(6),
+      y: z.number().min(0).optional(),
+    },
+  }),
+  addCards: tool({
+    name: "add_cards",
+    title: "Add cards",
+    description: "Two to four cards side by side, each with an optional kicker, a title and a line of body — the halves of a system, options, a comparison.",
+    input: {
+      end: s.seconds("When the scene ends"),
+      cards: z.array(z.object({ at: s.seconds("When it arrives"), kicker: z.string().max(40).optional(), title: z.string().min(1).max(80), body: z.string().max(200).optional() })).min(1).max(4),
+      highlight: z.enum(["last", "first", "none"]).optional(),
+      y: z.number().min(0).optional(),
+    },
+  }),
+  addSplit: tool({
+    name: "add_split",
+    title: "Add split",
+    description: "One thing dividing into two or three — a payment split in half — a box with connectors down to cards.",
+    input: {
+      end: s.seconds("When the scene ends"),
+      source: z.object({ at: s.seconds("When it arrives"), text: z.string().min(1).max(60) }),
+      branches: z.array(z.object({ at: s.seconds("When it arrives"), title: z.string().min(1).max(60), body: z.string().max(200).optional() })).min(2).max(3),
+      y: z.number().min(0).optional(),
+    },
+  }),
+  addTree: tool({
+    name: "add_tree",
+    title: "Add tree",
+    description:
+      "A tree of nodes drawn level by level, each arriving on its word — a referral matrix, the seats under a member. A node with no parent is a root, or arrives unattached; a move carries a node to a new parent at a time (a spill to the first empty seat).",
+    input: {
+      end: s.seconds("When the scene ends"),
+      nodes: z
+        .array(z.object({ id: z.string().min(1).max(30), label: z.string().min(1).max(12), parent: z.string().nullable().optional(), at: s.seconds("When it arrives"), tone: z.enum(["accent", "positive", "neutral"]).optional(), note: z.string().max(40).optional() }))
+        .min(1)
+        .max(15),
+      moves: z.array(z.object({ node: z.string(), parent: z.string(), at: s.seconds("When it arrives") })).max(5).optional(),
+      y: z.number().min(0).optional(),
+      size: z.number().min(40).max(160).optional().describe("Node diameter, px at 1080p; default 96"),
+    },
   }),
   addBackdrop: tool({
     name: "add_backdrop",
@@ -644,7 +740,7 @@ export const SERVER_INSTRUCTIONS = `Cutline is a video editor open in the user's
 2. If the brief has unanswered questions, ask the client (ask_client shows a form in their editor, or ask in chat) and record answers with set_brief. Do not build on guesses about layout, brand or tone.
 3. Look at the source before deciding: analyze_media, transcribe then transcript, contact_sheet.
 4. Propose a treatment in a few lines and show the look with preview_themes. Build one scene as a styleframe and get a yes before the full build.
-5. Call start_turn with the instruction before editing, so the whole change is one undo step. Build with the macros — layout_move, add_title, add_points, add_chips, add_stat, add_flow, add_bars, add_lower_third — which style themselves from the theme and find free tracks. Raw tools remain for anything custom.
+5. Call start_turn with the instruction before editing, so the whole change is one undo step. Write the edit as a storyboard — set_storyboard, get_storyboard, compile_storyboard; guide('storyboard') — rather than hundreds of calls: scenes anchored to the words, compiled the same way every time, changed one scene at a time with set_scene. The macros (layout_move, add_title, add_points, add_chips, add_stat, add_flow, add_bars, add_lower_third) are the same vocabulary for one-off additions; raw tools remain for anything custom.
 6. Verify before you report: render_frame or contact_sheet across everything you touched, audio_envelope after timing edits. Report what you saw, including problems, and flag any on-screen number the transcript was unsure of.
 7. export_video only once the checks look right; give the user the path it returns.
 

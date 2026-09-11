@@ -362,6 +362,8 @@ export function textStyleFor(role: ClipRole, theme: Theme): Partial<TextStyle> {
       return { fontFamily: body, fontWeight: 700, color: p.text, background: null };
     case "label-accent":
       return { fontFamily: body, fontWeight: 700, color: p.accent, background: null };
+    case "label-positive":
+      return { fontFamily: body, fontWeight: 700, color: p.positive, background: null };
     case "number":
       return { fontFamily: body, fontWeight: 800, color: p.accent, background: p.accentSoft };
     case "icon-positive":

@@ -31,6 +31,7 @@ import { readProperty } from "./keyframes";
 import { THEMES, brandOverrides, fontsInUse, mergeTheme, paletteOf, themeById, themeOf } from "./themes";
 import { themeSheet } from "./styleframes";
 import { analysisOf } from "./analyze";
+import { AnchorError, compileStoryboard, resolveAnchor } from "./storyboard";
 import { askClient, type ClientQuestion } from "./client-questions";
 import { assetUrl } from "./media";
 import { renderFrames as drawFrames } from "./snapshot";
@@ -211,6 +212,19 @@ const EXECUTORS: Executors = {
       ...(a.decision ? { decision: a.decision } : {}),
     };
   },
+  setStoryboard: (a) => {
+    const scenes = new Set<string>();
+    for (const scene of a.storyboard.scenes) {
+      if (scenes.has(scene.id)) throw new ToolError(`Two scenes are called ${scene.id}; ids must be unique.`);
+      scenes.add(scene.id);
+      const components = new Set<string>();
+      for (const c of scene.components) {
+        if (components.has(c.id)) throw new ToolError(`Scene ${scene.id} has two components called ${c.id}.`);
+        components.add(c.id);
+      }
+    }
+    return { type: "setStoryboard", storyboard: { version: 1, ...a.storyboard, compiledAt: null } };
+  },
   setTheme: (a, project) => {
     const base = a.themeId ? themeById(a.themeId) : themeOf(project);
     return { type: "setTheme", theme: mergeTheme(base, a.overrides ?? {}), restyle: a.restyle ?? true };
@@ -340,16 +354,6 @@ const text = (t: string): BridgeContent => ({ type: "text", text: t });
 const json = (value: unknown): BridgeContent => text(JSON.stringify(value));
 const round = (n: number) => Math.round(n * 1000) / 1000;
 
-let measurer: CanvasRenderingContext2D | null = null;
-
-/** Width of a line of text as the compositor will draw it: the same canvas font string. */
-function measureText(text: string, font: macros.Font): number {
-  measurer ??= document.createElement("canvas").getContext("2d");
-  if (!measurer) return text.length * font.size * 0.55;
-  measurer.font = `${font.weight} ${font.size}px ${font.family}`;
-  if ("letterSpacing" in measurer) (measurer as unknown as { letterSpacing: string }).letterSpacing = `${font.letterSpacing ?? 0}px`;
-  return Math.max(...text.split("\n").map((line) => measurer!.measureText(line).width));
-}
 
 export class AgentBridge {
   private ws: WebSocket | null = null;
@@ -515,7 +519,7 @@ export class AgentBridge {
     const ctx: macros.MacroContext = {
       project: () => this.host.history().present,
       commit: (action) => void this.commit(action),
-      measure: measureText,
+      measure: macros.measureOnCanvas,
     };
     try {
       return run(ctx);
@@ -681,6 +685,49 @@ export class AgentBridge {
         return [json(await this.macro((ctx) => macros.addBars(ctx, raw as unknown as macros.BarsArgs)))];
       case "addLowerThird":
         return [json(await this.macro((ctx) => macros.addLowerThird(ctx, raw as unknown as macros.LowerThirdArgs)))];
+      case "addStatement":
+        return [json(await this.macro((ctx) => macros.addStatement(ctx, raw as unknown as macros.StatementArgs)))];
+      case "addTally":
+        return [json(await this.macro((ctx) => macros.addTally(ctx, raw as unknown as macros.TallyArgs)))];
+      case "addCards":
+        return [json(await this.macro((ctx) => macros.addCards(ctx, raw as unknown as macros.CardsArgs)))];
+      case "addSplit":
+        return [json(await this.macro((ctx) => macros.addSplit(ctx, raw as unknown as macros.SplitArgs)))];
+      case "addTree":
+        return [json(await this.macro((ctx) => macros.addTree(ctx, raw as unknown as macros.TreeArgs)))];
+      case "getStoryboard": {
+        const board = project.storyboard;
+        if (!board) return [text("No storyboard yet. set_storyboard writes one; guide('storyboard') has the format.")];
+        const words = wordsOnTimeline(project);
+        let cursor = 0;
+        const times = board.scenes.map((scene) => {
+          try {
+            const from = resolveAnchor(scene.from, words, cursor);
+            const to = resolveAnchor(scene.to, words, from + 0.01);
+            cursor = from;
+            return { id: scene.id, from: round(from), to: round(to), locked: Boolean(scene.locked) };
+          } catch (err) {
+            return { id: scene.id, error: err instanceof AnchorError ? err.message : String(err) };
+          }
+        });
+        return [json({ storyboard: board, times, compiledAt: board.compiledAt })];
+      }
+      case "setScene": {
+        const scene = raw.scene as import("./types").StoryScene;
+        const board = project.storyboard ?? { version: 1 as const, scenes: [], compiledAt: null };
+        const exists = board.scenes.some((s) => s.id === scene.id);
+        let scenes = exists ? board.scenes.map((s) => (s.id === scene.id ? scene : s)) : [...board.scenes];
+        if (!exists) {
+          const after = raw.after ? scenes.findIndex((s) => s.id === raw.after) : -1;
+          if (raw.after && after < 0) throw new ToolError(`No scene ${String(raw.after)} to put it after.`);
+          scenes = after >= 0 ? [...scenes.slice(0, after + 1), scene, ...scenes.slice(after + 1)] : [...scenes, scene];
+        }
+        const { change } = this.commit({ type: "setStoryboard", storyboard: { ...board, scenes } });
+        void change;
+        return [json({ ok: true, scene: scene.id, replaced: exists, scenes: scenes.length, next: `compile_storyboard({ only: ["${scene.id}"] })` })];
+      }
+      case "compileStoryboard":
+        return [json(await this.macro((ctx) => compileStoryboard(ctx, raw.only ? { only: raw.only as string[] } : {})))];
       case "addBackdrop":
         return [json(await this.macro((ctx) => macros.addBackdrop(ctx, raw as unknown as macros.BackdropArgs)))];
       case "previewThemes": {

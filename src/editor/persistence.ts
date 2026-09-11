@@ -137,6 +137,7 @@ function migrate(project: Project): Project {
     // Projects from before briefs and themes: an empty brief, no theme chosen.
     brief: { ...EMPTY_BRIEF, ...project.brief, brand: { ...EMPTY_BRIEF.brand, ...project.brief?.brand } },
     theme: project.theme ?? null,
+    storyboard: project.storyboard ?? null,
     assets: (project.assets ?? []).map((asset) => ({ ...asset, tags: asset.tags ?? [] })),
     tracks: (project.tracks ?? []).map((track) => ({
       ...track,

@@ -33,6 +33,7 @@ import {
   type Project,
   type ShapeStyle,
   type TextStyle,
+  type Storyboard,
   type Theme,
   type Track,
   type TrackKind,
@@ -144,6 +145,7 @@ export function createProject(name = "Untitled project"): Project {
     outPoint: null,
     brief: structuredClone(EMPTY_BRIEF),
     theme: null,
+    storyboard: null,
   };
 }
 
@@ -370,7 +372,8 @@ export type Action =
       /** One line for the decisions log. */
       decision?: string;
     }
-  | { type: "setTheme"; theme: Theme; restyle: boolean };
+  | { type: "setTheme"; theme: Theme; restyle: boolean }
+  | { type: "setStoryboard"; storyboard: Storyboard | null };
 
 /** Applies `fn` to every clip named in `refs`, wherever those clips live. */
 function mapClips(
@@ -856,6 +859,8 @@ export function reduce(project: Project, action: Action): Project {
         },
       });
     }
+    case "setStoryboard":
+      return touched({ ...project, storyboard: action.storyboard });
     case "setTheme": {
       const theme = action.theme;
       if (!action.restyle) return touched({ ...project, theme });

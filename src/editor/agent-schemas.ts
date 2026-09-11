@@ -133,7 +133,7 @@ export const textAnimation = z.enum(["none", "fade", "slideUp", "slideLeft", "ty
 
 export const clipRole = z.enum([
   "speaker", "kicker", "title", "subtitle", "body", "muted", "footer", "chip", "chip-positive", "chip-neutral",
-  "stat", "label", "label-accent", "number", "icon-positive", "icon-negative", "lower-third-name", "lower-third-role",
+  "stat", "label", "label-accent", "label-positive", "number", "icon-positive", "icon-negative", "lower-third-name", "lower-third-role",
   "card", "card-accent", "connector", "connector-accent", "arrow", "node", "node-accent", "node-positive", "bar",
   "bar-accent", "scrim", "lower-third-plate",
 ]);
@@ -283,6 +283,114 @@ export const themePatch = z
       .partial(),
   })
   .partial();
+
+/* -------------------------------------------------------------- storyboard */
+
+export const anchor = z
+  .union([
+    z.object({ time: z.number().min(0), offset: z.number().optional() }),
+    z.object({
+      word: z.string().min(1).max(80).describe("A phrase as it appears in the transcript — its first occurrence after the previous anchor"),
+      offset: z.number().optional().describe("Seconds added to the word's start; negative is earlier"),
+    }),
+  ])
+  .describe("{ time } on the timeline, or { word } — when that phrase is said");
+
+const common = {
+  id: z.string().min(1).max(60).describe("Stable: locks, notes and recompiles follow it"),
+  until: anchor.optional().describe("When it leaves; default the scene's end"),
+  y: z.number().min(0).optional().describe("Top edge, px at 1080p; default under what the scene already shows"),
+};
+const tone3 = z.enum(["accent", "positive", "neutral"]);
+
+export const storyComponent = z.discriminatedUnion("type", [
+  z.object({ ...common, type: z.literal("title"), at: anchor, kicker: z.string().max(60).optional(), title: z.string().min(1).max(160), subtitle: z.string().max(240).optional() }),
+  z.object({
+    ...common,
+    type: z.literal("points"),
+    items: z
+      .array(z.object({ at: anchor, text: z.string().min(1).max(200), icon: z.enum(["check", "cross", "dot", "number", "none"]).optional(), lead: z.string().max(30).optional() }))
+      .min(1)
+      .max(10),
+  }),
+  z.object({ ...common, type: z.literal("chips"), items: z.array(z.object({ at: anchor, text: z.string().min(1).max(40), tone: tone3.optional() })).min(1).max(12) }),
+  z.object({ ...common, type: z.literal("stat"), at: anchor, value: z.string().min(1).max(16), label: z.string().max(120).optional() }),
+  z.object({
+    ...common,
+    type: z.literal("statement"),
+    lines: z.array(z.object({ at: anchor, text: z.string().min(1).max(80), tone: z.enum(["text", "accent", "muted"]).optional() })).min(1).max(4),
+    size: z.enum(["hero", "stat", "title"]).optional(),
+  }),
+  z.object({
+    ...common,
+    type: z.literal("flow"),
+    steps: z.array(z.object({ at: anchor, text: z.string().min(1).max(80), style: z.enum(["box", "pill"]).optional() })).min(2).max(5),
+    highlight: z.enum(["last", "none"]).optional(),
+  }),
+  z.object({
+    ...common,
+    type: z.literal("cards"),
+    cards: z.array(z.object({ at: anchor, kicker: z.string().max(40).optional(), title: z.string().min(1).max(80), body: z.string().max(200).optional() })).min(1).max(4),
+    highlight: z.enum(["last", "first", "none"]).optional(),
+  }),
+  z.object({
+    ...common,
+    type: z.literal("split"),
+    source: z.object({ at: anchor, text: z.string().min(1).max(60) }),
+    branches: z.array(z.object({ at: anchor, title: z.string().min(1).max(60), body: z.string().max(200).optional() })).min(2).max(3),
+  }),
+  z.object({
+    ...common,
+    type: z.literal("bars"),
+    items: z.array(z.object({ at: anchor, label: z.string().min(1).max(30), value: z.number(), display: z.string().max(20).optional() })).min(2).max(12),
+    orientation: z.enum(["horizontal", "vertical"]).optional(),
+    scale: z.enum(["linear", "log"]).optional(),
+    highlight: z.enum(["last", "max", "none"]).optional(),
+    height: z.number().min(120).max(700).optional(),
+  }),
+  z.object({
+    ...common,
+    type: z.literal("tally"),
+    items: z.array(z.object({ at: anchor, label: z.string().min(1).max(30), count: z.number().int().min(0).max(999), value: z.string().max(30) })).min(1).max(6),
+  }),
+  z.object({
+    ...common,
+    type: z.literal("tree"),
+    nodes: z
+      .array(
+        z.object({
+          at: anchor,
+          id: z.string().min(1).max(30),
+          label: z.string().min(1).max(12),
+          parent: z.string().nullable().optional().describe("Omit for a root, or for a node that arrives unattached and moves later"),
+          tone: tone3.optional(),
+          note: z.string().max(40).optional().describe("A line under the node"),
+        }),
+      )
+      .min(1)
+      .max(15),
+    moves: z.array(z.object({ at: anchor, node: z.string(), parent: z.string() })).max(5).optional(),
+  }),
+  z.object({ ...common, type: z.literal("lower_third"), at: anchor, name: z.string().min(1).max(60), role: z.string().max(80).optional() }),
+]);
+
+export const storyScene = z.object({
+  id: z.string().min(1).max(60),
+  from: anchor,
+  to: anchor,
+  layout: z.enum(["panel", "full", "pip", "backdrop"]).describe("panel: speaker in a side panel; full: speaker full frame; pip: speaker in a corner; backdrop: full frame under a scrim, graphics over it"),
+  side: z.enum(["right", "left"]).optional(),
+  subjectX: z.number().min(0).max(1).optional(),
+  locked: z.boolean().optional(),
+  note: z.string().max(200).optional().describe("What the scene is for, in a line"),
+  components: z.array(storyComponent).max(8),
+});
+
+export const storyboard = z.object({
+  footer: z.string().max(80).optional().describe("A line at the foot of every scene that is not full frame"),
+  subjectX: z.number().min(0).max(1).optional().describe("Where the subject sits across the source, from analyze_media"),
+  scenes: z.array(storyScene).min(1).max(80),
+});
 
 export const assetPatch = z
   .object({

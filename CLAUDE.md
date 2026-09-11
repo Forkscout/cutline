@@ -539,6 +539,56 @@ Captions panel folds its Style section by default — open, it is taller than
 most panels and left the cue list no height, so generated captions looked
 missing.
 
+## Directing: brief, theme, macros, storyboard
+
+An agent directs through the same tab-relayed tools a person edits with, plus a
+layer that keeps a long edit consistent. The playbook it reads is
+`agent-guide.ts` (the `guide` tool, `cutline://guide/*`, and the `/direct`,
+`/brief` and `/review` prompts); `docs/DIRECTOR-PLAN.md` is the roadmap.
+
+**The brief and the theme are part of the project.** `project.brief` holds what
+the client settled — audience, platform, layout, brand, and decisions with
+their reasons — so the next agent does not ask again. `project.theme` is design
+tokens: palette, faces, type scale, shape, motion, layout. Six built-in looks
+live in `themes.ts`. Every clip a macro makes carries a `role` (title, body,
+accent, card…), and `set_theme` with restyle re-derives each role's style, so
+the look changes in one call; clips without a role are left as they are. An
+accent taken from a logo is kept at 3:1 against the background.
+
+**Macros are the vocabulary.** `agent-macros.ts` — a title, points, a flow,
+bars, a tree — takes its graphics zone from the speaker's *settled* layout,
+measures text in the theme's faces on a canvas, stacks below the lowest thing
+already on screen, and picks free tracks. The zone was once taken mid-move, and
+a title wrapped across the whole frame.
+
+**The storyboard is the whole edit as one document.** Scenes in order, each
+with a layout and components anchored to transcript words; `storyboard.ts`
+compiles it into clips through the macros. A word anchor is the first time a
+phrase is said after the previous anchor, allowing one letter off or a word
+prefix, because transcripts misspell. A compile replaces only its own clips:
+each is tagged with its scene and component, a clip the user edits by hand is
+marked `userEdited` and kept, and deleting a compiled clip locks its scene —
+the dispatch wrapper in `editor.tsx` does both. The speaker's layout moves are
+rebuilt from the whole storyboard every time, so a partial compile cannot leave
+them inconsistent. The acceptance test was the TreeFlux edit: about 1,300
+hand-placed calls, and the same edit as 24 scenes of JSON compiles to 294 clips
+in two seconds.
+
+**Web fonts reach the export.** Theme faces come from Google Fonts
+(`lib/fonts.ts`), are registered with `document.fonts` for the preview and for
+`render_frame`, and are passed as files to the export worker, which registers
+them on `self.fonts` before the first frame. A worker does not see the page's
+fonts; without this the export silently falls back to a system face.
+
+**`ask_client` is a form in the editor, not MCP elicitation.** The server is
+stateless and has no session to elicit through. A call waits 90 s and then
+answers "waiting"; calling again rejoins the same form.
+
+**`analyze_media` compares small grey frames with each shot's median** to find
+burned-in overlays and where the subject sits. Motion inside the subject's own
+region counts as an overlay only when it lasts 3 s or more — otherwise hands
+read as graphics.
+
 ## How the editor fits together
 
 ```

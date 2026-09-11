@@ -35,6 +35,7 @@ import { parseSubtitles, toSrt } from "./editor/captions";
 import { captionsForAsset, captionsFromWords, dropLoops, wordsFromVerboseJson, wordsOnTimeline } from "./editor/transcript";
 import { createProject as newProject, mediaClip as newMediaClip, reduce, shapeClip } from "./editor/project";
 import { brandOverrides, contrast, mergeTheme, paletteOf, themeById } from "./editor/themes";
+import { AnchorError, findPhrase, resolveAnchor } from "./editor/storyboard";
 import { exportProject } from "./editor/export";
 import type { ClipRef, MediaAsset, Project } from "./editor/types";
 
@@ -476,6 +477,26 @@ async function run() {
     check("and on a light one", onLight.contrast >= 3, `${onLight.accent} at ${onLight.contrast}:1`);
     const grey = brandOverrides(paletteOf([128, 128, 128, 255, 200, 200, 200, 255]), themeById("studio-dark"));
     check("a neutral picture leaves the theme's accent alone", Object.keys(grey.overrides).length === 0, grey.notes.join(" "));
+  }
+
+  /* --- storyboard anchors ------------------------------------------ */
+  log("\nstoryboard anchors", "dim");
+  {
+    const said = ["Treeflux", "एक", "referral", "protocol", "है,", "placement", "tree", "दो", "सीट", "की", "होती", "है", "दूसरी", "सीट", "भर", "गई."]
+      .map((text, i) => ({ text, start: 10 + i, end: 10 + i + 0.8, clipId: "c", trackId: "t" }));
+    check("a phrase is found through punctuation and case", findPhrase(said, "referral Protocol", 0)?.start === 12);
+    check("a transcript's misspelling still matches", findPhrase(said, "treflux", 0)?.start === 10);
+    check("a Hindi phrase matches", findPhrase(said, "दो सीट", 0)?.start === 17);
+    check("the next occurrence after the previous anchor is the one used",
+      resolveAnchor({ word: "सीट" }, said, 19) === 23 && resolveAnchor({ word: "सीट" }, said, 0) === 18);
+    check("an offset shifts it", resolveAnchor({ word: "placement", offset: -0.3 }, said, 0) === 14.7);
+    let missing = "";
+    try {
+      resolveAnchor({ word: "spillover" }, said, 0);
+    } catch (err) {
+      missing = err instanceof AnchorError ? err.message : "";
+    }
+    check("a phrase never said is an error with suggestions", missing.includes("not said") && missing.includes("Closest"), missing.slice(0, 90));
   }
 
   /* --- record a real take ------------------------------------------ */

@@ -310,6 +310,14 @@ export interface Clip {
    * agent's macros; a theme change restyles every clip that has one.
    */
   role?: ClipRole;
+  /** The storyboard scene and component this clip was compiled from. */
+  scene?: string;
+  component?: string;
+  /**
+   * The user changed this clip by hand. A compile leaves it where it is: the
+   * agent never undoes the user's work.
+   */
+  userEdited?: boolean;
 
   /**
    * Clips captured in one take share a link id and are edited as a unit —
@@ -420,6 +428,67 @@ export interface Project {
   brief: Brief;
   /** The design tokens graphics are made from; null until one is chosen. */
   theme: Theme | null;
+  /** What the video shows, scene by scene; compiled into clips. */
+  storyboard: Storyboard | null;
+}
+
+/* ------------------------------------------------------------- storyboard */
+
+/** A moment: a time on the timeline, or the first time a phrase is said after the one before it. */
+export type Anchor = { time: number; offset?: number } | { word: string; offset?: number };
+
+type Item<T> = T & { at: Anchor };
+
+export type StoryComponent = { id: string; until?: Anchor; y?: number } & (
+  | { type: "title"; at: Anchor; kicker?: string; title: string; subtitle?: string }
+  | { type: "points"; items: Item<{ text: string; icon?: "check" | "cross" | "dot" | "number" | "none"; lead?: string }>[] }
+  | { type: "chips"; items: Item<{ text: string; tone?: "accent" | "positive" | "neutral" }>[] }
+  | { type: "stat"; at: Anchor; value: string; label?: string }
+  | { type: "statement"; lines: Item<{ text: string; tone?: "text" | "accent" | "muted" }>[]; size?: "hero" | "stat" | "title" }
+  | { type: "flow"; steps: Item<{ text: string; style?: "box" | "pill" }>[]; highlight?: "last" | "none" }
+  | { type: "cards"; cards: Item<{ kicker?: string; title: string; body?: string }>[]; highlight?: "last" | "first" | "none" }
+  | { type: "split"; source: Item<{ text: string }>; branches: Item<{ title: string; body?: string }>[] }
+  | {
+      type: "bars";
+      items: Item<{ label: string; value: number; display?: string }>[];
+      orientation?: "horizontal" | "vertical";
+      scale?: "linear" | "log";
+      highlight?: "last" | "max" | "none";
+      height?: number;
+    }
+  | { type: "tally"; items: Item<{ label: string; count: number; value: string }>[] }
+  | {
+      type: "tree";
+      nodes: Item<{ id: string; label: string; parent?: string | null; tone?: "accent" | "positive" | "neutral"; note?: string }>[];
+      moves?: Item<{ node: string; parent: string }>[];
+    }
+  | { type: "lower_third"; at: Anchor; name: string; role?: string }
+);
+
+export type SceneLayout = "panel" | "full" | "pip" | "backdrop";
+
+export interface StoryScene {
+  id: string;
+  from: Anchor;
+  to: Anchor;
+  layout: SceneLayout;
+  side?: "right" | "left";
+  subjectX?: number;
+  /** A locked scene keeps its clips through every compile. */
+  locked?: boolean;
+  /** What the scene is for, in a line: shown on its storyboard card. */
+  note?: string;
+  components: StoryComponent[];
+}
+
+export interface Storyboard {
+  version: 1;
+  /** A line shown at the foot of every panel scene. */
+  footer?: string;
+  /** Where the subject sits across the source (analyze_media); a scene may override it. */
+  subjectX?: number;
+  scenes: StoryScene[];
+  compiledAt: number | null;
 }
 
 /* -------------------------------------------------------------- direction */
@@ -542,6 +611,7 @@ export type ClipRole =
   | "stat"
   | "label"
   | "label-accent"
+  | "label-positive"
   | "number"
   | "icon-positive"
   | "icon-negative"
