@@ -24,7 +24,18 @@ import { THEMES } from "../src/editor/themes";
 import type { TabBridge } from "./bridge";
 import type { DiskMediaStore } from "./media";
 import type { WorkspaceStore } from "./workspace";
+import type { AgentSettings } from "./agents";
 import { sameSecret } from "./security";
+
+/** A new token, written where the old one was: every agent registered with it stops working. */
+export async function rotateMcpToken(home: string): Promise<string> {
+  const token = randomBytes(32).toString("hex");
+  await mkdir(home, { recursive: true });
+  const file = path.join(home, "mcp-token");
+  await writeFile(file, `${token}\n`, { mode: 0o600 });
+  await chmod(file, 0o600);
+  return token;
+}
 
 /** Reads the MCP token, creating it (owner-only) on first run. */
 export async function loadMcpToken(home: string): Promise<string> {
@@ -43,7 +54,7 @@ export async function loadMcpToken(home: string): Promise<string> {
   return token;
 }
 
-function buildServer(bridge: TabBridge, media: DiskMediaStore, workspace: WorkspaceStore): McpServer {
+function buildServer(bridge: TabBridge, media: DiskMediaStore, workspace: WorkspaceStore, agents: AgentSettings): McpServer {
   const server = new McpServer({ name: "cutline", version: "0.1.0" }, { instructions: SERVER_INSTRUCTIONS });
 
   const relay = (spec: ToolSpec) =>
@@ -57,6 +68,15 @@ function buildServer(bridge: TabBridge, media: DiskMediaStore, workspace: Worksp
       },
       async (args) => {
         try {
+          // What an agent may do is the user's to decide, and it is decided here,
+          // before the call reaches the tab.
+          const permissions = await agents.permissions();
+          if (spec.name === "export_video" && !permissions.mayExport) {
+            throw new Error("Exporting is turned off for agents in Settings › Agents. Ask the user to export, or to turn it on.");
+          }
+          if (spec.name === "import_recording" && !permissions.mayImport) {
+            throw new Error("Importing files is turned off for agents in Settings › Agents.");
+          }
           return { content: await bridge.call(spec.name, args) };
         } catch (err) {
           return { content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }], isError: true };
@@ -167,11 +187,16 @@ function buildServer(bridge: TabBridge, media: DiskMediaStore, workspace: Worksp
   return server;
 }
 
+/** Client names by user agent: an initialize says who it is, the calls after it do not. */
+const KNOWN = new Map<string, { name?: string; version?: string }>();
+
 export function mcpHandler(options: {
   bridge: TabBridge;
   media: DiskMediaStore;
   workspace: WorkspaceStore;
-  token: string;
+  agents: AgentSettings;
+  /** Read at each request: the user can rotate it without a restart. */
+  token: () => string;
   allowedOrigins: string[];
 }) {
   const origins = new Set(options.allowedOrigins);
@@ -183,11 +208,31 @@ export function mcpHandler(options: {
 
     const auth = c.req.header("authorization") ?? "";
     const given = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-    if (!sameSecret(given, options.token)) {
+    if (!sameSecret(given, options.token())) {
       return c.json({ error: "Missing or wrong bearer token — see ~/Cutline/mcp-token" }, 401);
     }
 
-    const server = buildServer(options.bridge, options.media, options.workspace);
+    // Who is calling, from the message itself: the body is read here and handed
+    // on, because a stateless server has no session to hang a name on.
+    let request = c.req.raw;
+    if (request.method === "POST") {
+      const body = await request.text();
+      const agent = c.req.header("user-agent") ?? "";
+      try {
+        const message = JSON.parse(body) as { method?: string; params?: { clientInfo?: { name?: string; version?: string }; name?: string } };
+        if (message.method === "initialize" && message.params?.clientInfo) {
+          KNOWN.set(agent, message.params.clientInfo);
+          options.agents.record(message.params.clientInfo);
+        } else if (message.method === "tools/call") {
+          options.agents.record(KNOWN.get(agent) ?? null, message.params?.name);
+        }
+      } catch {
+        // Not a message we can read; it will fail on its own below.
+      }
+      request = new Request(request.url, { method: request.method, headers: request.headers, body });
+    }
+
+    const server = buildServer(options.bridge, options.media, options.workspace, options.agents);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       // One JSON body per request: nothing here streams, and a plain response
@@ -196,7 +241,7 @@ export function mcpHandler(options: {
     });
     await server.connect(transport);
     try {
-      return await transport.handleRequest(c.req.raw);
+      return await transport.handleRequest(request);
     } finally {
       // JSON mode has the whole answer in the Response already.
       void transport.close();

@@ -33,6 +33,7 @@ import { listVersions, loadVersion, saveVersion } from "./persistence";
 import { RECIPES, recipeById } from "./recipes";
 import { applyBrandKit, applyRecipe, attachReference, type ApplyContext } from "./workspace-apply";
 import { getItem, listItems } from "@/lib/workspace";
+import { getAgents, type AgentPermissions } from "@/lib/agents";
 import { clipAt, readProperty } from "./keyframes";
 import { THEMES, brandOverrides, fontsInUse, mergeTheme, paletteOf, themeById, themeOf } from "./themes";
 import { themeSheet } from "./styleframes";
@@ -440,6 +441,24 @@ function underPin(project: Project, marker: Marker) {
   }));
 }
 
+/**
+ * What agents may do, as the user set it. The server refuses an export or an
+ * import it may not make; whether a clip was the agent's to delete is a
+ * question only the tab can answer, so it is answered here. Read again every
+ * half minute: a change in Settings should take effect without a reload.
+ */
+let permissions: AgentPermissions = { mayExport: true, mayImport: true, mayDeleteOthersClips: true };
+let permissionsAt = 0;
+
+async function currentPermissions(): Promise<AgentPermissions> {
+  if (Date.now() - permissionsAt < 30_000) return permissions;
+  permissionsAt = Date.now();
+  permissions = await getAgents()
+    .then((view) => view.permissions)
+    .catch(() => permissions);
+  return permissions;
+}
+
 export class AgentBridge {
   private ws: WebSocket | null = null;
   private stopped = false;
@@ -583,6 +602,17 @@ export class AgentBridge {
     // call already in flight when the hold moved.
     if ((entry.kind === "action" || entry.key === "undo") && !this.lock.holder) {
       throw new ToolError("This editor is read-only: the project is open in another editor that is saving it.");
+    }
+    if ((entry.key === "deleteClip" || entry.key === "rippleDelete") && !(await currentPermissions()).mayDeleteOthersClips) {
+      // Nothing records which agent made a clip, but a clip an agent made
+      // carries its scene, its component or its role. The rest are the user's.
+      const ref = (args as { ref?: ClipRef }).ref;
+      const clip = ref ? findClip(this.host.history().present, ref) : undefined;
+      if (clip && !clip.scene && !clip.component && !clip.role) {
+        throw new ToolError(
+          "This clip was not made by an agent, and deleting the user's own clips is turned off in Settings › Agents. Ask them to delete it, or to turn it on.",
+        );
+      }
     }
     return entry.kind === "action"
       ? this.runAction(entry.key as Action["type"], args)

@@ -98,6 +98,19 @@ export class TabBridge {
   /** Calls waiting for the editors to settle. */
   private waiting = new Set<() => void>();
 
+  /** The editors connected now: which project each has open, and which one saves it. */
+  editors(): { projectId: string; name: string; holder: boolean; connectedAt: number; seenAt: number }[] {
+    return [...this.tabs.entries()]
+      .map(([key, tab]) => ({
+        projectId: tab.projectId,
+        name: tab.name,
+        holder: this.holders.get(tab.projectId)?.key === key,
+        connectedAt: tab.connectedAt,
+        seenAt: tab.seenAt,
+      }))
+      .sort((a, b) => b.seenAt - a.seenAt);
+  }
+
   message(ws: WSContext, data: string): void {
     const key = ws.raw as object;
     let message: FromTab;

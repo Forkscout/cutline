@@ -620,6 +620,20 @@ Captions panel folds its Style section by default — open, it is taller than
 most panels and left the cue list no height, so generated captions looked
 missing.
 
+**Settings is a place to manage, not a gate.** Services are still connected
+where a feature first needs them; Settings lists them, says which one captions
+and the Director use, and can switch or re-probe one. Agents shows the
+registration line with the token's last four characters (never the token), can
+rotate it — every agent registered with the old one then stops, which is the
+point — and lists who has called since the server started, with the editors
+their edits land in. Permissions live in `~/Cutline/agents.json`
+(`server/agents.ts`) and are enforced where the call arrives: the MCP relay
+refuses an export or an import that is turned off, and the tab refuses to
+delete a clip with no scene, component or role on it, because whose clip it is
+is a question only the tab can answer. Usage reads `~/Cutline/usage.jsonl`,
+which model and transcription calls append to: tokens and minutes by day, model
+and project — not money, which is the provider's to say.
+
 ## How the editor fits together
 
 ```

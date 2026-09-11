@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Circle, Clapperboard, Moon, Square, Sun } from "lucide-react";
+import { Circle, Clapperboard, Moon, Settings2, Square, Sun } from "lucide-react";
 import type { RecorderPhase } from "@/recorder/types";
 import { checkSupport, missingRequirements } from "@/recorder/mime";
 import { useTheme } from "@/hooks/use-theme";
@@ -24,6 +24,7 @@ const Projects = lazy(() =>
 );
 const Create = lazy(() => import("@/components/create").then((m) => ({ default: m.Create })));
 const WorkspaceStudio = lazy(() => import("@/components/workspace-studio").then((m) => ({ default: m.WorkspaceStudio })));
+const Settings = lazy(() => import("@/components/settings").then((m) => ({ default: m.Settings })));
 const EditorErrorBoundary = lazy(() =>
   import("@/components/editor/error-boundary").then((m) => ({ default: m.EditorErrorBoundary })),
 );
@@ -167,6 +168,16 @@ export function App() {
 
         <div className="ml-auto flex items-center gap-3">
           <button
+            onClick={() => setTab("settings")}
+            title="Settings: services, agents, usage"
+            className={cn(
+              "grid size-9 place-items-center rounded-full border bg-card text-muted-foreground transition-colors hover:text-foreground",
+              tab === "settings" && "text-foreground",
+            )}
+          >
+            <Settings2 className="size-4" />
+          </button>
+          <button
             onClick={toggle}
             title={theme === "dark" ? "Switch to light" : "Switch to dark"}
             className="grid size-9 place-items-center rounded-full border bg-card text-muted-foreground transition-colors hover:text-foreground"
@@ -233,6 +244,11 @@ export function App() {
         <TabsContent value="edit" className="mt-6">
           <Suspense fallback={<Loading label="Loading projects…" />}>
             <Projects onOpen={setEditing} />
+          </Suspense>
+        </TabsContent>
+        <TabsContent value="settings" className="mt-2">
+          <Suspense fallback={<Loading label="Loading settings…" />}>
+            <Settings />
           </Suspense>
         </TabsContent>
         <TabsContent value="studio" className="mt-2">

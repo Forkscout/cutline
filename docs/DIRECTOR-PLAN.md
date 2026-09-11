@@ -27,7 +27,7 @@ Status as of 12 Sep 2026. ✅ done · 🟡 in progress · ⬜ next.
 | Self-QA (`lint_scene`) and facts to confirm | ✅ | `editor/lint.ts`, `editor/facts.ts`, `checks-panel.tsx` |
 | Styleframes, note pins, versions, locks | ✅ | `styleframe-compare.tsx`, `monitor-overlay.tsx`, `versions-menu.tsx`, `server/store.ts` |
 | Workspace Studio: brand kits, looks, recipes, references | ✅ | `server/workspace.ts`, `workspace-studio.tsx`, `editor/workspace-apply.ts` |
-| Create flow, Settings (AI services, agents, usage) | 🟡 | Create done (`components/create.tsx`); Settings next |
+| Create flow, Settings (AI services, agents, usage) | ✅ | `components/create.tsx`, `components/settings.tsx`, `server/agents.ts` |
 
 ## 2. The rule: workspace or project
 
@@ -232,7 +232,8 @@ calls. Export runs in the user's browser, so there is no render bill.
 5. ✅ Styleframe compare, note pins, versions, locks.
 6. ✅ Studio (brand kits, looks, references), the import flows of §5, Create
    with recipes.
-7. Settings (AI services, agents, usage) and Pro credits.
+7. ✅ Settings (AI services, agents, usage). Pro credits need a hosted
+   backend and a payment provider, which the non-goals rule out: not built.
 8. Distribution: a published image on GHCR, then a single binary per OS.
 
 ## 9. How to know it works

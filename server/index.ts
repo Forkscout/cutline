@@ -32,7 +32,8 @@ import { probeAll, recordUsage, runChat } from "./chat";
 import type { ChatRequest } from "../src/lib/chat-protocol";
 import { PROVIDER_KINDS } from "./stt";
 import { Jobs, transcribeFile } from "./transcribe";
-import { loadMcpToken, mcpHandler } from "./mcp";
+import { loadMcpToken, mcpHandler, rotateMcpToken } from "./mcp";
+import { AgentSettings } from "./agents";
 import { DiskMediaStore, TruncatedUpload, fileResponse } from "./media";
 import { BadFileName, WorkspaceStore, isWorkspaceKind } from "./workspace";
 import { BadId, DiskProjectStore, assertSafeId, cutlineHome } from "./store";
@@ -63,7 +64,8 @@ const cursor = new CursorService();
 const remuxer = new Remuxer();
 const ai = new AiSettings(cutlineHome());
 const jobs = new Jobs();
-const MCP_TOKEN = await loadMcpToken(cutlineHome());
+let mcpToken = await loadMcpToken(cutlineHome());
+const agents = new AgentSettings(cutlineHome());
 
 const ports = [...new Set([PORT, WEB_PORT, PUBLIC_PORT])];
 const hosts = localhostPairs(...ports);
@@ -172,6 +174,38 @@ api.post("/projects/:id/versions", async (c) => {
   const parsed = JSON.parse(body) as { label?: string; version?: number; project?: { id?: string } };
   if (parsed.project?.id !== id) return c.json({ error: "Project id does not match the URL" }, 400);
   return c.json(await projects.putVersion(id, parsed.label ?? "", JSON.stringify({ version: parsed.version, project: parsed.project })));
+});
+
+/* --- agents: what they may do, who has connected, and what it all cost --- */
+
+const shownAgentHome = () => process.env.CUTLINE_HOME_DISPLAY ?? cutlineHome();
+const registrationLine = (url: string) =>
+  `claude mcp add --transport http cutline ${new URL(url).origin}/mcp --header "Authorization: Bearer $(cat ${path.join(shownAgentHome(), "mcp-token")})"`;
+
+api.get("/agents", async (c) => {
+  const seen = agents.clients();
+  return c.json({
+    registration: registrationLine(c.req.url),
+    tokenFile: path.join(shownAgentHome(), "mcp-token"),
+    tokenTail: mcpToken.slice(-4),
+    permissions: await agents.permissions(),
+    clients: seen.clients,
+    since: seen.since,
+    editors: bridge.editors(),
+  });
+});
+
+api.post("/agents/permissions", async (c) => c.json(await agents.setPermissions(await c.req.json())));
+
+/** A new token. Every agent registered with the old one stops working, which is the point. */
+api.post("/agents/token", async (c) => {
+  mcpToken = await rotateMcpToken(cutlineHome());
+  return c.json({ registration: registrationLine(c.req.url), tokenTail: mcpToken.slice(-4) });
+});
+
+api.get("/agents/usage", async (c) => {
+  const days = Number(c.req.query("days") ?? 30);
+  return c.json(await agents.usage(Number.isFinite(days) ? Math.min(365, Math.max(1, days)) : 30));
 });
 
 /* --- the workspace: brand kits, looks, recipes, references --- */
@@ -421,6 +455,7 @@ api.post("/ai/chat", async (c) => {
       const result = await runChat(provider, body, controller.signal);
       await recordUsage(USAGE_FILE, {
         at: Date.now(),
+        kind: "chat",
         providerId: provider.id,
         provider: provider.name,
         model: result.model,
@@ -481,14 +516,27 @@ api.post("/transcribe", async (c) => {
   if (body.language !== undefined && !/^[a-z]{2,3}$/.test(body.language)) {
     return c.json({ error: "language must be an ISO 639 code, like hi or en" }, 400);
   }
-  const jobId = jobs.start((progress) =>
-    transcribeFile(source, cache, provider, {
+  const jobId = jobs.start(async (progress) => {
+    const started = Date.now();
+    const transcript = await transcribeFile(source, cache, provider, {
       ...(body.language ? { language: body.language } : {}),
       ...(body.chunkSeconds ? { chunkSeconds: body.chunkSeconds } : {}),
       force: Boolean(body.force),
       onProgress: progress,
-    }),
-  );
+    });
+    // Only what was actually transcribed: a cached transcript costs nothing.
+    if (transcript.createdAt >= started) {
+      await recordUsage(USAGE_FILE, {
+        at: Date.now(),
+        kind: "transcribe",
+        providerId: provider!.id,
+        provider: provider!.name,
+        model: provider!.transcribeModel,
+        seconds: Math.round(transcript.durationSec),
+      }).catch(() => {});
+    }
+    return transcript;
+  });
   return c.json({ jobId });
 });
 
@@ -531,7 +579,7 @@ const app = new Hono();
 // would read the token straight out of it.
 app.use("*", hostGuard(hosts));
 app.route("/api", api);
-app.all("/mcp", mcpHandler({ bridge, media, workspace, token: MCP_TOKEN, allowedOrigins: origins }));
+app.all("/mcp", mcpHandler({ bridge, media, workspace, agents, token: () => mcpToken, allowedOrigins: origins }));
 
 if (existsSync(path.join(DIST, "index.html"))) {
   app.use("/assets/*", serveStatic({ root: path.relative(process.cwd(), DIST) }));

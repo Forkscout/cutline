@@ -65,6 +65,10 @@ export function saveProvider(
   });
 }
 
+/** Asks the service again what it can do, without changing anything. */
+export const probeProvider = (id: string) =>
+  apiJson<ProviderReport>(`/api/ai/providers/${encodeURIComponent(id)}/probe`, { method: "POST" });
+
 export async function removeProvider(id: string): Promise<void> {
   await apiJson(`/api/ai/providers/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
