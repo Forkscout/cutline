@@ -110,6 +110,22 @@ function ContextMenuContent({
   )
 }
 
+/**
+ * Hand-edited: Radix runs the item under the pointer on *any* pointerup, and
+ * Chrome on macOS opens a context menu on mousedown. When the menu has to shift
+ * to fit — a clip on the bottom track — it opens under the pointer, and letting
+ * go of the right button ran whatever was there: Duplicate, Delete. Only a
+ * primary-button release selects. Keep this if the file is regenerated.
+ */
+function primaryReleaseOnly(
+  onPointerUp?: React.PointerEventHandler<HTMLDivElement>
+): React.PointerEventHandler<HTMLDivElement> {
+  return (event) => {
+    onPointerUp?.(event)
+    if (event.button !== 0) event.preventDefault()
+  }
+}
+
 function ContextMenuItem({
   className,
   inset,
@@ -129,6 +145,7 @@ function ContextMenuItem({
         className
       )}
       {...props}
+      onPointerUp={primaryReleaseOnly(props.onPointerUp)}
     />
   )
 }
@@ -148,6 +165,7 @@ function ContextMenuCheckboxItem({
       )}
       checked={checked}
       {...props}
+      onPointerUp={primaryReleaseOnly(props.onPointerUp)}
     >
       <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
         <ContextMenuPrimitive.ItemIndicator>
@@ -172,6 +190,7 @@ function ContextMenuRadioItem({
         className
       )}
       {...props}
+      onPointerUp={primaryReleaseOnly(props.onPointerUp)}
     >
       <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
         <ContextMenuPrimitive.ItemIndicator>

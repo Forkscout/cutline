@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { AgentBridge } from "@/editor/agent-bridge";
+import { runAutoCaptions, type AutoCaptionOptions } from "@/components/editor/auto-captions";
 import { AssetUrls } from "@/editor/media";
 import {
   apply,
@@ -151,6 +152,21 @@ export function Editor({
       update((prev) => apply(prev, action, coalesce));
     },
     [update],
+  );
+
+  // One way to caption an asset, whichever surface asked: a clip's menu, the
+  // media pool, or the Captions panel. It reads the live project when the
+  // transcript arrives, and opens the panel when there is nothing to transcribe with.
+  const autoCaption = useCallback(
+    (assetId: string, options?: AutoCaptionOptions) =>
+      runAutoCaptions({
+        assetId,
+        getProject: () => historyRef.current.present,
+        dispatch,
+        onNeedsSetup: () => setLeftTab("captions"),
+        ...(options ? { options } : {}),
+      }),
+    [dispatch],
   );
 
   /* ---------------------------------------------------------------- agent */
@@ -686,6 +702,7 @@ export function Editor({
                     selectedAssetId={selectedAsset}
                     onSelectAsset={setSelectedAsset}
                     onInsert={(asset) => insertAsset(asset.id)}
+                    onAutoCaption={(id, options) => void autoCaption(id, options)}
                   />
                 </TabsContent>
                 <TabsContent value="captions" className="mt-2 min-h-0 flex-1">
@@ -694,6 +711,7 @@ export function Editor({
                     time={time}
                     dispatch={dispatch}
                     onSeek={(t) => engineRef.current?.seek(t)}
+                    onAutoCaption={autoCaption}
                   />
                 </TabsContent>
               </Tabs>
@@ -784,6 +802,7 @@ export function Editor({
             onSeek={(t) => engineRef.current?.seek(t)}
             dispatch={dispatch}
             onDropAsset={(assetId, trackId, start) => insertAsset(assetId, trackId, start)}
+            onAutoCaption={(id, options) => void autoCaption(id, options)}
           />
         </ResizablePanel>
       </ResizablePanelGroup>

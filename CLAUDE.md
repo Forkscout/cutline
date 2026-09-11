@@ -37,7 +37,7 @@ listed at the bottom of this file.
 | Captions: manual, SRT/VTT in and out, burn-in | done |
 | Scopes: histogram, waveform, parade, vectorscope | done |
 | Export: MP4/WebM, presets, bitrate, in/out range | done |
-| Auto-captions (Whisper) | not started |
+| Auto-captions (any OpenAI-compatible speech-to-text) | done |
 
 ## Decisions already made
 
@@ -123,6 +123,13 @@ Overriding a shadcn variant with a `className` does not reliably work — Radix'
 `Slot` concatenates the two class strings rather than running them through
 `tailwind-merge`, so which one wins is down to stylesheet order. Pass the
 component's own `variant` prop instead. `AlertDialogAction` accepts one.
+
+`context-menu.tsx` is hand-edited, and must stay so after a regenerate: its
+items select only on a primary-button release. Radix runs the item under the
+pointer on *any* pointerup, and Chrome on macOS opens a context menu on
+mousedown — so a right-click on a clip on the bottom track, where the menu has
+to shift up to fit and opens under the pointer, ran Duplicate or Delete the
+moment the button came up.
 
 The app is dark-only: `<html class="dark">` is fixed in `index.html`, and
 `sonner.tsx` was edited to drop its `next-themes` dependency.
@@ -363,6 +370,15 @@ space continues the word before it. The transcript is stored on the asset;
 `wordsOnTimeline` maps it through the clips, so a trim never invalidates it,
 and `captionsFromWords` breaks lines at pauses and sentence ends, lets a line
 run a little long to finish its sentence, and otherwise breaks at a comma.
+
+**One runner behind three doors.** A clip's right-click, a media-pool item's
+and the Captions panel all call `runAutoCaptions` in
+`components/editor/auto-captions.ts`. It builds the captions from the project
+as it is when the transcript *arrives* — read through `historyRef`, not the
+render that started it — so a caption edited during a minute of transcription
+survives, and it replaces only cues that overlap this asset's clips, so a
+second speaker's captions are kept. Transcript, captions and switching them on
+are one undo step.
 
 ## How the editor fits together
 

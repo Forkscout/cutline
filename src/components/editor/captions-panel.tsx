@@ -3,9 +3,9 @@ import { Download, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { parseSubtitles, toSrt, toVtt } from "@/editor/captions";
 import type { Action } from "@/editor/project";
-import { captionsFromWords, wordsOnTimeline } from "@/editor/transcript";
 import type { MediaAsset, Project } from "@/editor/types";
-import { capabilities, saveProvider, transcribe, type Capabilities, type ProviderReport } from "@/lib/ai";
+import { capabilities, saveProvider, type Capabilities, type ProviderReport } from "@/lib/ai";
+import type { AutoCaptionOptions } from "@/components/editor/auto-captions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -105,10 +105,10 @@ function ConnectTranscription({ onConnected }: { onConnected: () => void }) {
 
 function AutoCaptions({
   project,
-  dispatch,
+  onAutoCaption,
 }: {
   project: Project;
-  dispatch: (action: Action, coalesce?: boolean) => void;
+  onAutoCaption: (assetId: string, options?: AutoCaptionOptions) => Promise<boolean>;
 }) {
   const [caps, setCaps] = useState<Capabilities | null>(null);
   const [editing, setEditing] = useState(false);
@@ -135,33 +135,9 @@ function AutoCaptions({
   const source = sources.find((a) => a.id === sourceId) ?? sources[0];
 
   const generate = async (asset: MediaAsset, force: boolean) => {
-    setBusy("Starting…");
+    setBusy("Transcribing…");
     try {
-      const target =
-        asset.origin.type === "recording"
-          ? { sessionId: asset.origin.sessionId, fileName: asset.origin.fileName }
-          : { mediaId: asset.id };
-      const transcript = await transcribe(
-        target,
-        { ...(language !== "auto" ? { language } : {}), force },
-        (fraction, note) => setBusy(`${note} · ${Math.round(fraction * 100)}%`),
-      );
-      // Only this asset's words, placed through its clips on the timeline.
-      const clipIds = new Set(project.tracks.flatMap((t) => t.clips.filter((c) => c.assetId === asset.id).map((c) => c.id)));
-      const withTranscript: Project = {
-        ...project,
-        assets: project.assets.map((a) => (a.id === asset.id ? { ...a, transcript } : a)),
-      };
-      const words = wordsOnTimeline(withTranscript).filter((w) => clipIds.has(w.clipId));
-      const cues = captionsFromWords(words).map((cue) => ({ id: crypto.randomUUID(), ...cue }));
-      dispatch({ type: "patchAsset", assetId: asset.id, patch: { transcript } });
-      // Coalesced: the transcript and the captions are one undo step.
-      dispatch({ type: "setCaptions", cues }, true);
-      toast.success(`${cues.length} captions from ${transcript.words.length} words`, {
-        description: transcript.timing === "segment" ? "The service gave sentence times only, so word timing is estimated." : undefined,
-      });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Transcription failed.");
+      await onAutoCaption(asset.id, { force, ...(language !== "auto" ? { language } : {}) });
     } finally {
       setBusy(null);
     }
@@ -221,11 +197,13 @@ export function CaptionsPanel({
   time,
   dispatch,
   onSeek,
+  onAutoCaption,
 }: {
   project: Project;
   time: number;
   dispatch: (action: Action, coalesce?: boolean) => void;
   onSeek: (time: number) => void;
+  onAutoCaption: (assetId: string, options?: AutoCaptionOptions) => Promise<boolean>;
 }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const style = project.captionStyle;
@@ -276,7 +254,7 @@ export function CaptionsPanel({
         <Label className="mb-1.5 flex items-center gap-1 text-[11px] font-medium">
           <Sparkles className="size-3" /> Auto-captions
         </Label>
-        <AutoCaptions project={project} dispatch={dispatch} />
+        <AutoCaptions project={project} onAutoCaption={onAutoCaption} />
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-2">

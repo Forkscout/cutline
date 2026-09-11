@@ -134,7 +134,8 @@ Almost everything else is a view over this.
 - [x] **Auto-captions** — through the connected provider; ten-minute parts cut
   by copying packets, cached beside the file. `bun scripts/transcribe-check.ts`
   speaks a known script and checks the words (8% WER on whisper.cpp medium),
-  their times, the parts' offsets and the cache
+  their times, the parts' offsets and the cache. Offered on the right-click of
+  any clip or media item with sound, as well as in the Captions panel
   **Problem** — Captions are effectively mandatory now and writing them by hand
   is the slowest part of publishing.
   **Approach** — Whisper (`whisper-base` for speed, `large-v3-turbo` where

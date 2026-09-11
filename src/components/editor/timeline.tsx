@@ -19,8 +19,10 @@ import {
   Video,
   Volume2,
   VolumeX,
+  Sparkles,
 } from "lucide-react";
 import type { Action } from "@/editor/project";
+import type { AutoCaptionOptions } from "@/components/editor/auto-captions";
 import { assetOf, linkSize, snapPoints } from "@/editor/project";
 import type { Clip, ClipRef, Marker, Project, Track } from "@/editor/types";
 import { Button } from "@/components/ui/button";
@@ -113,6 +115,7 @@ export function Timeline({
   onSeek,
   dispatch,
   onDropAsset,
+  onAutoCaption,
 }: {
   project: Project;
   time: number;
@@ -123,6 +126,8 @@ export function Timeline({
   onSeek: (time: number) => void;
   dispatch: (action: Action, coalesce?: boolean) => void;
   onDropAsset: (assetId: string, trackId: string, start: number) => void;
+  /** Transcribes the clip's source and captions where it is heard. */
+  onAutoCaption?: (assetId: string, options?: AutoCaptionOptions) => void;
 }) {
   const [pxPerSec, setPxPerSec] = useState(70);
   const [snapping, setSnapping] = useState(true);
@@ -532,6 +537,20 @@ export function Timeline({
                         >
                           {clip.enabled ? "Disable" : "Enable"}
                         </ContextMenuItem>
+                        {clip.kind === "media" && asset?.hasAudio && onAutoCaption && (
+                          <>
+                            <ContextMenuSeparator />
+                            <ContextMenuItem onClick={() => onAutoCaption(asset.id)}>
+                              <Sparkles className="size-3.5" />
+                              Generate captions
+                            </ContextMenuItem>
+                            {asset.transcript && (
+                              <ContextMenuItem onClick={() => onAutoCaption(asset.id, { force: true })}>
+                                Transcribe again
+                              </ContextMenuItem>
+                            )}
+                          </>
+                        )}
                         {linked && (
                           <>
                             <ContextMenuSeparator />

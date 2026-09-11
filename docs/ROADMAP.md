@@ -144,10 +144,11 @@ For the people who record their screen to explain something.
 
 ### Auto-captions
 
-Already the planned next AI feature, and the highest-leverage one — not because
-captions matter most on their own, but because the transcript unlocks the two
-items below. Whisper runs in the browser via transformers.js, or locally
-through the models already cached on this machine.
+Done. The highest-leverage AI feature — not because captions matter most on
+their own, but because the transcript unlocks the two items below. The server
+sends the audio to whichever OpenAI-compatible speech-to-text service the user
+connected (whisper.cpp's server locally, or a hosted one with a key), and
+right-clicking any clip with sound offers Generate captions.
 
 ### Text-based editing
 

@@ -11,6 +11,7 @@ import {
   Music,
   Plus,
   Search,
+  Sparkles,
   Star,
   Trash2,
   Upload,
@@ -29,6 +30,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import type { AutoCaptionOptions } from "@/components/editor/auto-captions";
 import { formatBytes, formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -52,12 +61,15 @@ export function MediaPool({
   project,
   dispatch,
   onInsert,
+  onAutoCaption,
   selectedAssetId,
   onSelectAsset,
 }: {
   project: Project;
   dispatch: (action: Action, coalesce?: boolean) => void;
   onInsert: (asset: MediaAsset) => void;
+  /** Transcribes an asset and captions where it is heard on the timeline. */
+  onAutoCaption?: (assetId: string, options?: AutoCaptionOptions) => void;
   selectedAssetId: string | null;
   onSelectAsset: (id: string | null) => void;
 }) {
@@ -237,53 +249,57 @@ export function MediaPool({
             {visible.map((asset) => {
               const Icon = assetIcon(asset);
               return (
-                <button
-                  key={asset.id}
-                  draggable
-                  onDragStart={(e) => e.dataTransfer.setData("cutline/asset", asset.id)}
-                  onClick={() => onSelectAsset(asset.id)}
-                  onDoubleClick={() => onInsert(asset)}
-                  title={`${asset.name}\nDouble-click to add to the timeline`}
-                  className={cn(
-                    "group overflow-hidden rounded-md border bg-card text-left transition-colors hover:border-primary/60",
-                    selectedAssetId === asset.id && "border-primary ring-1 ring-primary",
-                    asset.offline && "opacity-50",
-                  )}
-                >
-                  <div className="relative flex aspect-video items-center justify-center bg-black/40">
-                    {asset.thumbnail ? (
-                      <img src={asset.thumbnail} alt="" className="size-full object-cover" />
-                    ) : (
-                      <Icon className="size-5 text-muted-foreground" />
-                    )}
-                    {asset.durationSec > 0 && (
-                      <span className="absolute right-1 bottom-1 rounded bg-black/70 px-1 text-[9px] tabular-nums text-white">
-                        {formatDuration(asset.durationSec * 1000)}
-                      </span>
-                    )}
-                    {asset.favorite && (
-                      <Star className="absolute top-1 left-1 size-3 fill-amber-400 text-amber-400" />
-                    )}
-                    {asset.proxyName && (
-                      <span
-                        className="absolute top-1 right-1 rounded bg-primary px-1 text-[8px] font-bold text-primary-foreground"
-                        title="Played from a 720p proxy. The export uses the original."
-                      >
-                        PROXY
-                      </span>
-                    )}
-                  </div>
-                  <div className="px-1.5 py-1">
-                    <p className="truncate text-[11px] font-medium">{asset.name}</p>
-                    <p className="truncate text-[10px] text-muted-foreground">
-                      {asset.offline
-                        ? "Offline"
-                        : asset.width > 0
-                          ? `${asset.width}×${asset.height}`
-                          : formatBytes(asset.bytes)}
-                    </p>
-                  </div>
-                </button>
+                <ContextMenu key={asset.id}>
+                  <ContextMenuTrigger asChild>
+                    <button
+                      draggable
+                      onDragStart={(e) => e.dataTransfer.setData("cutline/asset", asset.id)}
+                      onClick={() => onSelectAsset(asset.id)}
+                      onDoubleClick={() => onInsert(asset)}
+                      title={`${asset.name}\nDouble-click to add to the timeline`}
+                      className={cn(
+                        "group overflow-hidden rounded-md border bg-card text-left transition-colors hover:border-primary/60",
+                        selectedAssetId === asset.id && "border-primary ring-1 ring-primary",
+                        asset.offline && "opacity-50",
+                      )}
+                    >
+                      <div className="relative flex aspect-video items-center justify-center bg-black/40">
+                        {asset.thumbnail ? (
+                          <img src={asset.thumbnail} alt="" className="size-full object-cover" />
+                        ) : (
+                          <Icon className="size-5 text-muted-foreground" />
+                        )}
+                        {asset.durationSec > 0 && (
+                          <span className="absolute right-1 bottom-1 rounded bg-black/70 px-1 text-[9px] tabular-nums text-white">
+                            {formatDuration(asset.durationSec * 1000)}
+                          </span>
+                        )}
+                        {asset.favorite && (
+                          <Star className="absolute top-1 left-1 size-3 fill-amber-400 text-amber-400" />
+                        )}
+                        {asset.proxyName && (
+                          <span
+                            className="absolute top-1 right-1 rounded bg-primary px-1 text-[8px] font-bold text-primary-foreground"
+                            title="Played from a 720p proxy. The export uses the original."
+                          >
+                            PROXY
+                          </span>
+                        )}
+                      </div>
+                      <div className="px-1.5 py-1">
+                        <p className="truncate text-[11px] font-medium">{asset.name}</p>
+                        <p className="truncate text-[10px] text-muted-foreground">
+                          {asset.offline
+                            ? "Offline"
+                            : asset.width > 0
+                              ? `${asset.width}×${asset.height}`
+                              : formatBytes(asset.bytes)}
+                        </p>
+                      </div>
+                    </button>
+                  </ContextMenuTrigger>
+                  <AssetMenu asset={asset} dispatch={dispatch} onInsert={onInsert} onAutoCaption={onAutoCaption} />
+                </ContextMenu>
               );
             })}
           </div>
@@ -292,23 +308,27 @@ export function MediaPool({
             {visible.map((asset) => {
               const Icon = assetIcon(asset);
               return (
-                <div
-                  key={asset.id}
-                  draggable
-                  onDragStart={(e) => e.dataTransfer.setData("cutline/asset", asset.id)}
-                  onClick={() => onSelectAsset(asset.id)}
-                  onDoubleClick={() => onInsert(asset)}
-                  className={cn(
-                    "flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-accent",
-                    selectedAssetId === asset.id && "bg-accent",
-                  )}
-                >
-                  <Icon className="size-3.5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate">{asset.name}</span>
-                  <span className="shrink-0 tabular-nums text-muted-foreground">
-                    {formatDuration(asset.durationSec * 1000)}
-                  </span>
-                </div>
+                <ContextMenu key={asset.id}>
+                  <ContextMenuTrigger asChild>
+                    <div
+                      draggable
+                      onDragStart={(e) => e.dataTransfer.setData("cutline/asset", asset.id)}
+                      onClick={() => onSelectAsset(asset.id)}
+                      onDoubleClick={() => onInsert(asset)}
+                      className={cn(
+                        "flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-accent",
+                        selectedAssetId === asset.id && "bg-accent",
+                      )}
+                    >
+                      <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate">{asset.name}</span>
+                      <span className="shrink-0 tabular-nums text-muted-foreground">
+                        {formatDuration(asset.durationSec * 1000)}
+                      </span>
+                    </div>
+                  </ContextMenuTrigger>
+                  <AssetMenu asset={asset} dispatch={dispatch} onInsert={onInsert} onAutoCaption={onAutoCaption} />
+                </ContextMenu>
               );
             })}
           </div>
@@ -320,6 +340,7 @@ export function MediaPool({
           asset={project.assets.find((a) => a.id === selectedAssetId)}
           dispatch={dispatch}
           onInsert={onInsert}
+          onAutoCaption={onAutoCaption}
         />
       )}
     </div>
@@ -330,10 +351,12 @@ function AssetDetails({
   asset,
   dispatch,
   onInsert,
+  onAutoCaption,
 }: {
   asset: MediaAsset | undefined;
   dispatch: (action: Action, coalesce?: boolean) => void;
   onInsert: (asset: MediaAsset) => void;
+  onAutoCaption?: (assetId: string, options?: AutoCaptionOptions) => void;
 }) {
   if (!asset) return null;
   const rows: [string, string][] = [
@@ -376,6 +399,17 @@ function AssetDetails({
         >
           <Plus className="size-3.5" />
         </Button>
+        {asset.hasAudio && onAutoCaption && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-6"
+            title="Generate captions"
+            onClick={() => onAutoCaption(asset.id)}
+          >
+            <Sparkles className="size-3.5" />
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon"
@@ -395,5 +429,44 @@ function AssetDetails({
         ))}
       </dl>
     </div>
+  );
+}
+
+/** What a right-click on a media item offers. */
+function AssetMenu({
+  asset,
+  dispatch,
+  onInsert,
+  onAutoCaption,
+}: {
+  asset: MediaAsset;
+  dispatch: (action: Action, coalesce?: boolean) => void;
+  onInsert: (asset: MediaAsset) => void;
+  onAutoCaption?: (assetId: string, options?: AutoCaptionOptions) => void;
+}) {
+  return (
+    <ContextMenuContent>
+      <ContextMenuItem onClick={() => onInsert(asset)}>
+        <Plus className="size-3.5" />
+        Add to timeline
+      </ContextMenuItem>
+      {asset.hasAudio && onAutoCaption && (
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuItem onClick={() => onAutoCaption(asset.id)}>
+            <Sparkles className="size-3.5" />
+            Generate captions
+          </ContextMenuItem>
+          {asset.transcript && (
+            <ContextMenuItem onClick={() => onAutoCaption(asset.id, { force: true })}>Transcribe again</ContextMenuItem>
+          )}
+        </>
+      )}
+      <ContextMenuSeparator />
+      <ContextMenuItem onClick={() => dispatch({ type: "removeAsset", assetId: asset.id })}>
+        <Trash2 className="size-3.5" />
+        Remove from project
+      </ContextMenuItem>
+    </ContextMenuContent>
   );
 }

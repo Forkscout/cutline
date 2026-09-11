@@ -91,7 +91,7 @@ preview exactly as it will in the edit, so the framing decision is made once.
 
 ## What does not work yet
 
-No auto-captions, audio effects or mixer, stabilisation, motion tracking,
+No audio effects or mixer, stabilisation, motion tracking,
 multicam, LUTs, curves or colour wheels, batch export, proxies, collaboration,
 cloud or plugins. ProRes, DNxHR, Dolby Vision and native plugins are not
 reachable from a browser at all. See [`CLAUDE.md`](CLAUDE.md).
@@ -115,16 +115,21 @@ listens on 127.0.0.1 only, and every request needs a per-run token.
 
 ### Auto-captions
 
-The Captions panel transcribes any clip with sound through a speech-to-text
-service with an OpenAI-compatible API — hosted with a key, or on your own
-machine. whisper.cpp's server is free and private:
+Right-click anything with sound — a clip on the timeline or an item in the
+media pool — and choose **Generate captions**. The captions land where that
+clip is heard, and captions under other clips are left alone. The Captions
+panel does the same with a choice of language.
+
+Transcription goes through a speech-to-text service with an OpenAI-compatible
+API — hosted with a key, or on your own machine. whisper.cpp's server is free
+and private:
 
 ```bash
 whisper-server -m ~/.cache/whisper-cpp/ggml-medium.bin --inference-path /v1/audio/transcriptions --convert -l auto --port 8178
 ```
 
-Then press Connect in the Captions panel (the address is filled in) and
-Generate captions. LM Studio has no transcription endpoint yet, so it cannot
+Then press Connect in the Captions panel (the address is filled in). Asking for
+captions before a service is connected opens that panel. LM Studio has no transcription endpoint yet, so it cannot
 serve this.
 
 ### Letting an agent edit
