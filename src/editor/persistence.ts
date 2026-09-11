@@ -13,7 +13,7 @@
 
 import { listProjectFiles, readProjectFile } from "@/recorder/storage";
 import { api, apiJson } from "@/lib/server";
-import { assetFile } from "./media";
+import { assetExists } from "./media";
 import type { Project } from "./types";
 
 const RECOVERY_KEY = "cutline.recovery";
@@ -199,14 +199,13 @@ export function clearRecovery(): void {
  * file went missing.
  */
 export async function detectOfflineMedia(project: Project): Promise<Project> {
+  // A HEAD per asset, not a download: this used to read every file in the
+  // project just to learn that it was there.
   const assets = await Promise.all(
     project.assets.map(async (asset) => {
-      try {
-        await assetFile(asset);
-        return asset.offline ? { ...asset, offline: false } : asset;
-      } catch {
-        return { ...asset, offline: true };
-      }
+      const present = await assetExists(asset).catch(() => false);
+      if (present) return asset.offline ? { ...asset, offline: false } : asset;
+      return { ...asset, offline: true };
     }),
   );
   const changed = assets.some((a, i) => a !== project.assets[i]);

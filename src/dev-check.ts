@@ -11,7 +11,12 @@
 
 import type { ArmedSource } from "./recorder/types";
 import { RecordingSession } from "./recorder/session";
-import { deleteSession, getTrackFile, listSessions } from "./recorder/storage";
+// The recorder is tested against its own capture buffer, before any sync.
+import {
+  deleteLocalSession as deleteSession,
+  getLocalTrackFile as getTrackFile,
+  listLocalSessions as listSessions,
+} from "./recorder/storage";
 
 const out = document.getElementById("log")!;
 const log = (msg: string, cls = "") => {

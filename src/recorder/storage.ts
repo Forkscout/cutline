@@ -1,13 +1,23 @@
 /**
- * Everything on disk. Two halves:
+ * The browser side of storage, which is now only a capture buffer.
  *
- *   OpfsWriter  — the hot path, chunks going to the worker while recording.
- *   session CRUD — small, cold, main-thread reads of finished recordings.
+ *   OpfsWriter      — the hot path: chunks going to disk while recording.
+ *   local sessions  — what the recorder left in OPFS, read by the sync step
+ *                     that moves each finished take to the local server.
+ *   legacy projects — read once, to migrate projects saved before the server.
+ *
+ * Recording still writes to OPFS first, deliberately. It is local, it survives
+ * the tab dying mid-take, and it does not care whether the server is running —
+ * a take must never be lost because a process on the other side of an HTTP
+ * connection restarted. Everything that reads finished media reads it from the
+ * server (`@/lib/media-store`).
  */
 
 import type { SessionMeta } from "./types";
 
 const RECORDINGS_DIR = "recordings";
+const MEDIA_DIR = "media";
+const PROJECTS_DIR = "projects";
 const META_FILE = "meta.json";
 
 /* ------------------------------------------------------------------ writing */
@@ -93,15 +103,24 @@ export class OpfsWriter {
   }
 }
 
-/* ------------------------------------------------------------------ reading */
+/* ----------------------------------------------------------- local sessions */
 
-async function recordingsDir(create = false): Promise<FileSystemDirectoryHandle> {
+async function namedDir(name: string, create = false): Promise<FileSystemDirectoryHandle> {
   const root = await navigator.storage.getDirectory();
-  return root.getDirectoryHandle(RECORDINGS_DIR, { create });
+  return root.getDirectoryHandle(name, { create });
 }
 
+async function entries(dir: FileSystemDirectoryHandle): Promise<[string, FileSystemHandle][]> {
+  const out: [string, FileSystemHandle][] = [];
+  for await (const entry of dir as unknown as AsyncIterable<[string, FileSystemHandle]>) {
+    out.push(entry);
+  }
+  return out;
+}
+
+/** Written by the recorder at stop. Its presence is what marks a take complete. */
 export async function writeSessionMeta(meta: SessionMeta): Promise<void> {
-  const dir = await recordingsDir(true);
+  const dir = await namedDir(RECORDINGS_DIR, true);
   const sessionDir = await dir.getDirectoryHandle(meta.id, { create: true });
   const handle = await sessionDir.getFileHandle(META_FILE, { create: true });
   const writable = await handle.createWritable();
@@ -109,113 +128,83 @@ export async function writeSessionMeta(meta: SessionMeta): Promise<void> {
   await writable.close();
 }
 
-export async function readSessionMeta(sessionId: string): Promise<SessionMeta | null> {
+export async function readLocalSessionMeta(sessionId: string): Promise<SessionMeta | null> {
   try {
-    const dir = await recordingsDir();
+    const dir = await namedDir(RECORDINGS_DIR);
     const sessionDir = await dir.getDirectoryHandle(sessionId);
     const handle = await sessionDir.getFileHandle(META_FILE);
-    const text = await (await handle.getFile()).text();
-    return JSON.parse(text) as SessionMeta;
+    return JSON.parse(await (await handle.getFile()).text()) as SessionMeta;
   } catch {
     return null;
   }
 }
 
-export async function listSessions(): Promise<SessionMeta[]> {
-  const out: SessionMeta[] = [];
-  let dir: FileSystemDirectoryHandle;
+/** Every session directory still in OPFS, complete or not. */
+export async function listLocalSessionIds(): Promise<string[]> {
   try {
-    dir = await recordingsDir();
+    const dir = await namedDir(RECORDINGS_DIR);
+    return (await entries(dir)).filter(([, h]) => h.kind === "directory").map(([name]) => name);
   } catch {
-    return out; // Nothing recorded yet.
+    return []; // Nothing recorded yet.
   }
-  for await (const [name, handle] of dir as unknown as AsyncIterable<
-    [string, FileSystemHandle]
-  >) {
-    if (handle.kind !== "directory") continue;
-    const meta = await readSessionMeta(name);
+}
+
+/** Finished takes still in OPFS, newest first. */
+export async function listLocalSessions(): Promise<SessionMeta[]> {
+  const out: SessionMeta[] = [];
+  for (const id of await listLocalSessionIds()) {
+    const meta = await readLocalSessionMeta(id);
     if (meta) out.push(meta);
   }
   return out.sort((a, b) => b.createdAt - a.createdAt);
 }
 
-export async function deleteSession(sessionId: string): Promise<void> {
-  const dir = await recordingsDir();
+/**
+ * The files of one local session. `.crswap` files are Chrome's staging copies
+ * from `createWritable` and are never part of a take.
+ */
+export async function localSessionFiles(sessionId: string): Promise<{ name: string; file: File }[]> {
+  const dir = await namedDir(RECORDINGS_DIR);
+  const sessionDir = await dir.getDirectoryHandle(sessionId);
+  const out: { name: string; file: File }[] = [];
+  for (const [name, handle] of await entries(sessionDir)) {
+    if (handle.kind !== "file" || name.endsWith(".crswap")) continue;
+    out.push({ name, file: await (handle as FileSystemFileHandle).getFile() });
+  }
+  return out;
+}
+
+export async function getLocalTrackFile(sessionId: string, fileName: string): Promise<File> {
+  const dir = await namedDir(RECORDINGS_DIR);
+  const sessionDir = await dir.getDirectoryHandle(sessionId);
+  return (await sessionDir.getFileHandle(fileName)).getFile();
+}
+
+export async function deleteLocalSession(sessionId: string): Promise<void> {
+  const dir = await namedDir(RECORDINGS_DIR);
   await dir.removeEntry(sessionId, { recursive: true });
 }
 
-/** Writes an arbitrary file into a session's directory (used by the remuxer). */
-export async function writeSessionFile(
-  sessionId: string,
-  fileName: string,
-  data: BufferSource,
-): Promise<void> {
-  const dir = await recordingsDir(true);
-  const sessionDir = await dir.getDirectoryHandle(sessionId, { create: true });
-  const handle = await sessionDir.getFileHandle(fileName, { create: true });
-  const writable = await handle.createWritable();
-  await writable.write(data);
-  await writable.close();
-}
+/* ------------------------------------------------------------- local media */
 
-export async function sessionFileExists(sessionId: string, fileName: string): Promise<boolean> {
-  try {
-    const dir = await recordingsDir();
-    const sessionDir = await dir.getDirectoryHandle(sessionId);
-    await sessionDir.getFileHandle(fileName);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function getTrackFile(sessionId: string, fileName: string): Promise<File> {
-  const dir = await recordingsDir();
-  const sessionDir = await dir.getDirectoryHandle(sessionId);
-  const handle = await sessionDir.getFileHandle(fileName);
-  return handle.getFile();
-}
-
-/* ------------------------------------------------- imported media & projects */
-
-/**
- * Files the user dropped in are copied into OPFS rather than held as `File`
- * handles. A `File` from a drop is only valid for the life of the page, so a
- * project referencing one would come back broken after a reload — which is
- * exactly when the user expects it to work.
- */
-const MEDIA_DIR = "media";
-const PROJECTS_DIR = "projects";
-
-async function namedDir(name: string, create = false): Promise<FileSystemDirectoryHandle> {
-  const root = await navigator.storage.getDirectory();
-  return root.getDirectoryHandle(name, { create });
-}
-
-export async function writeMediaFile(fileId: string, data: Blob): Promise<void> {
-  const dir = await namedDir(MEDIA_DIR, true);
-  const handle = await dir.getFileHandle(fileId, { create: true });
-  const writable = await handle.createWritable();
-  await writable.write(data);
-  await writable.close();
-}
-
-export async function mediaFileExists(fileId: string): Promise<boolean> {
+/** Files imported before media moved to the server, still waiting to go up. */
+export async function listLocalMediaIds(): Promise<string[]> {
   try {
     const dir = await namedDir(MEDIA_DIR);
-    await dir.getFileHandle(fileId);
-    return true;
+    return (await entries(dir))
+      .filter(([name, h]) => h.kind === "file" && !name.endsWith(".crswap"))
+      .map(([name]) => name);
   } catch {
-    return false;
+    return [];
   }
 }
 
-export async function getMediaFile(fileId: string): Promise<File> {
+export async function getLocalMediaFile(fileId: string): Promise<File> {
   const dir = await namedDir(MEDIA_DIR);
   return (await dir.getFileHandle(fileId)).getFile();
 }
 
-export async function deleteMediaFile(fileId: string): Promise<void> {
+export async function deleteLocalMediaFile(fileId: string): Promise<void> {
   try {
     const dir = await namedDir(MEDIA_DIR);
     await dir.removeEntry(fileId);
@@ -224,13 +213,7 @@ export async function deleteMediaFile(fileId: string): Promise<void> {
   }
 }
 
-export async function writeProjectFile(projectId: string, json: string): Promise<void> {
-  const dir = await namedDir(PROJECTS_DIR, true);
-  const handle = await dir.getFileHandle(`${projectId}.json`, { create: true });
-  const writable = await handle.createWritable();
-  await writable.write(json);
-  await writable.close();
-}
+/* --------------------------------------------------------- legacy projects */
 
 export async function readProjectFile(projectId: string): Promise<string | null> {
   try {
@@ -243,42 +226,24 @@ export async function readProjectFile(projectId: string): Promise<string | null>
 }
 
 export async function listProjectFiles(): Promise<string[]> {
-  const out: string[] = [];
   try {
     const dir = await namedDir(PROJECTS_DIR);
-    for await (const [name, handle] of dir as unknown as AsyncIterable<[string, FileSystemHandle]>) {
-      if (handle.kind === "file" && name.endsWith(".json")) out.push(name.replace(/\.json$/, ""));
-    }
+    return (await entries(dir))
+      .filter(([name, h]) => h.kind === "file" && name.endsWith(".json"))
+      .map(([name]) => name.replace(/\.json$/, ""));
   } catch {
-    // No projects directory yet.
-  }
-  return out;
-}
-
-export async function deleteProjectFile(projectId: string): Promise<void> {
-  try {
-    const dir = await namedDir(PROJECTS_DIR);
-    await dir.removeEntry(`${projectId}.json`);
-  } catch {
-    // Already gone.
+    return []; // No projects directory yet.
   }
 }
 
-export interface StorageUsage {
-  usage: number;
-  quota: number;
-}
-
-export async function estimateUsage(): Promise<StorageUsage> {
-  const est = await navigator.storage.estimate();
-  return { usage: est.usage ?? 0, quota: est.quota ?? 0 };
-}
+/* ------------------------------------------------------------------ misc */
 
 /**
- * Without this, the browser may evict recordings under disk pressure — which
- * for a screen capture the user just spent an hour on is not an acceptable
- * outcome. Chrome grants it silently to engaged origins; a refusal is not
- * fatal, so the caller only reports it.
+ * Without this, the browser may evict the capture buffer under disk pressure —
+ * which for a screen capture the user just spent an hour on is not an
+ * acceptable outcome, even if it is about to be uploaded. Chrome grants it
+ * silently to engaged origins; a refusal is not fatal, so the caller only
+ * reports it.
  */
 export async function requestPersistence(): Promise<boolean> {
   if (!navigator.storage?.persist) return false;

@@ -41,8 +41,9 @@ documented limitation. Worth investigating properly before building on it.
 
 ### 2. A local server — decided
 
-There is one now: a Hono server on Bun, bound to 127.0.0.1, that owns projects
-on disk in `~/Cutline`. It sits between the two options this item used to
+There is one now: a Hono server on Bun, bound to 127.0.0.1, that owns projects,
+recordings and imported media on disk in `~/Cutline`. The browser keeps only
+the recorder's capture buffer, and hands each take over when it ends. It sits between the two options this item used to
 weigh — the architecture of a server, without a cloud.
 
 It is the right step even if Cutline becomes a hosted product in the mould of
@@ -64,8 +65,8 @@ One thing to keep even then: client-side export and in-browser models as the
 default. The user's machine doing the rendering and transcription is a cost
 advantage a server-rendering competitor does not have.
 
-Next in this direction: move recordings and imported media onto the server, then
-put the MCP endpoint at `/mcp` in the same process.
+Done: recordings and imported media live on the server, served with byte
+ranges. Next in this direction: the MCP endpoint at `/mcp` in the same process.
 
 ---
 
@@ -103,7 +104,17 @@ into, kept because the reasoning is the part worth reading.
   can be seeked — but it has not been run against a real multi-gigabyte take.
   It refuses to run in a background tab, because a throttled tab makes every one
   of those numbers wrong by an order of magnitude while still looking like a
-  result.
+  result. It now also has an upload to measure.
+- **Import remuxes in the browser's memory.** The remux and the proxy are built
+  into an `ArrayBuffer` and uploaded whole. Move both to the server, reading and
+  writing files directly, so an hour-long take costs no browser memory at all.
+- **Interrupted takes are invisible.** A take whose tab died before stop has its
+  chunks in OPFS but no `meta.json`, so the sync rightly leaves it alone — and
+  nothing shows it or can recover it. It needs a "recover / discard" prompt that
+  rebuilds the metadata by probing the files.
+- **A truncated upload gets no reply.** The server stores nothing — the length
+  check holds — but when a client hangs up mid-body the request waits for Bun's
+  idle timeout instead of failing at once.
 
 ## What would actually make it win
 

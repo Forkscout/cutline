@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Camera, Download, HardDrive, Mic, Monitor, Scissors, Trash2, Volume2 } from "lucide-react";
 import { toast } from "sonner";
 import type { SessionMeta, SourceKind, TrackMeta } from "@/recorder/types";
-import { deleteSession, estimateUsage, getTrackFile, listSessions } from "@/recorder/storage";
+import { deleteSession, estimateUsage, listSessions, sessionFileUrl } from "@/lib/media-store";
+import { syncLocalRecordings } from "@/lib/sync";
 import {
   Accordion,
   AccordionContent,
@@ -20,7 +21,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -35,40 +36,16 @@ const ICON: Record<SourceKind, { icon: typeof Monitor; tint: string }> = {
 };
 
 function TrackRow({ session, track }: { session: SessionMeta; track: TrackMeta }) {
-  const [url, setUrl] = useState<string | null>(null);
   const isVideo = track.kind === "screen" || track.kind === "camera";
   const { icon: Icon, tint } = ICON[track.kind];
-
-  useEffect(() => {
-    let cancelled = false;
-    let created: string | null = null;
-    void getTrackFile(session.id, track.fileName).then((file) => {
-      if (cancelled) return;
-      created = URL.createObjectURL(file);
-      setUrl(created);
-    });
-    return () => {
-      cancelled = true;
-      if (created) URL.revokeObjectURL(created);
-    };
-  }, [session.id, track.fileName]);
-
-  const download = async () => {
-    const file = await getTrackFile(session.id, track.fileName);
-    const href = URL.createObjectURL(file);
-    const a = document.createElement("a");
-    a.href = href;
-    a.download = `${session.name.replace(/[^\w.-]+/g, "-")}-${track.fileName}`;
-    a.click();
-    URL.revokeObjectURL(href);
-  };
+  // A server URL, not a blob: the element streams with range requests, so a
+  // two-hour take is playable immediately instead of after reading it all in.
+  const url = sessionFileUrl(session.id, track.fileName);
 
   return (
     <div className="grid gap-3 rounded-lg border p-3 sm:grid-cols-[240px_1fr]">
       <div className="flex items-center">
-        {url === null ? (
-          <div className="aspect-video w-full animate-pulse rounded-md bg-muted" />
-        ) : isVideo ? (
+        {isVideo ? (
           <video
             src={url}
             controls
@@ -105,14 +82,11 @@ function TrackRow({ session, track }: { session: SessionMeta; track: TrackMeta }
             </span>
           )}
         </div>
-        <Button
-          variant="secondary"
-          size="sm"
-          className="h-7 w-fit text-xs"
-          onClick={() => void download()}
-        >
-          <Download className="size-3.5" />
-          Download
+        <Button variant="secondary" size="sm" className="h-7 w-fit text-xs" asChild>
+          <a href={url} download={`${session.name.replace(/[^\w.-]+/g, "-")}-${track.fileName}`}>
+            <Download className="size-3.5" />
+            Download
+          </a>
         </Button>
       </div>
     </div>
@@ -128,22 +102,48 @@ export function Library({
 }) {
   const [sessions, setSessions] = useState<SessionMeta[] | null>(null);
   const [usage, setUsage] = useState({ usage: 0, quota: 0 });
+  const [error, setError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState<string | null>(null);
 
   const reload = useCallback(() => {
-    void listSessions().then(setSessions);
-    void estimateUsage().then(setUsage);
+    // Anything the recorder left in the browser goes up first, so a take that
+    // just finished is in the list rather than appearing on the next visit.
+    syncLocalRecordings((p) => setSyncing(`Moving recordings to disk — ${p.done + 1} of ${p.total}`))
+      .catch((err: unknown) => {
+        toast.error(err instanceof Error ? err.message : "Could not move recordings to disk.");
+      })
+      .finally(() => setSyncing(null))
+      .then(() => Promise.all([listSessions(), estimateUsage()]))
+      .then(([list, disk]) => {
+        setError(null);
+        setSessions(list);
+        setUsage(disk);
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : "Could not reach the Cutline server.");
+        setSessions([]);
+      });
   }, []);
 
   useEffect(reload, [reload, reloadKey]);
 
   const remove = async (session: SessionMeta) => {
-    await deleteSession(session.id);
-    toast(`Deleted ${formatDate(session.createdAt)}`);
+    try {
+      await deleteSession(session.id);
+      toast(`Deleted ${formatDate(session.createdAt)}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not delete the recording.");
+    }
     reload();
   };
 
   if (sessions === null) {
-    return <Card className="h-40 animate-pulse" />;
+    return (
+      <div className="space-y-3">
+        <Card className="h-40 animate-pulse" />
+        {syncing && <p className="text-xs text-muted-foreground">{syncing}</p>}
+      </div>
+    );
   }
 
   return (
@@ -157,7 +157,17 @@ export function Library({
         </span>
       </div>
 
-      {sessions.length === 0 ? (
+      {error && (
+        <Alert variant="destructive">
+          <AlertTitle>Recordings are unavailable</AlertTitle>
+          <AlertDescription className="text-xs">
+            {error} Finished takes are kept by the local server. Anything you record
+            meanwhile is safe in the browser and moves across once it is running.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {sessions.length === 0 && !error ? (
         <Card className="flex h-44 items-center justify-center border-dashed shadow-none">
           <p className="text-sm text-muted-foreground">
             Nothing recorded yet — start a take from the Record tab.

@@ -7,6 +7,11 @@
  * guessing, which in an editor shows up as a scrubber that lands on the wrong
  * frame. So every recording is remuxed once on import: a copy, not a
  * re-encode — the same packets, written into a container that has an index.
+ *
+ * Everything imported lives on the local server. Reads go through URLs with
+ * byte ranges — mediabunny's `UrlSource` for decoding, plain `src` attributes
+ * for playback — so a multi-gigabyte recording is read a window at a time
+ * rather than pulled into memory whole.
  */
 
 import {
@@ -17,17 +22,21 @@ import {
   Input,
   Output,
   QUALITY_LOW,
+  UrlSource,
   WebMOutputFormat,
+  type Source,
 } from "mediabunny";
 import type { SessionMeta } from "@/recorder/types";
+import { api } from "@/lib/server";
 import {
-  getMediaFile,
-  getTrackFile,
   mediaFileExists,
+  mediaFileUrl,
   sessionFileExists,
+  sessionFileSize,
+  sessionFileUrl,
   writeMediaFile,
   writeSessionFile,
-} from "@/recorder/storage";
+} from "@/lib/media-store";
 import type { AssetKind, MediaAsset } from "./types";
 
 /** The remuxed sibling of a recorded file. */
@@ -45,6 +54,20 @@ const PROXY_TRIGGER_HEIGHT = 1200;
 /** What the proxy is scaled to. */
 const PROXY_HEIGHT = 720;
 
+/** A fresh drop from the user's disk, or a URL for anything already on the server. */
+type MediaInput = File | string;
+
+function sourceOf(input: MediaInput): Source {
+  return typeof input === "string" ? new UrlSource(input) : new BlobSource(input);
+}
+
+async function blobOf(input: MediaInput): Promise<Blob> {
+  if (typeof input !== "string") return input;
+  const response = await api(input);
+  if (!response.ok) throw new Error(`Could not read ${input} (${response.status}).`);
+  return response.blob();
+}
+
 /**
  * A small VP8 transcode for playback.
  *
@@ -52,19 +75,23 @@ const PROXY_HEIGHT = 720;
  * three other layers are being composited, and VP8 decodes faster than it
  * compresses well. Quality is deliberately low — nobody grades from a proxy.
  */
-async function makeProxy(file: File, onProgress?: (fraction: number) => void): Promise<ArrayBuffer> {
-  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+async function makeProxy(input: MediaInput, onProgress?: (fraction: number) => void): Promise<ArrayBuffer> {
+  const source = new Input({ source: sourceOf(input), formats: ALL_FORMATS });
   const output = new Output({ format: new WebMOutputFormat(), target: new BufferTarget() });
-  const conversion = await Conversion.init({
-    input,
-    output,
-    video: { height: PROXY_HEIGHT, fit: "contain", codec: "vp8", bitrate: QUALITY_LOW },
-  });
-  if (onProgress) conversion.onProgress = (fraction) => onProgress(fraction);
-  await conversion.execute();
-  const buffer = output.target.buffer;
-  if (!buffer) throw new Error("Proxy produced no output.");
-  return buffer;
+  try {
+    const conversion = await Conversion.init({
+      input: source,
+      output,
+      video: { height: PROXY_HEIGHT, fit: "contain", codec: "vp8", bitrate: QUALITY_LOW },
+    });
+    if (onProgress) conversion.onProgress = (fraction) => onProgress(fraction);
+    await conversion.execute();
+    const buffer = output.target.buffer;
+    if (!buffer) throw new Error("Proxy produced no output.");
+    return buffer;
+  } finally {
+    source.dispose();
+  }
 }
 
 const IMAGE_TYPES = /^image\//;
@@ -89,12 +116,12 @@ interface Probe {
   channels?: number;
 }
 
-async function probeMedia(file: File): Promise<Probe> {
-  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+async function probeMedia(input: MediaInput): Promise<Probe> {
+  const source = new Input({ source: sourceOf(input), formats: ALL_FORMATS });
   try {
-    const durationSec = await input.computeDuration();
-    const video = (await input.getVideoTracks())[0];
-    const audio = (await input.getAudioTracks())[0];
+    const durationSec = await source.computeDuration();
+    const video = (await source.getVideoTracks())[0];
+    const audio = (await source.getAudioTracks())[0];
     let frameRate = 30;
     if (video) {
       const stats = await video.computePacketStats(120);
@@ -110,8 +137,8 @@ async function probeMedia(file: File): Promise<Probe> {
       ...(audio ? { sampleRate: audio.sampleRate, channels: audio.numberOfChannels } : {}),
     };
   } finally {
-    // Leaving the input open holds the whole blob and its decoder alive.
-    input.dispose();
+    // Leaving the input open holds its cache and its decoder alive.
+    source.dispose();
   }
 }
 
@@ -131,27 +158,35 @@ async function probeImage(file: File): Promise<Probe> {
   return probe;
 }
 
-async function remux(file: File): Promise<ArrayBuffer> {
-  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+/**
+ * Remuxes into memory. For a long take that is a lot of memory — a streaming
+ * upload would avoid it, but Chrome only streams request bodies over HTTP/2,
+ * and the dev proxy speaks HTTP/1.1. Moving the remux to the server, which can
+ * write file to file, is the real fix and is on the roadmap.
+ */
+async function remux(input: MediaInput): Promise<ArrayBuffer> {
+  const source = new Input({ source: sourceOf(input), formats: ALL_FORMATS });
   const output = new Output({ format: new WebMOutputFormat(), target: new BufferTarget() });
-  const conversion = await Conversion.init({ input, output });
-  await conversion.execute();
-  const buffer = output.target.buffer;
-  if (!buffer) throw new Error("Remux produced no output.");
-  return buffer;
+  try {
+    const conversion = await Conversion.init({ input: source, output });
+    await conversion.execute();
+    const buffer = output.target.buffer;
+    if (!buffer) throw new Error("Remux produced no output.");
+    return buffer;
+  } finally {
+    source.dispose();
+  }
 }
 
 /* -------------------------------------------------------------- thumbnails */
 
 const THUMB_WIDTH = 240;
 
-async function thumbnailFor(file: File, kind: AssetKind): Promise<string | undefined> {
+async function thumbnailFor(input: MediaInput, kind: AssetKind): Promise<string | undefined> {
   try {
     if (kind === "audio") return undefined;
     const bitmap =
-      kind === "image"
-        ? await createImageBitmap(file)
-        : await firstFrameBitmap(file);
+      kind === "image" ? await createImageBitmap(await blobOf(input)) : await firstFrameBitmap(input);
     if (!bitmap) return undefined;
 
     const scale = THUMB_WIDTH / bitmap.width;
@@ -167,25 +202,25 @@ async function thumbnailFor(file: File, kind: AssetKind): Promise<string | undef
   }
 }
 
-async function firstFrameBitmap(file: File): Promise<ImageBitmap | null> {
+async function firstFrameBitmap(input: MediaInput): Promise<ImageBitmap | null> {
   const { VideoSampleSink } = await import("mediabunny");
-  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  const source = new Input({ source: sourceOf(input), formats: ALL_FORMATS });
   try {
-    const track = await input.getPrimaryVideoTrack();
+    const track = await source.getPrimaryVideoTrack();
     if (!track) return null;
     const sink = new VideoSampleSink(track);
     // A frame slightly in, not the very first: the opening frame of a screen
     // recording is often the desktop before anything has been drawn.
     const sample = (await sink.getSample(0.4)) ?? (await sink.getSample(0));
     if (!sample) return null;
-    const source = sample.toCanvasImageSource();
-    const bitmap = await createImageBitmap(source as CanvasImageSource);
+    const image = sample.toCanvasImageSource();
+    const bitmap = await createImageBitmap(image as CanvasImageSource);
     sample.close();
     return bitmap;
   } catch {
     return null;
   } finally {
-    input.dispose();
+    source.dispose();
   }
 }
 
@@ -201,11 +236,13 @@ const PEAKS_PER_SECOND = 40;
  * picture of loudness, and decoding a ten-minute take at 48 kHz stereo to draw
  * a 200-pixel-wide strip wastes about forty times the memory it needs.
  */
-export async function computePeaks(file: File, durationSec: number): Promise<number[] | undefined> {
+export async function computePeaks(input: MediaInput, durationSec: number): Promise<number[] | undefined> {
   try {
     const sampleRate = 8000;
     const context = new OfflineAudioContext(1, Math.max(1, Math.ceil(durationSec * sampleRate)), sampleRate);
-    const buffer = await context.decodeAudioData(await file.arrayBuffer());
+    // decodeAudioData genuinely needs every byte, so this is the one read that
+    // is whole. Audio is small next to video — minutes of Opus, not gigabytes.
+    const buffer = await context.decodeAudioData(await (await blobOf(input)).arrayBuffer());
     const data = buffer.getChannelData(0);
     const buckets = Math.max(1, Math.round(durationSec * PEAKS_PER_SECOND));
     const perBucket = Math.max(1, Math.floor(data.length / buckets));
@@ -262,7 +299,11 @@ function baseAsset(name: string, kind: AssetKind, mimeType: string, bytes: numbe
   };
 }
 
-/** Imports every track of a recording session, remuxing any not seen before. */
+/**
+ * Imports every track of a recording session, remuxing any not seen before.
+ * The session must already be on the server — `syncLocalRecordings` puts it
+ * there.
+ */
 export async function importSession(
   session: SessionMeta,
   onProgress?: (p: ImportProgress) => void,
@@ -275,17 +316,16 @@ export async function importSession(
 
     if (!(await sessionFileExists(session.id, editName))) {
       onProgress?.({ name: track.fileName, index, total, stage: "remuxing" });
-      const original = await getTrackFile(session.id, track.fileName);
-      await writeSessionFile(session.id, editName, await remux(original));
+      await writeSessionFile(session.id, editName, await remux(sessionFileUrl(session.id, track.fileName)));
     }
 
     onProgress?.({ name: track.fileName, index, total, stage: "probing" });
-    const editable = await getTrackFile(session.id, editName);
-    const info = await probeMedia(editable);
+    const editUrl = sessionFileUrl(session.id, editName);
+    const info = await probeMedia(editUrl);
     const kind: AssetKind = info.hasVideo ? "video" : "audio";
 
     const asset: MediaAsset = {
-      ...baseAsset(track.label || track.kind, kind, track.mimeType, editable.size),
+      ...baseAsset(track.label || track.kind, kind, track.mimeType, (await sessionFileSize(session.id, editName)) ?? 0),
       id: track.id,
       origin: { type: "recording", sessionId: session.id, fileName: editName },
       sourceKind: track.kind,
@@ -309,7 +349,7 @@ export async function importSession(
         await writeSessionFile(
           session.id,
           proxy,
-          await makeProxy(editable, (fraction) =>
+          await makeProxy(editUrl, (fraction) =>
             onProgress?.({ name: track.fileName, index, total, stage: "proxy", fraction }),
           ),
         );
@@ -318,10 +358,10 @@ export async function importSession(
     }
 
     onProgress?.({ name: track.fileName, index, total, stage: "thumbnail" });
-    asset.thumbnail = await thumbnailFor(editable, kind);
+    asset.thumbnail = await thumbnailFor(editUrl, kind);
     if (info.hasAudio) {
       onProgress?.({ name: track.fileName, index, total, stage: "waveform" });
-      asset.peaks = await computePeaks(editable, asset.durationSec);
+      asset.peaks = await computePeaks(editUrl, asset.durationSec);
     }
 
     assets.push(asset);
@@ -330,7 +370,11 @@ export async function importSession(
   return assets;
 }
 
-/** Imports arbitrary files the user dropped in or picked from disk. */
+/**
+ * Imports arbitrary files the user dropped in or picked from disk. The file is
+ * uploaded as-is; probing, thumbnails and the proxy all read the local copy,
+ * which is already in hand and costs no round trip.
+ */
 export async function importFiles(
   files: File[],
   onProgress?: (p: ImportProgress) => void,
@@ -397,35 +441,50 @@ export async function importFiles(
 
 /* ------------------------------------------------------------------ access */
 
+function originalUrl(asset: MediaAsset): string {
+  return asset.origin.type === "recording"
+    ? sessionFileUrl(asset.origin.sessionId, asset.origin.fileName)
+    : mediaFileUrl(asset.id);
+}
+
+function proxyUrl(asset: MediaAsset): string | null {
+  if (!asset.proxyName) return null;
+  return asset.origin.type === "recording"
+    ? sessionFileUrl(asset.origin.sessionId, asset.proxyName)
+    : mediaFileUrl(asset.proxyName);
+}
+
 /**
- * Reads an asset's bytes back, wherever they live.
- *
- * `preferProxy` is for playback only. The exporter must never pass it — a file
- * delivered from a 720p proxy would be exactly as long, exactly the right
- * codec, and visibly soft.
+ * Where an asset can be read from. `preferProxy` is for playback only — the
+ * exporter must never pass it, because a file delivered from a 720p proxy would
+ * be exactly as long, exactly the right codec, and visibly soft.
+ */
+export function assetUrl(asset: MediaAsset, preferProxy = false): string {
+  return (preferProxy ? proxyUrl(asset) : null) ?? originalUrl(asset);
+}
+
+/**
+ * The whole file, in memory. Only for callers that need every byte — the
+ * export's audio mix, which hands it to `decodeAudioData`. Everything else
+ * reads through `assetUrl`.
  */
 export async function assetFile(asset: MediaAsset, preferProxy = false): Promise<File> {
-  const name = preferProxy && asset.proxyName ? asset.proxyName : null;
-
-  if (asset.origin.type === "recording") {
-    if (name) {
-      try {
-        return await getTrackFile(asset.origin.sessionId, name);
-      } catch {
-        // A missing proxy is a performance problem, not a failure.
-      }
-    }
-    return getTrackFile(asset.origin.sessionId, asset.origin.fileName);
-  }
-
-  if (name) {
+  const proxy = preferProxy ? proxyUrl(asset) : null;
+  if (proxy) {
     try {
-      return await getMediaFile(name);
+      const blob = await blobOf(proxy);
+      return new File([blob], asset.name, { type: blob.type });
     } catch {
-      // As above.
+      // A missing proxy is a performance problem, not a failure.
     }
   }
-  return getMediaFile(asset.id);
+  const blob = await blobOf(originalUrl(asset));
+  return new File([blob], asset.name, { type: blob.type });
+}
+
+/** Whether the asset's original is still on the server, without reading it. */
+export async function assetExists(asset: MediaAsset): Promise<boolean> {
+  return (await api(originalUrl(asset), { method: "HEAD" })).ok;
 }
 
 /** True when this asset is being played from a reduced-resolution copy. */
@@ -434,9 +493,12 @@ export function usingProxy(asset: MediaAsset): boolean {
 }
 
 /**
- * Object URLs for assets, created once and reused. Every `<video>` in the
- * preview points at these, so creating them per render would leak a blob
- * handle per frame.
+ * Playback URLs for assets, resolved once and reused.
+ *
+ * These are server URLs, not blob URLs: the element streams with range
+ * requests instead of the whole file being read into a Blob first, which for a
+ * long recording was the difference between opening instantly and not opening.
+ * The one lookup that is worth caching is whether a proxy actually exists.
  */
 export class AssetUrls {
   private urls = new Map<string, string>();
@@ -445,14 +507,20 @@ export class AssetUrls {
   async get(asset: MediaAsset): Promise<string> {
     const existing = this.urls.get(asset.id);
     if (existing) return existing;
-    // Two clips of the same asset resolve at once on load; without this they
-    // would each create a URL and one would leak.
+    // Two clips of the same asset resolve at once on load.
     const inFlight = this.pending.get(asset.id);
     if (inFlight) return inFlight;
 
-    // Playback always asks for the proxy; the exporter calls assetFile itself.
-    const promise = assetFile(asset, true).then((file) => {
-      const url = URL.createObjectURL(file);
+    const promise = (async () => {
+      const proxy = proxyUrl(asset);
+      if (proxy) {
+        // A proxy that was never generated, or has gone missing, falls back to
+        // the original — a performance problem, not a failure.
+        const head = await api(proxy, { method: "HEAD" }).catch(() => null);
+        if (head?.ok) return proxy;
+      }
+      return originalUrl(asset);
+    })().then((url) => {
       this.urls.set(asset.id, url);
       this.pending.delete(asset.id);
       return url;
@@ -461,8 +529,8 @@ export class AssetUrls {
     return promise;
   }
 
+  /** Nothing to revoke — these are server URLs, not object URLs. */
   dispose(): void {
-    for (const url of this.urls.values()) URL.revokeObjectURL(url);
     this.urls.clear();
     this.pending.clear();
   }

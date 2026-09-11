@@ -134,7 +134,7 @@ offsets, pause accounting, reading files back. Add `?keep` to leave the take on
 disk so the library and the editor have something real to open.
 
 **`/dev-editor-check.html`** covers everything after that — the edit reducer,
-keyframe interpolation, subtitle round-tripping, import and remux, project
+keyframe interpolation, subtitle round-tripping, the take's move to the server, import and remux, project
 layout, export — and then **decodes the exported file and reads its pixels**,
 checking the background in the padding, the screen layer in the middle, the
 camera where the PiP was placed, that text and captions were drawn, and that an
@@ -156,11 +156,42 @@ while the renderer was correct.
 
 ## The local server
 
-`server/` is a Hono app on Bun that owns projects on disk under
-`~/Cutline/workspaces/<workspace>/projects/`. In development Vite serves the
+`server/` is a Hono app on Bun that owns everything on disk under
+`~/Cutline/workspaces/<workspace>/`: `projects/<id>.json`,
+`recordings/<sessionId>/` and `media/<assetId>`. In development Vite serves the
 page on 5310 and proxies `/api` to the server on 5311; `bun run start` serves
-both from one process. Recordings and imported media are still in OPFS — moving
-them is the next step, not done yet.
+both from one process.
+
+**OPFS is only the capture buffer.** The recorder still writes to OPFS, because
+a take must survive the tab dying and must not depend on a process on the other
+end of a socket. When a take stops, `src/lib/sync.ts` moves it: every media file
+first, `meta.json` last (the server lists a take only once its meta exists),
+then each size is read back, and only when all of them match is the browser's
+copy deleted. A session with no `meta.json` is never touched — that is a take
+still recording, or a crashed one whose chunks are the only copy. The sync is
+single-flight within a tab and serialised across tabs with a Web Lock. The same
+path migrates takes and imports left in OPFS by older versions.
+
+**Media is read by URL, with byte ranges.** `<video src>`, mediabunny's
+`UrlSource` in import and in the export worker — nothing pulls a whole recording
+into memory to play or export it. None of those can send the token header, so
+`main.tsx` awaits `startSession()` before rendering: `POST /api/session` trades
+the token for an `HttpOnly; SameSite=Strict` cookie scoped to `/api`, and the
+guard accepts either. Sizes come from the `x-file-size` header, never
+`content-length`, which on a HEAD or a 206 is not the file's size.
+
+**Uploads are streamed and length-checked.** `DiskMediaStore.write` reads the
+body with `getReader()` into a `FileSink`, counts what reached the file, and
+refuses anything short of the declared length. Do not "simplify" it:
+`Bun.write(path, new Response(req.body))` never finishes reading a request body
+in Bun 1.3, and `for await` over one intermittently throws "undefined is not a
+function". Both were found the hard way.
+
+**Import still builds files in the browser's memory.** The remux and the proxy
+are produced into an `ArrayBuffer` and uploaded whole — Chrome only streams
+request bodies over HTTP/2, and the dev proxy speaks HTTP/1.1. Fine for minutes
+of footage, expensive for hours. Moving remux to the server, file to file, is
+the fix.
 
 **Bun is for the server, not for speed.** The heavy work — capture, decode,
 composite, encode — happens in the browser and never touches it. Bun earns its
@@ -177,7 +208,8 @@ production), and never served anywhere a foreign page can read it. The page
 itself is Host-checked too, because it is how the token is delivered.
 
 **Ids never reach a path unchecked.** `assertSafeId` refuses anything that is not
-a plain id before it is joined into a filename; `..%2F..%2Fescape` is a 400,
+a plain id before it is joined into a filename, and `assertSafeName` does the
+same for file names inside a take (no separators, no leading dot, no `..`); `..%2F..%2Fescape` is a 400,
 not a write outside the workspace.
 
 **Writes are atomic.** Write beside, then rename — a crash mid-save leaves the
@@ -186,7 +218,7 @@ whose project id differs from the URL, so one project cannot be saved under
 another's name.
 
 **Written so it can be hosted later without a rewrite.** Storage is behind
-`ProjectStore`; the workspace id is in every path although there is only ever
+`ProjectStore` and `DiskMediaStore`; the workspace id is in every path although there is only ever
 "local"; nothing about a project is held in server memory; and the three checks
 in `security.ts` are the one seam where real authentication would go. Keep all
 four true.
@@ -201,8 +233,8 @@ effects.ts      effect specs, and grade/effects -> CSS filter chains
 compositor.ts   drawFrame(ctx, project, time, resolve)  <- shared
 playback.ts     preview: a clock, one element per clip, composite per rAF
 export.ts       export: mediabunny decodes, drawFrame draws, WebCodecs encodes
-persistence.ts  OPFS projects, localStorage index and crash recovery
-media.ts        import: remux, probe, thumbnail, waveform peaks
+persistence.ts  projects via the server; crash recovery in localStorage
+media.ts        import: remux, probe, thumbnail, waveform peaks — read by URL
 captions.ts     SRT and WebVTT, both directions
 presets.ts      frame sizes, delivery presets, background looks
 ```
@@ -313,7 +345,9 @@ session.ts    one clock, N recorders, prepare() then a synchronous start()
      |
 track-recorder.ts   one MediaRecorder -> one file, timing and pause spans
      |
-storage.ts    OpfsWriter  ->  opfs-worker.ts  ->  disk
+storage.ts    OpfsWriter  ->  opfs-worker.ts  ->  OPFS (capture buffer)
+     |
+lib/sync.ts   finished take  ->  server  ->  ~/Cutline/.../recordings/
 ```
 
 Things worth knowing before editing any of it:
@@ -343,8 +377,9 @@ under a few milliseconds.
 
 ## Non-goals
 
-- **Not a server.** No upload, no accounts, no cloud render. Recordings live in
-  the Origin Private File System and stay there.
+- **Not a cloud service.** No accounts, no cloud render, nothing leaves the
+  machine. The server is local and bound to 127.0.0.1; recordings end up as
+  ordinary files under `~/Cutline`.
 - **Not cross-browser-at-any-cost.** Chrome and Edge are the target. WebCodecs
   and OPFS sync access handles are the reason.
 - **Not a mixer at record time.** See the decisions above.

@@ -17,7 +17,6 @@ import {
   ALL_FORMATS,
   AudioSample,
   AudioSampleSource,
-  BlobSource,
   BufferTarget,
   CanvasSource,
   Input,
@@ -27,6 +26,7 @@ import {
   QUALITY_LOW,
   QUALITY_MEDIUM,
   QUALITY_VERY_HIGH,
+  UrlSource,
   VideoSampleSink,
   WebMOutputFormat,
   getFirstEncodableAudioCodec,
@@ -34,7 +34,7 @@ import {
   type Quality,
   type VideoSample,
 } from "mediabunny";
-import { getMediaFile, getTrackFile } from "@/recorder/storage";
+import { mediaFileUrl, sessionFileUrl } from "@/lib/media-store";
 import { assetTimeFor, drawFrame, makeCanvas } from "./compositor";
 import type { MediaAsset, Project } from "./types";
 
@@ -86,11 +86,10 @@ function post(message: FromWorker, transfer: Transferable[] = []) {
  * The export always reads the original, never the proxy — a file delivered from
  * a 720p playback copy would be exactly the right length and visibly soft.
  */
-async function originalFile(asset: MediaAsset): Promise<File> {
-  if (asset.origin.type === "recording") {
-    return getTrackFile(asset.origin.sessionId, asset.origin.fileName);
-  }
-  return getMediaFile(asset.id);
+function originalUrl(asset: MediaAsset): string {
+  return asset.origin.type === "recording"
+    ? sessionFileUrl(asset.origin.sessionId, asset.origin.fileName)
+    : mediaFileUrl(asset.id);
 }
 
 /**
@@ -210,15 +209,20 @@ async function run(project: Project, options: WorkerOptions, audio: WorkerAudio 
         const asset = scaled.assets.find((a) => a.id === clip.assetId);
         if (!asset?.hasVideo || asset.offline) continue;
 
-        const file = await originalFile(asset);
+        const url = originalUrl(asset);
 
         if (asset.kind === "image") {
           // A still needs decoding exactly once, not per frame.
-          stills.set(clip.id, await createImageBitmap(file));
+          const response = await fetch(url);
+          if (!response.ok) throw new Error(`Could not read ${asset.name} (${response.status}).`);
+          stills.set(clip.id, await createImageBitmap(await response.blob()));
           continue;
         }
 
-        const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+        // Range requests, authorised by the session cookie: the worker reads a
+        // recording a window at a time rather than pulling gigabytes into
+        // memory before the first frame.
+        const input = new Input({ source: new UrlSource(url), formats: ALL_FORMATS });
         inputs.push(input);
         const videoTrack = await input.getPrimaryVideoTrack();
         if (!videoTrack) continue;

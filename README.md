@@ -6,9 +6,9 @@ A video editor that runs in the browser, with recording built in.
 
 Capture your screen, your camera and your microphone in one take. Each one is
 written to its own file on a shared clock — so afterwards you can re-time, mute,
-crop or replace any of them without disturbing the others. Nothing is uploaded;
-recordings live in the browser's private file system and the export runs on your
-own machine.
+crop or replace any of them without disturbing the others. Nothing leaves your
+machine: recordings, imports and projects are ordinary files under `~/Cutline`,
+and the export runs locally.
 
 ## What works today
 
@@ -85,7 +85,8 @@ preview exactly as it will in the edit, so the framing decision is made once.
   take can still be saved, rather than after
 - **Pause and resume**, with the paused spans recorded
 - **Streamed to disk** as it records, so a long screen capture neither fills
-  memory nor disappears if the tab dies
+  memory nor disappears if the tab dies — then moved into `~/Cutline` when the
+  take ends, and deleted from the browser only once every byte has arrived
 - **A library** to play back, download and delete past takes
 
 ## What does not work yet
@@ -105,9 +106,10 @@ bun run dev
 ```
 
 Then open http://localhost:5310. That starts two things together: the web app,
-and a small local server that keeps your projects as ordinary files in
-`~/Cutline` — visible, backed up by whatever backs up your home folder, and not
-one "clear browsing data" away from gone. The server listens on 127.0.0.1 only.
+and a small local server that keeps your projects, recordings and imported
+media as ordinary files in `~/Cutline` — visible, backed up by whatever backs up
+your home folder, and not one "clear browsing data" away from gone. The server
+listens on 127.0.0.1 only, and every request needs a per-run token.
 
 `bun run start` builds the app and serves everything from the one process.
 
@@ -132,7 +134,7 @@ an oscillator are indistinguishable from a camera and a microphone as far as
 - **`/dev-check.html`** covers the recorder: chunk ordering, the OPFS worker,
   track offsets, pause accounting, reading files back.
 - **`/dev-editor-check.html`** covers the edit model, linked clips, subtitles,
-  import and export — then **decodes the file it just exported and reads its
+  moving a take to the server, import and export — then **decodes the file it just exported and reads its
   pixels**, checking that the background, the screen layer, the camera overlay,
   the text, the captions, an effect and a colour grade all actually arrived.
 

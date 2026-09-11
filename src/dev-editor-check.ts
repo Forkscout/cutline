@@ -13,7 +13,10 @@
 import { ALL_FORMATS, BlobSource, Input, VideoSampleSink } from "mediabunny";
 import type { ArmedSource } from "./recorder/types";
 import { RecordingSession } from "./recorder/session";
-import { deleteSession } from "./recorder/storage";
+import { listLocalSessionIds } from "./recorder/storage";
+import { deleteSession, listSessions as listServerSessions } from "./lib/media-store";
+import { startSession } from "./lib/server";
+import { syncLocalRecordings } from "./lib/sync";
 import { importSession } from "./editor/media";
 import {
   apply,
@@ -178,6 +181,7 @@ async function frameCanvas(blob: Blob, at: number): Promise<CanvasRenderingConte
 /* ------------------------------------------------------------------ run */
 
 async function run() {
+  await startSession();
   /* --- pure logic, no I/O ------------------------------------------ */
   log("editing model", "dim");
 
@@ -339,6 +343,14 @@ async function run() {
   await wait(3000);
   const meta = await session.stop();
   check("recorded three tracks", meta.tracks.length === 3);
+
+  const synced = await syncLocalRecordings();
+  check(
+    "take uploaded to the server",
+    (await listServerSessions()).some((s) => s.id === meta.id),
+    `${synced.files} files, ${(synced.bytes / 1024).toFixed(0)} KB`,
+  );
+  check("local copy removed only after upload", !(await listLocalSessionIds()).includes(meta.id));
 
   /* --- import and lay out ------------------------------------------ */
   log("\nimporting (remux, probe, thumbnail, waveform)", "dim");

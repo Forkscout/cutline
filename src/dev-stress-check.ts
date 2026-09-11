@@ -15,9 +15,11 @@
 import { ALL_FORMATS, BlobSource, Input, VideoSampleSink } from "mediabunny";
 import type { ArmedSource } from "./recorder/types";
 import { RecordingSession } from "./recorder/session";
-import { deleteSession, estimateUsage } from "./recorder/storage";
+import { deleteSession, estimateUsage } from "./lib/media-store";
+import { startSession } from "./lib/server";
+import { syncLocalRecordings } from "./lib/sync";
 import { importSession } from "./editor/media";
-import { assetFile } from "./editor/media";
+import { assetFile, assetUrl } from "./editor/media";
 
 const out = document.getElementById("log")!;
 const log = (msg: string, cls = "") =>
@@ -99,6 +101,7 @@ function syntheticAudio(): ArmedSource {
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function run() {
+  await startSession();
   /**
    * A hidden tab makes every number here a lie.
    *
@@ -150,6 +153,9 @@ async function run() {
   const meta = await session.stop();
   window.clearInterval(sampler);
   const elapsed = (performance.now() - started) / 1000;
+  // Measured after the timing above, so upload time does not pollute the
+  // write-throughput figure.
+  await syncLocalRecordings();
 
   const bytes = meta.tracks.reduce((n, t) => n + t.bytes, 0);
   const perSecond = bytes / elapsed;
@@ -237,7 +243,8 @@ async function run() {
 
     // A `<video>` is what the preview actually uses, and it is the half that
     // MediaRecorder's index-less output used to break.
-    const url = URL.createObjectURL(await assetFile(video, true));
+    // The URL playback actually uses, with range requests — not a blob.
+    const url = assetUrl(video, true);
     const el = document.createElement("video");
     el.src = url;
     el.muted = true;
@@ -256,7 +263,6 @@ async function run() {
       });
     });
     check("a <video> element can seek to the far end", seekable, `duration ${el.duration}`);
-    URL.revokeObjectURL(url);
   }
 
   await deleteSession(meta.id);

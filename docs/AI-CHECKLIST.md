@@ -382,12 +382,13 @@ walk any of them back.
 
 ### The bridge
 
-- [ ] **A local MCP server that reaches into the open tab**
-  **Problem** — MCP servers are processes; Cutline is a browser tab with its
-  project in that tab's private file system. A Node process cannot read another
-  origin's OPFS, and a page cannot listen on a port.
-  **Approach** — A small `cutline-mcp` process speaks MCP over stdio to the
-  agent and a WebSocket to the tab. The tab stays the source of truth, which
+- [ ] **An MCP endpoint that reaches into the open tab**
+  **Problem** — Projects, recordings and media are on disk now, behind the local
+  server, so an agent can read them. But the project being edited lives in the
+  tab's memory until it autosaves, and a page cannot listen on a port — edits
+  written to disk behind the tab's back would be overwritten by its next save.
+  **Approach** — `/mcp` on the existing server, speaking MCP over streamable
+  HTTP to the agent and a WebSocket to the tab. The tab stays the source of truth, which
   also means the user watches the agent's edits land live and can stop it. A
   headless mode — the bridge driving its own browser — is a later addition for
   batch work, not the first build.

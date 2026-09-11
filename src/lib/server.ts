@@ -9,18 +9,21 @@
 
 export class ServerUnavailable extends Error {
   constructor() {
-    super("The Cutline server is not running. Start it with `npm run dev`.");
+    super("The Cutline server is not running. Start it with `bun run dev`.");
     this.name = "ServerUnavailable";
   }
 }
 
+/** Empty inside a worker, where there is no document; the cookie covers it. */
 function token(): string {
+  if (typeof document === "undefined") return "";
   return document.querySelector('meta[name="cutline-token"]')?.getAttribute("content") ?? "";
 }
 
 export async function api(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
-  headers.set("x-cutline-token", token());
+  const secret = token();
+  if (secret) headers.set("x-cutline-token", secret);
   let response: Response;
   try {
     response = await fetch(path, { ...init, headers });
@@ -54,4 +57,24 @@ export async function serverAvailable(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+let session: Promise<boolean> | null = null;
+
+/**
+ * Exchanges the page's token for the session cookie that media requests need.
+ *
+ * Must finish before anything renders a `<video>` pointing at the server, or
+ * the first media request goes out without credentials. Resolves false rather
+ * than throwing when the server is down, because recording still works then.
+ */
+export function startSession(): Promise<boolean> {
+  session ??= api("/api/session", { method: "POST" })
+    .then((r) => r.ok)
+    .catch(() => false)
+    .then((ok) => {
+      if (!ok) session = null; // Try again next time rather than caching a failure.
+      return ok;
+    });
+  return session;
 }

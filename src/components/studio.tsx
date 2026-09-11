@@ -25,6 +25,7 @@ import { listDevices, onDeviceChange, primePermissions } from "@/recorder/device
 import type { DeviceLists } from "@/recorder/devices";
 import { RecordingSession } from "@/recorder/session";
 import { requestPersistence } from "@/recorder/storage";
+import { syncLocalRecordings } from "@/lib/sync";
 import { ModeArt } from "@/components/studio-art";
 import { LevelMeter } from "@/components/level-meter";
 import { Button } from "@/components/ui/button";
@@ -282,6 +283,9 @@ export function Studio({
     try {
       const problems = session.errors();
       const meta = await session.stop();
+      // Start moving the take to disk now; the library waits on this same
+      // sync before it lists anything.
+      void syncLocalRecordings().catch(() => undefined);
       setSources([]);
       setMode(null);
       setBytes({});

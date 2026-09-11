@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Copy, FilePlus2, FolderOpen, Loader2, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { listSessions } from "@/recorder/storage";
+import { listSessions } from "@/lib/media-store";
+import { syncLocalRecordings } from "@/lib/sync";
 import type { SessionMeta } from "@/recorder/types";
 import { importSession } from "@/editor/media";
 import { createProject, projectFromSession } from "@/editor/project";
@@ -53,7 +54,13 @@ export function Projects({ onOpen }: { onOpen: (project: Project) => void }) {
         setServerError(err instanceof Error ? err.message : "Could not reach the Cutline server.");
         setProjects([]);
       });
-    void listSessions().then(setSessions);
+    // Takes still in the browser go up first, or a recording made a moment ago
+    // would be missing from "start from a recording".
+    void syncLocalRecordings()
+      .catch(() => undefined)
+      .then(() => listSessions())
+      .then(setSessions)
+      .catch(() => setSessions([]));
   }, []);
 
   useEffect(reload, [reload]);
@@ -61,6 +68,9 @@ export function Projects({ onOpen }: { onOpen: (project: Project) => void }) {
   const open = async (id: string) => {
     setBusy("Opening…");
     try {
+      // Sync before checking for offline media, or every asset still in the
+      // browser would be marked missing.
+      await syncLocalRecordings().catch(() => undefined);
       const project = await loadProject(id);
       if (!project) {
         toast.error("That project could not be read.");

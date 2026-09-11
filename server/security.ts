@@ -18,6 +18,10 @@
 
 import { timingSafeEqual } from "node:crypto";
 import type { MiddlewareHandler } from "hono";
+import { getCookie } from "hono/cookie";
+
+/** Carries the same secret as the header, for requests that cannot set one. */
+export const SESSION_COOKIE = "cutline_session";
 
 export interface GuardOptions {
   token: string;
@@ -69,7 +73,10 @@ export function guard(options: GuardOptions): MiddlewareHandler {
       return c.json({ error: "Origin not allowed" }, 403);
     }
 
-    const token = c.req.header("x-cutline-token") ?? "";
+    // The header is what fetch() sends; the cookie is what <video>, <img> and
+    // range reads send, since they cannot set headers. Same secret, and the
+    // cookie is SameSite=Strict, so a foreign site's page never carries it.
+    const token = c.req.header("x-cutline-token") || getCookie(c, SESSION_COOKIE) || "";
     if (!sameSecret(token, options.token)) {
       return c.json({ error: "Missing or wrong token" }, 401);
     }
