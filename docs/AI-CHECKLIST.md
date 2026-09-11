@@ -365,3 +365,148 @@ test harness does exactly that — so the machinery exists.
   **Test** — A set of instructions with known expected action sequences; assert
   the produced actions match, and that every one of them is reversible with a
   single undo.
+
+---
+
+## 7. An agent that edits the whole video
+
+Section 0 is Cutline calling models. This section is the inverse: a model — in
+Claude Code, Claude Desktop, or any MCP client — calling Cutline. Both can
+exist; this one needs no model of Cutline's own, because the agent brings it.
+
+It is more reachable here than in most editors because of a decision already
+made: **the project is plain JSON and every edit is a serialisable reducer
+action.** An agent does not need to operate the interface. It sends the same
+actions the interface sends, they land in the same undo stack, and the user can
+walk any of them back.
+
+### The bridge
+
+- [ ] **A local MCP server that reaches into the open tab**
+  **Problem** — MCP servers are processes; Cutline is a browser tab with its
+  project in that tab's private file system. A Node process cannot read another
+  origin's OPFS, and a page cannot listen on a port.
+  **Approach** — A small `cutline-mcp` process speaks MCP over stdio to the
+  agent and a WebSocket to the tab. The tab stays the source of truth, which
+  also means the user watches the agent's edits land live and can stop it. A
+  headless mode — the bridge driving its own browser — is a later addition for
+  batch work, not the first build.
+  **Test** — Start the bridge, open a project, call `get_project` from an MCP
+  client; assert the JSON matches what the tab holds, byte for byte.
+
+- [ ] **Tools generated from the reducer, not written beside it**
+  **Problem** — A hand-written tool list drifts from the reducer the first time
+  an action is added, and the agent then either cannot do something the UI can
+  or does it with the wrong shape.
+  **Approach** — One schema per `Action` variant, from which both the MCP tool
+  definitions and runtime validation are generated. Typed, described tools per
+  action rather than one generic `apply` — models choose far better from
+  specific tools with specific descriptions.
+  **Test** — Assert every variant of `Action` has a tool, and that a malformed
+  call is rejected with the validation error rather than reaching the reducer.
+
+### Eyes — the tools that matter most
+
+An agent that cannot see its output ships broken frames. That sentence is where
+the earliest version of this repository started; the compositor can now draw any
+frame on demand, so this is finally cheap.
+
+- [ ] **`render_frame(time)` returns an image**
+  **Problem** — Without it the agent edits blind and reports success from the
+  JSON, which is exactly how a frozen scene or a cropped face gets called done.
+  **Approach** — Run `drawFrame` at the requested time into an offscreen canvas
+  at a modest resolution and return it as an image. Add a contact-sheet variant
+  that samples a range, because one frame at one guessed time proves almost
+  nothing.
+  **Test** — Request a frame at a time where a known layer is visible; assert
+  the returned image contains that layer's colour at its placed position.
+
+- [ ] **Hearing and reading, alongside seeing**
+  **Problem** — Half the defects that ship are audio: a silent stretch, a
+  clipped peak. No image shows them.
+  **Approach** — `audio_envelope(range)` from the peaks already computed at
+  import, and `transcript(range)` once section 1 exists.
+  **Test** — Plant a silence; assert the envelope reports it at the right time.
+
+- [ ] **The agent verifies before it reports**
+  **Problem** — The failure this whole section exists to prevent is an agent
+  saying "done" after one look.
+  **Approach** — The server's instructions require sampling the touched range
+  and running the section 6 quality check before a task is reported complete.
+  Put it in the tool descriptions, not only in a prompt the client may drop.
+  **Test** — Give the agent a task with a planted defect in the touched range;
+  assert it reports the defect rather than success.
+
+### Animations
+
+- [ ] **Native layers first**
+  **Problem** — Rendering a lower third through a separate framework produces
+  a baked video nobody can re-time or retype.
+  **Approach** — Titles, lower thirds, callouts and simple motion use the text
+  and shape layers, keyframes and transitions that already exist. They export
+  through `drawFrame`, stay editable by the user afterwards, and cost nothing
+  to render. The agent should reach past them only when they genuinely cannot
+  do the job.
+  **Test** — Ask for a lower third; assert it arrives as text and shape clips
+  with keyframes, not as an imported video.
+
+- [ ] **Remotion or HyperFrames for what native layers cannot do**
+  **Problem** — Charts, data visualisation, code walkthroughs and dense motion
+  graphics are beyond a layer-and-keyframe system, and are exactly what a
+  code-writing agent is good at.
+  **Approach** — The agent writes a composition; the bridge renders it — both
+  frameworks render through headless Chrome, which belongs in the Node process,
+  not the tab — to a video file **with an alpha channel**; the result is
+  imported as an ordinary asset and placed on a track as an overlay. From that
+  point it is just a clip.
+  **Test** — Render a composition with a transparent background over a solid
+  colour clip; export; assert the solid colour shows through where the
+  animation is empty.
+
+- [ ] **Verify alpha survives the whole path — before building the above**
+  **Problem** — `<video>` plays transparent VP9 WebM in Chrome, but the export
+  path decodes through WebCodecs, and alpha support there is much less certain.
+  An overlay that is transparent in the preview and black in the export is the
+  worst possible outcome, because it looks fine until delivery.
+  **Approach** — Test import, remux, preview and export with a transparent file
+  first. If WebCodecs drops alpha, fall back to a PNG sequence or a separate
+  matte clip, and decide that before the animation tool is written.
+  **Test** — The test above, run on its own, is the gate for this section.
+
+- [ ] **Keep the source next to the render**
+  **Problem** — A rendered animation is a dead end: changing one word means
+  asking the agent to regenerate the whole thing from memory.
+  **Approach** — Store the composition source with the asset, so the agent or
+  the user can edit it and re-render in place.
+  **Test** — Change a string in a stored composition, re-render, and assert the
+  clip on the timeline updated without moving.
+
+### Control, and its limits
+
+- [ ] **Full control of the project, not of the machine**
+  **Problem** — "Full control" is a phrase that is fine for a timeline and not
+  fine for a user's recordings.
+  **Approach** — Tools are scoped to the open project. No tool deletes
+  recordings or projects. Export writes a new file and never overwrites one.
+  **Test** — Assert the tool list contains nothing that can remove a file
+  outside the project's own scratch space.
+
+- [ ] **One undo step per agent turn, named**
+  **Problem** — Forty reducer actions in forty history entries makes "undo what
+  the agent just did" forty key presses.
+  **Approach** — Coalesce each agent turn into one history entry, labelled with
+  the instruction: *Agent: tighten the intro*. The history panel already exists.
+  **Test** — Run a multi-action agent turn; assert a single undo restores the
+  prior state exactly.
+
+- [ ] **Sandbox the code the agent writes**
+  **Problem** — Rendering a Remotion or HyperFrames composition is running
+  code an agent wrote, on the user's machine.
+  **Approach** — Render in a separate process with a time limit, no network
+  access, and writes confined to a scratch directory. Fail closed.
+  **Test** — Submit a composition that tries to read outside its directory and
+  one that tries to fetch a URL; assert both are refused.
+
+> Framework details in this section — HyperFrames especially — are from memory,
+> not from checking the current packages. Confirm how each one renders and
+> whether it can emit alpha before designing the bridge around it.
