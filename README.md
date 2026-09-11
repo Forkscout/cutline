@@ -117,8 +117,16 @@ listens on 127.0.0.1 only, and every request needs a per-run token.
 
 Right-click anything with sound — a clip on the timeline or an item in the
 media pool — and choose **Generate captions**. The captions land where that
-clip is heard, and captions under other clips are left alone. The Captions
+clip is heard, and captions under other clips are left alone. They show in a
+Captions lane under the timeline's ruler — click one to go there, double-click
+to edit it — and on the picture while the playhead is inside one. The Captions
 panel does the same with a choice of language.
+
+Captions and the transcript are two things. The transcript is every word with
+its own time, kept with the media file; captions are lines made from it for
+viewers. Editing or deleting captions leaves the transcript alone, and it is
+the transcript an agent reads (the `transcript` tool) to time a cut, a title or
+an animation to a word.
 
 Transcription goes through a speech-to-text service with an OpenAI-compatible
 API — hosted with a key, or on your own machine. whisper.cpp's server is free

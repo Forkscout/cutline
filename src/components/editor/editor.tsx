@@ -802,6 +802,7 @@ export function Editor({
             onSeek={(t) => engineRef.current?.seek(t)}
             dispatch={dispatch}
             onDropAsset={(assetId, trackId, start) => insertAsset(assetId, trackId, start)}
+            onOpenCaptions={() => setLeftTab("captions")}
             onAutoCaption={(id, options) => void autoCaption(id, options)}
           />
         </ResizablePanel>

@@ -400,7 +400,7 @@ export const EDITOR_TOOLS = {
     title: "Transcript",
     readOnly: true,
     description:
-      "What is said on the timeline, word by word, each with its timeline time — from transcripts made by auto-captions (the Captions panel). Use it to find a moment by what was said, to cut on a word, or to check captions against speech. Empty until a transcript has been made.",
+      "What is said on the timeline, word by word, each with its timeline time — from transcripts made by auto-captions (right-click a clip → Generate captions, or the Captions panel). Use it to find a moment by what was said, to cut on a word, or to check captions against speech. Empty until a transcript has been made.",
     input: {
       start: z.number().min(0).optional().describe("Range start, seconds; default the beginning"),
       end: z.number().min(0).optional().describe("Range end, seconds; default the end"),

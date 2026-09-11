@@ -380,6 +380,13 @@ survives, and it replaces only cues that overlap this asset's clips, so a
 second speaker's captions are kept. Transcript, captions and switching them on
 are one undo step.
 
+**Captions have a lane on the timeline**, under the ruler, once there are any.
+`trackAtClientY` counts its height: a row between the ruler and the tracks that
+the drag maths did not know about would drop a dragged clip one track off. The
+Captions panel folds its Style section by default — open, it is taller than
+most panels and left the cue list no height, so generated captions looked
+missing.
+
 ## How the editor fits together
 
 ```

@@ -20,6 +20,7 @@ import {
   Volume2,
   VolumeX,
   Sparkles,
+  Captions,
 } from "lucide-react";
 import type { Action } from "@/editor/project";
 import type { AutoCaptionOptions } from "@/components/editor/auto-captions";
@@ -38,6 +39,8 @@ import { cn } from "@/lib/utils";
 
 const HEADER_WIDTH = 150;
 const RULER_HEIGHT = 28;
+/** The captions lane under the ruler, there once the project has captions. */
+const CAPTION_LANE_HEIGHT = 22;
 /** Snap when within this many pixels — a distance, not a duration, so it feels
  *  the same at every zoom level. */
 const SNAP_PX = 8;
@@ -116,6 +119,7 @@ export function Timeline({
   dispatch,
   onDropAsset,
   onAutoCaption,
+  onOpenCaptions,
 }: {
   project: Project;
   time: number;
@@ -128,8 +132,11 @@ export function Timeline({
   onDropAsset: (assetId: string, trackId: string, start: number) => void;
   /** Transcribes the clip's source and captions where it is heard. */
   onAutoCaption?: (assetId: string, options?: AutoCaptionOptions) => void;
+  /** Double-clicking a caption opens the Captions panel to edit it. */
+  onOpenCaptions?: () => void;
 }) {
   const [pxPerSec, setPxPerSec] = useState(70);
+  const captionLane = project.captions.length > 0 ? CAPTION_LANE_HEIGHT : 0;
   const [snapping, setSnapping] = useState(true);
   const lanesRef = useRef<HTMLDivElement>(null);
 
@@ -173,14 +180,14 @@ export function Timeline({
       const lanes = lanesRef.current;
       if (!lanes) return null;
       const rect = lanes.getBoundingClientRect();
-      let offset = rect.top + RULER_HEIGHT - lanes.scrollTop;
+      let offset = rect.top + RULER_HEIGHT + captionLane - lanes.scrollTop;
       for (const track of project.tracks) {
         if (clientY >= offset && clientY < offset + track.height) return track;
         offset += track.height;
       }
       return null;
     },
-    [project.tracks],
+    [project.tracks, captionLane],
   );
 
   const scrub = (event: React.PointerEvent) => {
@@ -362,6 +369,19 @@ export function Timeline({
       <div className="flex min-h-0 flex-1">
         <div className="shrink-0 overflow-hidden border-r" style={{ width: HEADER_WIDTH }}>
           <div style={{ height: RULER_HEIGHT }} className="border-b bg-muted/30" />
+          {captionLane > 0 && (
+            <div
+              style={{ height: captionLane }}
+              className={cn(
+                "flex items-center gap-1 border-b px-1.5 text-[11px] font-medium",
+                !project.captionsEnabled && "text-muted-foreground",
+              )}
+            >
+              <Captions className="size-3 shrink-0 text-muted-foreground" />
+              Captions
+              {!project.captionsEnabled && <span className="text-[10px] font-normal">· off</span>}
+            </div>
+          )}
           {project.tracks.map((track, index) => (
             <TrackHeader
               key={track.id}
@@ -374,7 +394,7 @@ export function Timeline({
         </div>
 
         <div ref={lanesRef} className="relative min-w-0 flex-1 overflow-auto">
-          <div style={{ width: contentWidth, minHeight: totalHeight + RULER_HEIGHT }}>
+          <div style={{ width: contentWidth, minHeight: totalHeight + RULER_HEIGHT + captionLane }}>
             <div
               className="sticky top-0 z-20 cursor-ew-resize border-b bg-muted/60 backdrop-blur select-none"
               style={{ height: RULER_HEIGHT }}
@@ -407,6 +427,30 @@ export function Timeline({
                 <MarkerPin key={marker.id} marker={marker} pxPerSec={pxPerSec} dispatch={dispatch} />
               ))}
             </div>
+
+            {captionLane > 0 && (
+              <div
+                className={cn("relative border-b", !project.captionsEnabled && "opacity-50")}
+                style={{ height: captionLane }}
+              >
+                {project.captions.map((cue) => (
+                  <button
+                    key={cue.id}
+                    type="button"
+                    title={`${cue.text}\nClick to go there · double-click to edit`}
+                    className={cn(
+                      "absolute inset-y-0.5 truncate rounded-sm border bg-muted px-1 text-left text-[10px] leading-4 hover:border-primary/60",
+                      time >= cue.start && time < cue.end && "border-primary",
+                    )}
+                    style={{ left: cue.start * pxPerSec, width: Math.max(2, (cue.end - cue.start) * pxPerSec) }}
+                    onClick={() => onSeek(cue.start)}
+                    onDoubleClick={() => onOpenCaptions?.()}
+                  >
+                    {cue.text}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {project.tracks.map((track) => (
               <div

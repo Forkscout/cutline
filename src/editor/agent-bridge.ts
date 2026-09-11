@@ -475,7 +475,7 @@ export class AgentBridge {
         const words = wordsOnTimeline(project).filter((w) => w.end > from && w.start < to);
         if (words.length === 0) {
           const any = project.assets.some((a) => a.transcript);
-          return [text(any ? "Nothing is said in that range." : "No transcript yet. Generate captions in the Captions panel first.")];
+          return [text(any ? "Nothing is said in that range." : "No transcript yet. Ask the user to right-click a clip with sound and choose Generate captions.")];
         }
         return [
           json({

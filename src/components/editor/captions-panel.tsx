@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Download, Plus, Sparkles, Trash2, Upload } from "lucide-react";
+import { ChevronRight, Download, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { parseSubtitles, toSrt, toVtt } from "@/editor/captions";
 import type { Action } from "@/editor/project";
@@ -207,6 +207,7 @@ export function CaptionsPanel({
 }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const style = project.captionStyle;
+  const [styleOpen, setStyleOpen] = useState(false);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -257,10 +258,10 @@ export function CaptionsPanel({
         <AutoCaptions project={project} onAutoCaption={onAutoCaption} />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+      <div className="min-h-24 flex-1 overflow-y-auto p-2">
         {project.captions.length === 0 ? (
           <p className="p-2 text-[11px] text-muted-foreground">
-            No captions. Generate them, import an SRT or VTT file, or add cues by hand.
+            No captions. Right-click a clip with sound and choose Generate captions, import an SRT or VTT file, or add cues by hand.
           </p>
         ) : (
           <div className="space-y-1.5">
@@ -298,8 +299,19 @@ export function CaptionsPanel({
         )}
       </div>
 
-      <div className="space-y-2.5 border-t p-2">
-        <Label className="text-[11px] font-medium">Style</Label>
+      {/* Folded by default: open, it is taller than most panels and left the
+          cue list with no height at all — generated captions looked missing. */}
+      <div className={cn("shrink-0 border-t", styleOpen && "max-h-[55%] overflow-y-auto")}>
+        <button
+          className="flex w-full items-center gap-1 px-2 py-1.5 text-[11px] font-medium hover:bg-muted/50"
+          aria-expanded={styleOpen}
+          onClick={() => setStyleOpen((open) => !open)}
+        >
+          <ChevronRight className={cn("size-3 transition-transform", styleOpen && "rotate-90")} />
+          Style
+        </button>
+        {styleOpen && (
+        <div className="space-y-2.5 px-2 pb-2">
         <NumberSlider label="Size" value={style.fontSize} min={16} max={120} step={1}
           format={(v) => `${Math.round(v)}px`} dispatch={dispatch}
           onChange={(v, c) => dispatch({ type: "setCaptionStyle", patch: { fontSize: v } }, c)} />
@@ -329,6 +341,8 @@ export function CaptionsPanel({
           onClick={() => download(toVtt(project.captions), `${project.name}.vtt`, "text/vtt")}>
           Export WebVTT
         </Button>
+        </div>
+        )}
       </div>
     </div>
   );
