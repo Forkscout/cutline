@@ -11,6 +11,9 @@
 
 import type { ArmedSource } from "./recorder/types";
 import { RecordingSession } from "./recorder/session";
+import { CursorCapture } from "./lib/cursor-capture";
+import { deleteSession as deleteServerSession, sessionFileUrl } from "./lib/media-store";
+import { api, startSession } from "./lib/server";
 // The recorder is tested against its own capture buffer, before any sync.
 import {
   deleteLocalSession as deleteSession,
@@ -93,6 +96,9 @@ async function run() {
     : [syntheticVideo("camera", 320, 240), syntheticAudio()];
   log(`arming ${sources.length} synthetic sources…`);
 
+  // The cursor track travels over a WebSocket, which authenticates with the
+  // session cookie rather than the header token.
+  await startSession();
   const session = await RecordingSession.prepare(sources, { name: "pipeline check" });
   check("session prepared", session.trackCount === sources.length, `${session.trackCount} tracks`);
 
@@ -101,17 +107,21 @@ async function run() {
   // recorded duration against what the wall clock actually did.
   const wallStart = performance.now();
   session.start();
+  const cursor = await CursorCapture.start(session.id, session.clockOriginWall, { surface: "monitor" });
   await wait(2500);
   session.pause();
+  cursor?.pause();
   const pauseStart = performance.now();
   log("pausing…");
   await wait(600);
   session.resume();
+  cursor?.resume();
   const pausedFor = performance.now() - pauseStart;
   await wait(1500);
   const wallTotal = performance.now() - wallStart;
 
   const meta = await session.stop();
+  const cursorSamples = await cursor?.stop();
   log(`wall clock ${Math.round(wallTotal)}ms, of which ${Math.round(pausedFor)}ms paused`);
   log(`\nsession ${meta.id}`);
   log(JSON.stringify(meta, null, 2));
@@ -163,6 +173,31 @@ async function run() {
     );
   }
 
+  /* --- the cursor track, sampled by the server on the same clock ------- */
+  if (!cursor) {
+    log("cursor track skipped — the server does not sample the cursor on this platform", "dim");
+  } else {
+    const text = await (await api(sessionFileUrl(meta.id, "cursor.jsonl"))).text();
+    const [headerLine, ...rows] = text.trim().split("\n");
+    const header = JSON.parse(headerLine ?? "{}") as { screens?: unknown[]; originWall?: number };
+    const samples = rows.map((r) => JSON.parse(r) as [number, number, number, number]);
+    const times = samples.map((s) => s[0]);
+    const recorded = Math.max(...meta.tracks.map((t) => t.offsetMs + t.durationMs));
+    check("cursor track recorded", samples.length > 0 && samples.length === cursorSamples,
+      `${samples.length} samples written (a still cursor collapses to a few)`);
+    check("cursor header names the displays", (header.screens?.length ?? 0) > 0,
+      `${header.screens?.length ?? 0} display(s)`);
+    check("cursor times run forwards inside the take",
+      times.every((t, i) => t >= 0 && t <= recorded + 150 && (i === 0 || t >= (times[i - 1] ?? 0))),
+      `${times[0]}ms … ${times[times.length - 1]}ms of ${recorded}ms`);
+    // The decisive one: with the pause left in, the last sample would land
+    // ~pausedFor ms after the end of the recorded content.
+    const last = times[times.length - 1] ?? 0;
+    check("paused time is cut out of the cursor track", Math.abs(last - recorded) < 250,
+      `last sample ${last}ms vs ${recorded}ms recorded, ${Math.round(pausedFor)}ms paused`);
+    log(`cursor sampling began ${times[0]}ms into the take`, "dim");
+  }
+
   const listed = await listSessions();
   check("session appears in the library", listed.some((s) => s.id === meta.id));
 
@@ -171,6 +206,9 @@ async function run() {
     log("\nkept — open the Library tab to see it");
   } else {
     await deleteSession(meta.id);
+    // The server holds the cursor track for this take; the take itself never
+    // reached the server, so this is the only trace to tidy.
+    if (cursor) await deleteServerSession(meta.id);
     const after = await listSessions();
     check("delete removes it", !after.some((s) => s.id === meta.id));
   }

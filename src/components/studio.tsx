@@ -26,6 +26,7 @@ import type { DeviceLists } from "@/recorder/devices";
 import { RecordingSession } from "@/recorder/session";
 import { requestPersistence } from "@/recorder/storage";
 import { syncLocalRecordings } from "@/lib/sync";
+import { CursorCapture } from "@/lib/cursor-capture";
 import { ModeArt } from "@/components/studio-art";
 import { LevelMeter } from "@/components/level-meter";
 import { Button } from "@/components/ui/button";
@@ -152,6 +153,7 @@ export function Studio({
   const [noiseSuppression, setNoiseSuppression] = useState(true);
 
   const sessionRef = useRef<RecordingSession | null>(null);
+  const cursorRef = useRef<CursorCapture | null>(null);
 
   const setPhase = useCallback(
     (next: RecorderPhase) => {
@@ -283,6 +285,9 @@ export function Studio({
     try {
       const problems = session.errors();
       const meta = await session.stop();
+      const cursor = cursorRef.current;
+      cursorRef.current = null;
+      await cursor?.stop();
       // Start moving the take to disk now; the library waits on this same
       // sync before it lists anything.
       void syncLocalRecordings().catch(() => undefined);
@@ -323,6 +328,21 @@ export function Studio({
       sessionRef.current = session;
       session.start();
       setPhase("recording");
+
+      // The cursor track, sampled by the local server on the same clock.
+      // Best-effort: a take never waits on it, or fails for want of it.
+      const screen = sources.find((s) => s.kind === "screen")?.stream.getVideoTracks()[0];
+      if (screen) {
+        const settings = screen.getSettings() as { displaySurface?: string; width?: number; height?: number };
+        void CursorCapture.start(session.id, session.clockOriginWall, {
+          surface: settings.displaySurface,
+          width: settings.width,
+          height: settings.height,
+        }).then((capture) => {
+          if (sessionRef.current === session) cursorRef.current = capture;
+          else void capture?.stop(true);
+        });
+      }
     } catch (err) {
       sessionRef.current = null;
       setPhase("idle");
@@ -334,6 +354,8 @@ export function Studio({
     const session = sessionRef.current;
     if (!session) return;
     sessionRef.current = null;
+    void cursorRef.current?.stop(true);
+    cursorRef.current = null;
     await session.abort();
     setSources([]);
     setMode(null);
@@ -347,9 +369,11 @@ export function Studio({
     if (!session) return;
     if (phase === "recording") {
       session.pause();
+      cursorRef.current?.pause();
       setPhase("paused");
     } else if (phase === "paused") {
       session.resume();
+      cursorRef.current?.resume();
       setPhase("recording");
     }
   };

@@ -34,10 +34,24 @@ computer-vision problem nobody should have to solve.
 Every take recorded before this lands can never have auto-zoom. Every take
 after it can, whenever the feature is written.
 
-The capture side is small: a `pointermove` and `pointerdown` listener is not
-enough (the page only sees its own window), so this needs the
-`CaptureController`/`getDisplayMedia` metadata where available, and otherwise a
-documented limitation. Worth investigating properly before building on it.
+**Done on macOS.** The page cannot see the cursor outside its own window, and
+no capture API reports it, but the local server runs on the same machine: it
+samples `NSEvent.mouseLocation` and `pressedMouseButtons` at 60 Hz through a
+long-running JXA process (no permission prompt, nothing compiled) for the length
+of every take with a screen, and writes `recordings/<id>/cursor.jsonl` on the
+session clock with paused time cut out. The library marks takes that have one.
+
+Still open:
+- **Windows and Linux samplers.** `GetCursorPos`/`GetAsyncKeyState` and
+  `XQueryPointer` behind the same `CursorService`; today those platforms record
+  without a cursor track and say so.
+- **Mapping into the picture for window and tab captures.** A full-screen
+  capture maps through the display frames in the header; a window moves, and
+  its bounds over time are not recorded yet.
+- **The first ~90 ms.** Sampling starts once the socket and the sampler are up,
+  so a take's opening moment has no cursor.
+- **Using it.** Auto-zoom and cursor smoothing are not built — but every take
+  from here on can have them.
 
 ### 2. A local server — decided
 

@@ -94,7 +94,15 @@ export class DiskMediaStore {
     for (const id of ids) {
       try {
         assertSafeId(id);
-        out.push(JSON.parse(await readFile(path.join(this.recordings, id, "meta.json"), "utf8")));
+        const meta = JSON.parse(await readFile(path.join(this.recordings, id, "meta.json"), "utf8")) as {
+          createdAt?: number;
+          cursor?: { bytes: number };
+        };
+        // Written by the server during the take, not uploaded with it, so the
+        // recorder's meta cannot know about it; the listing says instead.
+        const cursorBytes = await this.size(path.join(this.recordings, id, "cursor.jsonl"));
+        if (cursorBytes) meta.cursor = { bytes: cursorBytes };
+        out.push(meta);
       } catch {
         // No meta yet (upload in progress) or unreadable: not a listable take.
       }

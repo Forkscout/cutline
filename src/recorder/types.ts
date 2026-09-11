@@ -67,6 +67,11 @@ export interface SessionMeta {
   /** Total session length including paused time, ms. */
   durationMs: number;
   tracks: TrackMeta[];
+  /**
+   * Set by the server's listing when a cursor track was recorded alongside the
+   * take (`cursor.jsonl`, written by the server, never by this recorder).
+   */
+  cursor?: { bytes: number };
 }
 
 export type RecorderPhase = "idle" | "arming" | "recording" | "paused" | "finalizing";

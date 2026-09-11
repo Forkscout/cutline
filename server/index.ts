@@ -22,7 +22,10 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { serveStatic, upgradeWebSocket, websocket } from "hono/bun";
 import { setCookie } from "hono/cookie";
+import type { WSContext } from "hono/ws";
+import type { ToCursor } from "../src/lib/cursor-protocol";
 import { TabBridge } from "./bridge";
+import { CursorService, type CursorRecording } from "./cursor";
 import { loadMcpToken, mcpHandler } from "./mcp";
 import { DiskMediaStore, TruncatedUpload, fileResponse } from "./media";
 import { BadId, DiskProjectStore, cutlineHome } from "./store";
@@ -40,6 +43,7 @@ const DIST = path.resolve(import.meta.dir, "../dist");
 const projects = new DiskProjectStore(cutlineHome(), WORKSPACE);
 const media = new DiskMediaStore(cutlineHome(), WORKSPACE);
 const bridge = new TabBridge();
+const cursor = new CursorService();
 const MCP_TOKEN = await loadMcpToken(cutlineHome());
 
 const hosts = localhostPairs(PORT, WEB_PORT);
@@ -152,6 +156,56 @@ api.delete("/media/:id", async (c) => {
   await media.deleteMedia(c.req.param("id"));
   return c.json({ ok: true });
 });
+
+/* --- cursor track --- */
+
+/**
+ * Opened by the recorder page for the length of a take. The socket's lifetime
+ * is the sampler's: a tab that dies mid-take closes it, and the sampler stops
+ * with whatever it had already written.
+ */
+api.get(
+  "/cursor",
+  upgradeWebSocket(() => {
+    let recording: CursorRecording | null = null;
+    const reply = (ws: WSContext, message: unknown) => ws.send(JSON.stringify(message));
+    return {
+      onMessage: async (event, ws) => {
+        let message: ToCursor;
+        try {
+          message = JSON.parse(String(event.data)) as ToCursor;
+        } catch {
+          return;
+        }
+        try {
+          if (message.type === "start") {
+            const file = media.recordingFile(message.sessionId, "cursor.jsonl");
+            recording = await cursor.start(file, message.originWall, message.capture ?? {});
+            reply(ws, { type: "started" });
+          } else if (message.type === "pause") {
+            recording?.pause(message.wall);
+          } else if (message.type === "resume") {
+            recording?.resume(message.wall);
+          } else if (message.type === "stop") {
+            const samples = recording ? await cursor.stop(recording) : 0;
+            recording = null;
+            reply(ws, { type: "stopped", samples });
+          } else if (message.type === "discard") {
+            if (recording) await cursor.discard(recording);
+            recording = null;
+            reply(ws, { type: "stopped", samples: 0 });
+          }
+        } catch (err) {
+          reply(ws, { type: "error", message: err instanceof Error ? err.message : String(err) });
+        }
+      },
+      onClose: () => {
+        if (recording) void cursor.stop(recording);
+        recording = null;
+      },
+    };
+  }),
+);
 
 /* --- exports --- */
 

@@ -429,7 +429,21 @@ track-recorder.ts   one MediaRecorder -> one file, timing and pause spans
 storage.ts    OpfsWriter  ->  opfs-worker.ts  ->  OPFS (capture buffer)
      |
 lib/sync.ts   finished take  ->  server  ->  ~/Cutline/.../recordings/
+
+lib/cursor-capture.ts  ->  /api/cursor  ->  server/cursor.ts  ->  cursor.jsonl
 ```
+
+**The cursor track is recorded by the server, not the page.** A page only
+receives pointer events over its own window, and during a screen recording the
+user is somewhere else. The server samples the OS cursor at 60 Hz (macOS: a
+JXA loop over `NSEvent`, no permission needed) while the recorder page holds a
+WebSocket open; the socket's lifetime is the sampler's, so a dead tab stops it.
+Times are the session clock's content time — `clockOriginWall` from the
+session, pauses cut out on the server — the same base as `offsetMs` and
+`durationMs`. It is best-effort by design: a missing server or an unsupported
+platform costs the take its cursor track, never the take. `dev-check` asserts
+the pause is cut out by checking that the last sample lands at the recorded
+length rather than ~a pause later.
 
 Things worth knowing before editing any of it:
 

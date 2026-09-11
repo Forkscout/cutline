@@ -83,6 +83,11 @@ export class RecordingSession {
     return session;
   }
 
+  /** The clock's origin as wall-clock ms, for anything recorded outside this page. */
+  get clockOriginWall(): number {
+    return performance.timeOrigin + this.clockOrigin;
+  }
+
   get trackCount(): number {
     return this.recorders.length;
   }

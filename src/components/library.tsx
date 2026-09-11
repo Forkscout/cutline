@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Camera, Download, HardDrive, Mic, Monitor, Scissors, Trash2, Volume2 } from "lucide-react";
+import { Camera, Download, HardDrive, Mic, Monitor, MousePointer2, Scissors, Trash2, Volume2 } from "lucide-react";
 import { toast } from "sonner";
 import type { SessionMeta, SourceKind, TrackMeta } from "@/recorder/types";
 import { deleteSession, estimateUsage, listSessions, sessionFileUrl } from "@/lib/media-store";
@@ -193,6 +193,9 @@ export function Library({
                         const { icon: Icon, tint } = ICON[t.kind];
                         return <Icon key={t.id} className={cn("size-3.5", tint)} />;
                       })}
+                      {session.cursor && (
+                        <MousePointer2 className="size-3.5 text-muted-foreground" aria-label="Cursor track" />
+                      )}
                     </div>
                     <span className="text-xs tabular-nums text-muted-foreground">
                       {formatBytes(session.tracks.reduce((n, t) => n + t.bytes, 0))}
@@ -242,6 +245,13 @@ export function Library({
                 {session.tracks.map((track) => (
                   <TrackRow key={track.id} session={session} track={track} />
                 ))}
+                {session.cursor && (
+                  <div className="flex items-center gap-2 rounded-lg border p-3 text-xs text-muted-foreground">
+                    <MousePointer2 className="size-4" />
+                    <span className="font-medium text-foreground">Cursor track</span>
+                    <span>{formatBytes(session.cursor.bytes)} · positions and clicks, for auto-zoom later</span>
+                  </div>
+                )}
                 <Alert>
                   <AlertDescription className="text-xs leading-relaxed">
                     Scrubbing inside these files is unreliable until they are remuxed —
