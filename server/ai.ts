@@ -159,7 +159,10 @@ export class AiSettings {
     };
     const key = patch.apiKey === undefined ? existing?.apiKey : patch.apiKey;
     if (key) next.apiKey = key;
-    data.providers = existing ? data.providers.map((p) => (p.id === id ? next : p)) : [...data.providers, next];
+    // The service connected last is the one used: connecting OpenRouter after a
+    // local server means "use OpenRouter now". It used to mean nothing at all —
+    // the first one added kept answering.
+    data.providers = [next, ...data.providers.filter((p) => p.id !== id)];
     await this.write(data);
     return next;
   }
@@ -179,7 +182,7 @@ export class AiSettings {
     await this.write(data);
   }
 
-  /** The first connected provider that transcribes, in the order they were added. */
+  /** The most recently connected provider that can transcribe. */
   async resolveTranscribe(): Promise<Provider | null> {
     return (await this.read()).providers.find((p) => p.capabilities?.transcribe) ?? null;
   }
