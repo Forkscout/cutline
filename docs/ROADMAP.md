@@ -122,9 +122,9 @@ into, kept because the reasoning is the part worth reading.
   It refuses to run in a background tab, because a throttled tab makes every one
   of those numbers wrong by an order of magnitude while still looking like a
   result. It now also has an upload to measure.
-- **Import remuxes in the browser's memory.** The remux and the proxy are built
-  into an `ArrayBuffer` and uploaded whole. Move both to the server, reading and
-  writing files directly, so an hour-long take costs no browser memory at all.
+- ~~Import remuxes in the browser's memory.~~ Done: the remux runs on the server
+  file to file, on a worker; proxies (which need the browser's encoder) stream
+  up in positional pieces; waveforms decode a batch at a time.
 - ~~Interrupted takes are invisible.~~ Done: the library finds takes with no
   `meta.json` and no live recording lock, and offers to recover (rebuild the
   metadata by probing the files, after cutting each back to its last complete

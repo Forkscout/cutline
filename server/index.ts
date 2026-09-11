@@ -26,6 +26,7 @@ import type { WSContext } from "hono/ws";
 import type { ToCursor } from "../src/lib/cursor-protocol";
 import { TabBridge } from "./bridge";
 import { CursorService, type CursorRecording } from "./cursor";
+import { Remuxer } from "./remux";
 import { loadMcpToken, mcpHandler } from "./mcp";
 import { DiskMediaStore, TruncatedUpload, fileResponse } from "./media";
 import { BadId, DiskProjectStore, cutlineHome } from "./store";
@@ -44,15 +45,28 @@ const projects = new DiskProjectStore(cutlineHome(), WORKSPACE);
 const media = new DiskMediaStore(cutlineHome(), WORKSPACE);
 const bridge = new TabBridge();
 const cursor = new CursorService();
+const remuxer = new Remuxer();
 const MCP_TOKEN = await loadMcpToken(cutlineHome());
 
 const hosts = localhostPairs(PORT, WEB_PORT);
 const origins = [WEB_PORT, PORT].flatMap((p) => [`http://localhost:${p}`, `http://127.0.0.1:${p}`]);
 
-/** Streams an upload to disk, holding the declared length to account. */
+/**
+ * Streams an upload to disk, holding the declared length to account. With
+ * `?upload=<id>&at=<byte>` it is one piece of a positional upload instead, and
+ * `&final=1` completes it (see `DiskMediaStore.writeAt`).
+ */
 async function upload(c: Context, target: string): Promise<Response> {
   const declared = c.req.header("content-length");
-  const bytes = await media.write(target, c.req.raw.body, declared === undefined ? null : Number(declared));
+  const expected = declared === undefined ? null : Number(declared);
+  const uploadId = c.req.query("upload");
+  if (uploadId !== undefined) {
+    const at = Number(c.req.query("at") ?? "0");
+    if (!Number.isSafeInteger(at) || at < 0) return c.json({ error: "Bad position" }, 400);
+    const bytes = await media.writeAt(target, uploadId, c.req.raw.body, expected, at, c.req.query("final") === "1");
+    return c.json({ ok: true, bytes });
+  }
+  const bytes = await media.write(target, c.req.raw.body, expected);
   return c.json({ ok: true, bytes });
 }
 
@@ -139,6 +153,21 @@ api.on(["GET", "HEAD"], "/recordings/:sid/files/:name", (c) =>
     c.req.header("range"),
   ),
 );
+
+/**
+ * Remuxes one of a take's files into an indexed copy, file to file, on a
+ * worker — so an hour-long take never passes through the browser's memory.
+ */
+api.post("/recordings/:sid/remux", async (c) => {
+  const sid = c.req.param("sid");
+  const { from, to } = await c.req.json<{ from: string; to: string }>();
+  const source = media.recordingFile(sid, from);
+  const target = media.recordingFile(sid, to);
+  if ((await media.size(source)) === null) return c.json({ error: "No such file" }, 404);
+  const started = performance.now();
+  const bytes = await remuxer.remux(source, target);
+  return c.json({ ok: true, bytes, ms: Math.round(performance.now() - started) });
+});
 
 api.put("/recordings/:sid/files/:name", (c) =>
   upload(c, media.recordingFile(c.req.param("sid"), c.req.param("name"))),

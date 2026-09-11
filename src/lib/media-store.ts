@@ -8,6 +8,7 @@
  * ranges rather than whole files.
  */
 
+import type { StreamTargetChunk } from "mediabunny";
 import type { SessionMeta } from "@/recorder/types";
 import { api, apiJson } from "./server";
 
@@ -90,6 +91,59 @@ async function put(url: string, body: Blob | ArrayBuffer): Promise<void> {
 export const writeSessionFile = (sessionId: string, fileName: string, data: Blob | ArrayBuffer) =>
   put(sessionFileUrl(sessionId, fileName), data);
 export const writeMediaFile = (fileId: string, data: Blob | ArrayBuffer) => put(mediaFileUrl(fileId), data);
+
+/**
+ * Asks the server to remux a take's file into an indexed copy. False when it
+ * cannot — an older server, or a file it failed to read — so the caller can
+ * fall back to doing it in the page.
+ */
+export async function remuxOnServer(sessionId: string, from: string, to: string): Promise<boolean> {
+  try {
+    const response = await api(`/api/recordings/${enc(sessionId)}/remux`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ from, to }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A sink for mediabunny's `StreamTarget` that uploads each chunk at its byte
+ * position, so a file the page produces never has to be held whole. `done`
+ * settles once the server has moved the finished file into place.
+ */
+export function positionalUpload(url: string): {
+  writable: WritableStream<StreamTargetChunk>;
+  done: Promise<void>;
+} {
+  const upload = crypto.randomUUID();
+  let settle!: { resolve: () => void; reject: (reason: unknown) => void };
+  const done = new Promise<void>((resolve, reject) => {
+    settle = { resolve, reject };
+  });
+  const put = async (query: string, body: Blob) => {
+    const response = await api(`${url}?upload=${upload}&${query}`, { method: "PUT", body });
+    if (!response.ok) throw new Error(`Upload of ${url} failed (${response.status}).`);
+  };
+  const writable = new WritableStream<StreamTargetChunk>({
+    // Copied into a Blob: the muxer may reuse the buffer behind this view.
+    write: (chunk) => put(`at=${chunk.position}`, new Blob([chunk.data.slice()])),
+    close: async () => {
+      try {
+        await put("at=0&final=1", new Blob([]));
+        settle.resolve();
+      } catch (err) {
+        settle.reject(err);
+        throw err;
+      }
+    },
+    abort: (reason) => settle.reject(reason),
+  });
+  return { writable, done };
+}
 
 export async function deleteSession(sessionId: string): Promise<void> {
   await apiJson(`/api/recordings/${enc(sessionId)}`, { method: "DELETE" });

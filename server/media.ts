@@ -12,7 +12,7 @@
  * complete.
  */
 
-import { mkdir, readdir, readFile, rename, rm, stat, statfs } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rename, rm, stat, statfs } from "node:fs/promises";
 import path from "node:path";
 import { assertSafeId, BadId } from "./store";
 
@@ -164,6 +164,47 @@ export class DiskMediaStore {
       await rm(temp, { force: true });
       throw err;
     }
+  }
+
+  /**
+   * One piece of an upload, written at its byte position.
+   *
+   * For output the browser produces as it goes — a proxy, a fallback remux —
+   * which is too large to hold in memory and cannot be sent as one streamed
+   * request (Chrome only streams request bodies over HTTP/2). A muxer writes
+   * mostly in order but goes back at the end to fill in sizes and the seek
+   * index, so each piece lands where it says, in a part file named for the
+   * upload; `final` moves the finished file into place. The browser sends
+   * pieces one at a time, never concurrently.
+   */
+  async writeAt(
+    target: string,
+    uploadId: string,
+    body: ReadableStream<Uint8Array> | null,
+    expected: number | null,
+    at: number,
+    final: boolean,
+  ): Promise<number> {
+    assertSafeId(uploadId);
+    const part = `${target}.${uploadId}.upload`;
+    await mkdir(path.dirname(part), { recursive: true });
+    const handle = await open(part, (await this.size(part)) === null ? "w+" : "r+");
+    let written = 0;
+    try {
+      // getReader(), not for-await: see `write` above.
+      const reader = body?.getReader();
+      while (reader) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        await handle.write(value, 0, value.byteLength, at + written);
+        written += value.byteLength;
+      }
+    } finally {
+      await handle.close();
+    }
+    if (expected !== null && written !== expected) throw new TruncatedUpload(expected, written);
+    if (final) await rename(part, target);
+    return written;
   }
 
   /** Bytes used by this workspace, and how much the disk could still hold. */

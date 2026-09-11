@@ -8,20 +8,22 @@
  * frame. So every recording is remuxed once on import: a copy, not a
  * re-encode — the same packets, written into a container that has an index.
  *
- * Everything imported lives on the local server. Reads go through URLs with
- * byte ranges — mediabunny's `UrlSource` for decoding, plain `src` attributes
- * for playback — so a multi-gigabyte recording is read a window at a time
- * rather than pulled into memory whole.
+ * Nothing here holds a whole file in memory. The remux runs on the server,
+ * file to file. When it cannot, and for proxies (which need the browser's
+ * encoder), output streams to the server a chunk at a time. Reads go through
+ * URLs with byte ranges, and waveforms are computed from audio decoded a batch
+ * at a time.
  */
 
 import {
   ALL_FORMATS,
+  AudioSampleSink,
   BlobSource,
-  BufferTarget,
   Conversion,
   Input,
   Output,
   QUALITY_LOW,
+  StreamTarget,
   UrlSource,
   WebMOutputFormat,
   type Source,
@@ -31,11 +33,12 @@ import { api } from "@/lib/server";
 import {
   mediaFileExists,
   mediaFileUrl,
+  positionalUpload,
+  remuxOnServer,
   sessionFileExists,
   sessionFileSize,
   sessionFileUrl,
   writeMediaFile,
-  writeSessionFile,
 } from "@/lib/media-store";
 import type { AssetKind, MediaAsset } from "./types";
 
@@ -53,6 +56,8 @@ export function proxyName(fileName: string): string {
 const PROXY_TRIGGER_HEIGHT = 1200;
 /** What the proxy is scaled to. */
 const PROXY_HEIGHT = 720;
+/** Streamed output is sent in pieces of about this size. */
+const UPLOAD_PIECE = 8 * 1024 * 1024;
 
 /** A fresh drop from the user's disk, or a URL for anything already on the server. */
 type MediaInput = File | string;
@@ -68,6 +73,37 @@ async function blobOf(input: MediaInput): Promise<Blob> {
   return response.blob();
 }
 
+type VideoOptions = NonNullable<Parameters<typeof Conversion.init>[0]["video"]>;
+
+/**
+ * Runs a conversion whose output streams to `uploadUrl` instead of piling up
+ * in memory. A proper WebM, not an append-only one: the muxer goes back at the
+ * end to write the duration and the seek index, and those writes are uploaded
+ * at their positions like everything else — an append-only file would have
+ * neither, which is the very defect the remux exists to fix.
+ */
+async function convertTo(
+  input: MediaInput,
+  uploadUrl: string,
+  video?: VideoOptions,
+  onProgress?: (fraction: number) => void,
+): Promise<void> {
+  const source = new Input({ source: sourceOf(input), formats: ALL_FORMATS });
+  const upload = positionalUpload(uploadUrl);
+  const output = new Output({
+    format: new WebMOutputFormat(),
+    target: new StreamTarget(upload.writable, { chunked: true, chunkSize: UPLOAD_PIECE }),
+  });
+  try {
+    const conversion = await Conversion.init({ input: source, output, ...(video ? { video } : {}) });
+    if (onProgress) conversion.onProgress = (fraction) => onProgress(fraction);
+    await conversion.execute();
+    await upload.done;
+  } finally {
+    source.dispose();
+  }
+}
+
 /**
  * A small VP8 transcode for playback.
  *
@@ -75,23 +111,13 @@ async function blobOf(input: MediaInput): Promise<Blob> {
  * three other layers are being composited, and VP8 decodes faster than it
  * compresses well. Quality is deliberately low — nobody grades from a proxy.
  */
-async function makeProxy(input: MediaInput, onProgress?: (fraction: number) => void): Promise<ArrayBuffer> {
-  const source = new Input({ source: sourceOf(input), formats: ALL_FORMATS });
-  const output = new Output({ format: new WebMOutputFormat(), target: new BufferTarget() });
-  try {
-    const conversion = await Conversion.init({
-      input: source,
-      output,
-      video: { height: PROXY_HEIGHT, fit: "contain", codec: "vp8", bitrate: QUALITY_LOW },
-    });
-    if (onProgress) conversion.onProgress = (fraction) => onProgress(fraction);
-    await conversion.execute();
-    const buffer = output.target.buffer;
-    if (!buffer) throw new Error("Proxy produced no output.");
-    return buffer;
-  } finally {
-    source.dispose();
-  }
+function makeProxy(input: MediaInput, uploadUrl: string, onProgress?: (fraction: number) => void): Promise<void> {
+  return convertTo(
+    input,
+    uploadUrl,
+    { height: PROXY_HEIGHT, fit: "contain", codec: "vp8", bitrate: QUALITY_LOW },
+    onProgress,
+  );
 }
 
 const IMAGE_TYPES = /^image\//;
@@ -158,26 +184,6 @@ async function probeImage(file: File): Promise<Probe> {
   return probe;
 }
 
-/**
- * Remuxes into memory. For a long take that is a lot of memory — a streaming
- * upload would avoid it, but Chrome only streams request bodies over HTTP/2,
- * and the dev proxy speaks HTTP/1.1. Moving the remux to the server, which can
- * write file to file, is the real fix and is on the roadmap.
- */
-async function remux(input: MediaInput): Promise<ArrayBuffer> {
-  const source = new Input({ source: sourceOf(input), formats: ALL_FORMATS });
-  const output = new Output({ format: new WebMOutputFormat(), target: new BufferTarget() });
-  try {
-    const conversion = await Conversion.init({ input: source, output });
-    await conversion.execute();
-    const buffer = output.target.buffer;
-    if (!buffer) throw new Error("Remux produced no output.");
-    return buffer;
-  } finally {
-    source.dispose();
-  }
-}
-
 /* -------------------------------------------------------------- thumbnails */
 
 const THUMB_WIDTH = 240;
@@ -230,38 +236,51 @@ async function firstFrameBitmap(input: MediaInput): Promise<ImageBitmap | null> 
 export const PEAKS_PER_SECOND = 40;
 
 /**
- * Min/max pairs per bucket, normalised to 0..1.
+ * Min/max pairs per bucket, -1..1, the loudest of every channel.
  *
- * Decoded at 8 kHz mono rather than the file's real rate: a waveform is a
- * picture of loudness, and decoding a ten-minute take at 48 kHz stereo to draw
- * a 200-pixel-wide strip wastes about forty times the memory it needs.
+ * Decoded a sample batch at a time and folded straight into the buckets, so
+ * memory stays flat however long the take is. The old way decoded the whole
+ * file at once — about 115 MB of floats for an hour of audio before a single
+ * peak could be drawn.
  */
 export async function computePeaks(input: MediaInput, durationSec: number): Promise<number[] | undefined> {
+  const source = new Input({ source: sourceOf(input), formats: ALL_FORMATS });
   try {
-    const sampleRate = 8000;
-    const context = new OfflineAudioContext(1, Math.max(1, Math.ceil(durationSec * sampleRate)), sampleRate);
-    // decodeAudioData genuinely needs every byte, so this is the one read that
-    // is whole. Audio is small next to video — minutes of Opus, not gigabytes.
-    const buffer = await context.decodeAudioData(await (await blobOf(input)).arrayBuffer());
-    const data = buffer.getChannelData(0);
+    const track = await source.getPrimaryAudioTrack();
+    if (!track) return undefined;
     const buckets = Math.max(1, Math.round(durationSec * PEAKS_PER_SECOND));
-    const perBucket = Math.max(1, Math.floor(data.length / buckets));
-    const peaks: number[] = [];
-    for (let i = 0; i < buckets; i += 1) {
-      let min = 0;
-      let max = 0;
-      const from = i * perBucket;
-      const to = Math.min(data.length, from + perBucket);
-      for (let j = from; j < to; j += 1) {
-        const v = data[j] ?? 0;
-        if (v < min) min = v;
-        if (v > max) max = v;
+    const mins = new Float32Array(buckets);
+    const maxs = new Float32Array(buckets);
+    let plane = new Float32Array(0);
+
+    for await (const sample of new AudioSampleSink(track).samples()) {
+      try {
+        const frames = sample.numberOfFrames;
+        if (plane.length < frames) plane = new Float32Array(frames);
+        const perFrame = PEAKS_PER_SECOND / sample.sampleRate;
+        const first = sample.timestamp * PEAKS_PER_SECOND;
+        for (let channel = 0; channel < sample.numberOfChannels; channel += 1) {
+          sample.copyTo(plane, { planeIndex: channel, format: "f32-planar" });
+          for (let i = 0; i < frames; i += 1) {
+            const bucket = Math.floor(first + i * perFrame);
+            if (bucket < 0 || bucket >= buckets) continue;
+            const v = plane[i] ?? 0;
+            if (v < (mins[bucket] ?? 0)) mins[bucket] = v;
+            if (v > (maxs[bucket] ?? 0)) maxs[bucket] = v;
+          }
+        }
+      } finally {
+        sample.close();
       }
-      peaks.push(min, max);
     }
+
+    const peaks: number[] = [];
+    for (let i = 0; i < buckets; i += 1) peaks.push(mins[i] ?? 0, maxs[i] ?? 0);
     return peaks;
   } catch {
     return undefined;
+  } finally {
+    source.dispose();
   }
 }
 
@@ -316,7 +335,11 @@ export async function importSession(
 
     if (!(await sessionFileExists(session.id, editName))) {
       onProgress?.({ name: track.fileName, index, total, stage: "remuxing" });
-      await writeSessionFile(session.id, editName, await remux(sessionFileUrl(session.id, track.fileName)));
+      // On the server when it can: file to file, off the page entirely. The
+      // page is the fallback for a server that cannot, and it streams too.
+      if (!(await remuxOnServer(session.id, track.fileName, editName))) {
+        await convertTo(sessionFileUrl(session.id, track.fileName), sessionFileUrl(session.id, editName));
+      }
     }
 
     onProgress?.({ name: track.fileName, index, total, stage: "probing" });
@@ -346,12 +369,8 @@ export async function importSession(
       const proxy = proxyName(track.fileName);
       if (!(await sessionFileExists(session.id, proxy))) {
         onProgress?.({ name: track.fileName, index, total, stage: "proxy", fraction: 0 });
-        await writeSessionFile(
-          session.id,
-          proxy,
-          await makeProxy(editUrl, (fraction) =>
-            onProgress?.({ name: track.fileName, index, total, stage: "proxy", fraction }),
-          ),
+        await makeProxy(editUrl, sessionFileUrl(session.id, proxy), (fraction) =>
+          onProgress?.({ name: track.fileName, index, total, stage: "proxy", fraction }),
         );
       }
       asset.proxyName = proxy;
@@ -372,8 +391,9 @@ export async function importSession(
 
 /**
  * Imports arbitrary files the user dropped in or picked from disk. The file is
- * uploaded as-is; probing, thumbnails and the proxy all read the local copy,
- * which is already in hand and costs no round trip.
+ * uploaded as-is — a disk-backed File, which the browser streams rather than
+ * reading in; probing, thumbnails and the proxy all read the local copy, which
+ * is already in hand and costs no round trip.
  */
 export async function importFiles(
   files: File[],
@@ -411,10 +431,9 @@ export async function importFiles(
         const proxyId = `${fileId}.proxy`;
         if (!(await mediaFileExists(proxyId))) {
           onProgress?.({ name: file.name, index, total, stage: "proxy", fraction: 0 });
-          const bytes = await makeProxy(file, (fraction) =>
+          await makeProxy(file, mediaFileUrl(proxyId), (fraction) =>
             onProgress?.({ name: file.name, index, total, stage: "proxy", fraction }),
           );
-          await writeMediaFile(proxyId, new Blob([bytes], { type: "video/webm" }));
         }
         asset.proxyName = proxyId;
       }

@@ -195,11 +195,19 @@ refuses anything short of the declared length. Do not "simplify" it:
 in Bun 1.3, and `for await` over one intermittently throws "undefined is not a
 function". Both were found the hard way.
 
-**Import still builds files in the browser's memory.** The remux and the proxy
-are produced into an `ArrayBuffer` and uploaded whole — Chrome only streams
-request bodies over HTTP/2, and the dev proxy speaks HTTP/1.1. Fine for minutes
-of footage, expensive for hours. Moving remux to the server, file to file, is
-the fix.
+**Import never holds a whole file in memory.** The remux runs on the server —
+`POST /api/recordings/:id/remux`, mediabunny's `FilePathSource` to
+`FilePathTarget` on a Bun worker, so a long take neither passes through the
+browser nor stalls the thread answering range requests. What must happen in the
+page (proxies need the browser's encoder; a server that cannot remux falls back
+to the page) writes through `StreamTarget` into `positionalUpload`: each chunk
+is a `PUT ?upload=<id>&at=<byte>` into a part file, and `final=1` renames it.
+Positional, not append-only — the muxer goes back at the end to write the
+duration and the Cues, and an append-only WebM would have neither, which is the
+defect the remux exists to fix. Chrome only streams request bodies over HTTP/2,
+hence pieces rather than one streamed request. Waveforms decode through
+`AudioSampleSink` a batch at a time, all channels, instead of `decodeAudioData`
+on the whole file.
 
 **Bun is for the server, not for speed.** The heavy work — capture, decode,
 composite, encode — happens in the browser and never touches it. Bun earns its
