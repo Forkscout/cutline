@@ -91,7 +91,7 @@ export function CaptionsPanel({
               const active = time >= cue.start && time < cue.end;
               return (
                 <div key={cue.id}
-                  className={cn("space-y-1 rounded-md border p-1.5", active && "border-primary bg-primary/5")}>
+                  className={cn("space-y-1 rounded-md border p-1.5", active && "border-primary bg-muted")}>
                   <div className="flex items-center gap-1">
                     <button className="font-mono text-[10px] tabular-nums text-primary hover:underline"
                       onClick={() => onSeek(cue.start)}>

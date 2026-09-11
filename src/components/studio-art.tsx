@@ -22,9 +22,9 @@ function ScreenMock({ children }: { children?: React.ReactNode }) {
       </div>
       {/* A dock reads as "a desktop" faster than any icon would. */}
       <div className="flex items-end gap-1.5">
-        <div className="flex flex-1 gap-1.5 rounded-lg bg-surface-deep-foreground/15 p-1.5">
+        <div className="flex flex-1 gap-1.5 rounded-lg bg-white/10 p-1.5">
           {Array.from({ length: 8 }, (_, i) => (
-            <div key={i} className="h-4 flex-1 rounded bg-surface-deep-foreground/25" />
+            <div key={i} className="h-4 flex-1 rounded bg-white/20" />
           ))}
         </div>
         {children}
@@ -72,11 +72,11 @@ export function ModeArt({ mode }: { mode: "screen" | "camera" | "screen-camera" 
   }
 
   return (
-    <div className="flex size-full items-center justify-center gap-1.5 overflow-hidden rounded-xl bg-primary px-6">
+    <div className="flex size-full items-center justify-center gap-1.5 overflow-hidden rounded-xl bg-surface-deep px-6">
       {[0.35, 0.6, 0.45, 0.8, 1, 0.7, 0.9, 0.5, 0.75, 0.4, 0.55].map((h, i) => (
         <div
           key={i}
-          className="w-2 rounded-full bg-primary-foreground"
+          className="w-2 rounded-full bg-primary"
           style={{ height: `${h * 62}%` }}
         />
       ))}

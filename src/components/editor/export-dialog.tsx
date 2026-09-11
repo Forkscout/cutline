@@ -188,7 +188,7 @@ export function ExportDialog({ project }: { project: Project }) {
                 onClick={() => applyPreset(preset.id)}
                 className={cn(
                   "rounded-md border p-2 text-left transition-colors hover:border-primary/60 disabled:opacity-50",
-                  presetId === preset.id && "border-primary bg-primary/10",
+                  presetId === preset.id && "border-primary bg-muted",
                 )}
               >
                 <p className="truncate text-[11px] font-medium">{preset.label}</p>

@@ -82,8 +82,12 @@ Tailwind v4 (via `@tailwindcss/vite`, no config file — the theme lives in
 `@theme inline` in `src/index.css`) and **shadcn/ui**. `@/` resolves to `src/`.
 
 Plus Jakarta Sans for interface, JetBrains Mono for timecode and byte counts.
-The palette is a lime accent (`--primary`) on green-biased neutrals, with a
-deep forest green (`--surface-deep`) behind anything that stands in for a
+The palette is true neutrals — white surfaces in the light scheme, black in the
+dark — with a lime accent (`--primary`) kept for buttons, badges, focus rings
+and selected states. **No background or shadow is tinted green**: an earlier
+green-biased palette read as muddy, and the user asked for it gone. A selected
+card gets a lime border on a neutral fill, not a lime wash.
+`--surface-deep` (near-black) sits behind anything that stands in for a
 captured picture.
 
 **The app runs two schemes on purpose.** Capture and library are light — you are

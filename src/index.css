@@ -11,36 +11,38 @@
  * arranging, and the app should feel like paper. The editor stamps itself dark
  * regardless of the viewer's theme, because the picture is the thing being
  * judged there and a bright surround shifts how you read exposure and colour.
- * Both share one palette: a lime accent against green-biased neutrals, so the
- * two halves read as one product.
+ * Both share one palette: true neutrals — white in the light scheme, black in
+ * the dark — with lime kept for accents only: buttons, badges, focus rings,
+ * the active tab. No surface or shadow is tinted green; a green-cast grey read
+ * as muddy against every picture put in front of it.
  */
 :root {
   --radius: 0.85rem;
 
   --background: #ffffff;
-  --foreground: #101a0d;
+  --foreground: #0a0a0a;
   --card: #ffffff;
-  --card-foreground: #101a0d;
+  --card-foreground: #0a0a0a;
   --popover: #ffffff;
-  --popover-foreground: #101a0d;
+  --popover-foreground: #0a0a0a;
 
   --primary: #c3f53c;
-  --primary-foreground: #14300f;
+  --primary-foreground: #0a0a0a;
 
-  --secondary: #f3f5ee;
-  --secondary-foreground: #23301e;
-  --muted: #f5f6f1;
-  --muted-foreground: #6c7666;
-  --accent: #edf7d9;
-  --accent-foreground: #24380f;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --accent: #f4f4f5;
+  --accent-foreground: #18181b;
 
   --destructive: #e8453c;
-  --border: #e5e8de;
-  --input: #e5e8de;
-  --ring: #a8dd2c;
+  --border: #e4e4e7;
+  --input: #e4e4e7;
+  --ring: #a3d92b;
 
-  /* The deep green the reference uses behind capture thumbnails. */
-  --surface-deep: #14300f;
+  /* Behind capture thumbnails and anything standing in for a picture. */
+  --surface-deep: #0a0a0a;
   --surface-deep-foreground: #c3f53c;
   --record: #e8453c;
 
@@ -50,14 +52,14 @@
   --chart-4: #7c5cd6;
   --chart-5: #e8453c;
 
-  --sidebar: #fafbf7;
-  --sidebar-foreground: #101a0d;
+  --sidebar: #fafafa;
+  --sidebar-foreground: #0a0a0a;
   --sidebar-primary: #c3f53c;
-  --sidebar-primary-foreground: #14300f;
-  --sidebar-accent: #edf7d9;
-  --sidebar-accent-foreground: #24380f;
-  --sidebar-border: #e5e8de;
-  --sidebar-ring: #a8dd2c;
+  --sidebar-primary-foreground: #0a0a0a;
+  --sidebar-accent: #f4f4f5;
+  --sidebar-accent-foreground: #18181b;
+  --sidebar-border: #e4e4e7;
+  --sidebar-ring: #a3d92b;
 
   --font-sans: "Plus Jakarta Sans", ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
@@ -65,70 +67,70 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --background: #0b0f09;
-    --foreground: #eaefe4;
-    --card: #141a11;
-    --card-foreground: #eaefe4;
-    --popover: #171e14;
-    --popover-foreground: #eaefe4;
+    --background: #000000;
+    --foreground: #fafafa;
+    --card: #0f0f0f;
+    --card-foreground: #fafafa;
+    --popover: #141414;
+    --popover-foreground: #fafafa;
 
     --primary: #c3f53c;
-    --primary-foreground: #14300f;
+    --primary-foreground: #0a0a0a;
 
-    --secondary: #1d2519;
-    --secondary-foreground: #eaefe4;
-    --muted: #1a2117;
-    --muted-foreground: #8e9a86;
-    --accent: #23301b;
-    --accent-foreground: #d6f59a;
+    --secondary: #1a1a1a;
+    --secondary-foreground: #fafafa;
+    --muted: #161616;
+    --muted-foreground: #a1a1aa;
+    --accent: #1f1f1f;
+    --accent-foreground: #fafafa;
 
     --destructive: #f2645b;
-    --border: #262f21;
-    --input: #2c3626;
+    --border: #262626;
+    --input: #2a2a2a;
     --ring: #9ed42a;
 
-    --surface-deep: #12290e;
+    --surface-deep: #0a0a0a;
     --surface-deep-foreground: #c3f53c;
 
-    --sidebar: #101509;
-    --sidebar-foreground: #eaefe4;
-    --sidebar-accent: #23301b;
-    --sidebar-accent-foreground: #d6f59a;
-    --sidebar-border: #262f21;
+    --sidebar: #0a0a0a;
+    --sidebar-foreground: #fafafa;
+    --sidebar-accent: #1f1f1f;
+    --sidebar-accent-foreground: #fafafa;
+    --sidebar-border: #262626;
   }
 }
 
 :root[data-theme="dark"] {
-  --background: #0b0f09;
-  --foreground: #eaefe4;
-  --card: #141a11;
-  --card-foreground: #eaefe4;
-  --popover: #171e14;
-  --popover-foreground: #eaefe4;
+  --background: #000000;
+  --foreground: #fafafa;
+  --card: #0f0f0f;
+  --card-foreground: #fafafa;
+  --popover: #141414;
+  --popover-foreground: #fafafa;
 
   --primary: #c3f53c;
-  --primary-foreground: #14300f;
+  --primary-foreground: #0a0a0a;
 
-  --secondary: #1d2519;
-  --secondary-foreground: #eaefe4;
-  --muted: #1a2117;
-  --muted-foreground: #8e9a86;
-  --accent: #23301b;
-  --accent-foreground: #d6f59a;
+  --secondary: #1a1a1a;
+  --secondary-foreground: #fafafa;
+  --muted: #161616;
+  --muted-foreground: #a1a1aa;
+  --accent: #1f1f1f;
+  --accent-foreground: #fafafa;
 
   --destructive: #f2645b;
-  --border: #262f21;
-  --input: #2c3626;
+  --border: #262626;
+  --input: #2a2a2a;
   --ring: #9ed42a;
 
-  --surface-deep: #12290e;
+  --surface-deep: #0a0a0a;
   --surface-deep-foreground: #c3f53c;
 
-  --sidebar: #101509;
-  --sidebar-foreground: #eaefe4;
-  --sidebar-accent: #23301b;
-  --sidebar-accent-foreground: #d6f59a;
-  --sidebar-border: #262f21;
+  --sidebar: #0a0a0a;
+  --sidebar-foreground: #fafafa;
+  --sidebar-accent: #1f1f1f;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: #262626;
 }
 
 @theme inline {
