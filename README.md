@@ -178,6 +178,16 @@ whole turn is one undo step. It can render any frame, check the audio for gaps
 and clipping, and export the finished video to `~/Cutline` — and it is told to
 look before it reports.
 
+It works like a director rather than a button-presser. It reads the project's
+brief (the Brief tab: goal, platform, layout, brand, references, rules), asks
+you what is missing in a form that opens in the editor, looks at the footage
+first — graphics already burned into it, where you sit in the frame, what is
+said — and shows you the video in a few design themes to choose from. Then it
+builds one scene for your approval, and the rest from the theme you chose:
+titles, lists, flows, bars, lower thirds, the speaker moving into a side panel.
+Changing the look afterwards is one step. In Claude Code, `/mcp__cutline__direct`
+starts that workflow; `/mcp__cutline__review` checks an edit.
+
 **Chrome or Edge.** The recorder streams to disk through `createSyncAccessHandle`,
 which only exists in a worker, and the exporter encodes with WebCodecs. Neither
 has a fallback here, and pretending otherwise would just fail later and less

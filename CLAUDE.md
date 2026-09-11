@@ -421,6 +421,42 @@ review, and the gotchas. `guide` and `list_themes` are answered by the server,
 so an agent can read them before any editor is open. Agents follow the guide
 literally: when a tool changes, change the topic that teaches it.
 
+**Macros make graphics from the theme** (`editor/agent-macros.ts`):
+`layout_move` (the speaker to a side panel, picture-in-picture or full frame,
+cropped around `subjectX`), `add_title`, `add_points`, `add_chips`, `add_stat`,
+`add_flow`, `add_bars`, `add_lower_third`, `add_backdrop`. Each measures its
+text on a canvas in the theme's own faces, lays out in the space beside the
+speaker's panel — as it will be once a layout move settles, not while it is
+under way: the first version wrapped a title to the whole frame because it
+started mid-move — stacks under what the scene already shows, finds tracks
+with room, and tags each clip's role. One reducer action per clip, inside the
+agent's turn. The TreeFlux edit took ~1300 raw calls; the same scenes are a
+few dozen macro calls.
+
+**Web fonts reach the export.** Canvas text uses a face only once it has
+loaded, and the export worker has no document, so it never saw the page's CSS
+fonts: exports drew fallbacks while the preview showed the real face.
+`lib/fonts.ts` fetches each family a project's text uses from Google Fonts
+once, registers it for the page, and hands the same files to the export
+worker, which registers them before its first frame; frames an agent renders,
+the preview and the macros' measurements load them first too. A family
+installed on the machine is used as it is. Offline, text falls back, as it
+always did.
+
+**The client chooses from pictures and answers in the editor.**
+`preview_themes` draws one frame restyled in several themes side by side
+(`editor/styleframes.ts`); `theme_from_media` reads a logo's or a reference
+frame's colours and proposes an accent kept at 3:1 on the theme's background.
+`analyze_media` (`editor/analyze.ts`) decodes small grey frames across a video
+and finds burned-in graphics against each shot's median frame, the subject
+from where the picture moves, cuts and silences. On TreeFlux it found the
+source's own cards at 1.8–7.2 s and 9–22.4 s and the speaker at 0.54 — which
+had taken ffmpeg and a hand-written diff. In the region the subject is in, an
+appearance counts as a graphic only past 3 s: a hand is not a card.
+`ask_client` opens a form in the editor rather than using MCP's elicitation,
+which needs a session held open between client and server; this server is
+stateless on purpose, and the editor is where the client already is.
+
 ## Transcription and AI services
 
 **Not tied to one engine or one machine.** Transcription goes through a

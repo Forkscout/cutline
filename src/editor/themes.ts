@@ -217,6 +217,120 @@ export function contrast(a: string, b: string): number {
   return (x + 0.05) / (y + 0.05);
 }
 
+/* --------------------------------------------------- brand from a picture */
+
+export function rgbToHsl([r, g, b]: readonly number[]): [number, number, number] {
+  const [rn, gn, bn] = [r! / 255, g! / 255, b! / 255];
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  const h = max === rn ? (gn - bn) / d + (gn < bn ? 6 : 0) : max === gn ? (bn - rn) / d + 2 : (rn - gn) / d + 4;
+  return [h / 6, s, l];
+}
+
+export function hslToRgb([h, s, l]: readonly number[]): [number, number, number] {
+  if (s === 0) return [l! * 255, l! * 255, l! * 255];
+  const q = l! < 0.5 ? l! * (1 + s!) : l! + s! - l! * s!;
+  const p = 2 * l! - q;
+  const hue = (t: number) => {
+    const x = t < 0 ? t + 1 : t > 1 ? t - 1 : t;
+    if (x < 1 / 6) return p + (q - p) * 6 * x;
+    if (x < 1 / 2) return q;
+    if (x < 2 / 3) return p + (q - p) * (2 / 3 - x) * 6;
+    return p;
+  };
+  return [hue(h! + 1 / 3) * 255, hue(h!) * 255, hue(h! - 1 / 3) * 255];
+}
+
+export interface Swatch {
+  hex: string;
+  /** Fraction of the picture's opaque pixels near this colour. */
+  share: number;
+}
+
+/**
+ * The dominant colours of RGBA pixels: counted in coarse bins, then close bins
+ * merged. Transparent pixels — a logo's background — are left out.
+ */
+export function paletteOf(pixels: Uint8ClampedArray | number[], max = 8): Swatch[] {
+  const bins = new Map<number, { n: number; r: number; g: number; b: number }>();
+  let total = 0;
+  for (let i = 0; i + 3 < pixels.length; i += 4) {
+    if ((pixels[i + 3] ?? 255) < 128) continue;
+    const r = pixels[i]!, g = pixels[i + 1]!, b = pixels[i + 2]!;
+    const key = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+    const bin = bins.get(key) ?? { n: 0, r: 0, g: 0, b: 0 };
+    bin.n += 1;
+    bin.r += r;
+    bin.g += g;
+    bin.b += b;
+    bins.set(key, bin);
+    total += 1;
+  }
+  const sorted = [...bins.values()].sort((a, b) => b.n - a.n).map((b) => ({ n: b.n, rgb: [b.r / b.n, b.g / b.n, b.b / b.n] }));
+  const merged: { n: number; rgb: number[] }[] = [];
+  for (const bin of sorted) {
+    const near = merged.find((m) => Math.hypot(m.rgb[0]! - bin.rgb[0]!, m.rgb[1]! - bin.rgb[1]!, m.rgb[2]! - bin.rgb[2]!) < 48);
+    if (near) near.n += bin.n;
+    else merged.push({ ...bin });
+  }
+  return merged
+    .sort((a, b) => b.n - a.n)
+    .slice(0, max)
+    .map((m) => ({ hex: toHex(m.rgb), share: Math.round((m.n / Math.max(1, total)) * 1000) / 1000 }));
+}
+
+export interface BrandProposal {
+  overrides: ThemePatch;
+  accent: string;
+  /** Contrast of the accent on the theme's background after adjusting. */
+  contrast: number;
+  palette: Swatch[];
+  notes: string[];
+}
+
+/**
+ * Palette overrides that bring a brand's colour into `base`: the most
+ * prominent saturated colour becomes the accent, moved lighter or darker until
+ * it reads on the background (3:1, the bar for large type and graphics).
+ */
+export function brandOverrides(palette: Swatch[], base: Theme): BrandProposal {
+  const notes: string[] = [];
+  const bg = base.palette.background;
+  const dark = luminance(bg) < 0.3;
+  const candidates = palette
+    .map((s) => {
+      const [h, sat, l] = rgbToHsl(parseColor(s.hex) ?? [0, 0, 0]);
+      return { ...s, h, sat, l, score: s.share * sat * (l > 0.08 && l < 0.94 ? 1 : 0) };
+    })
+    .filter((c) => c.sat > 0.22 && c.score > 0)
+    .sort((a, b) => b.score - a.score);
+  const pick = candidates[0];
+  if (!pick) {
+    notes.push("No strong colour in the picture — it is mostly neutral; the theme's own accent is kept.");
+    return { overrides: {}, accent: base.palette.accent, contrast: Math.round(contrast(base.palette.accent, bg) * 100) / 100, palette, notes };
+  }
+  let [h, s, l] = [pick.h, pick.sat, pick.l];
+  let accent = toHex(hslToRgb([h, s, l]));
+  for (let i = 0; i < 40 && contrast(accent, bg) < 3; i += 1) {
+    l = dark ? Math.min(0.95, l + 0.02) : Math.max(0.05, l - 0.02);
+    accent = toHex(hslToRgb([h, s, l]));
+  }
+  if (accent !== pick.hex) notes.push(`${pick.hex} was moved to ${accent} so it reads on the ${dark ? "dark" : "light"} background.`);
+  const soft = dark ? 0.14 : 0.1;
+  const muted = dark ? 0.35 : 0.3;
+  return {
+    overrides: { palette: { accent, accentSoft: withAlpha(accent, soft), accentMuted: withAlpha(accent, muted) } },
+    accent,
+    contrast: Math.round(contrast(accent, bg) * 100) / 100,
+    palette,
+    notes,
+  };
+}
+
 /* -------------------------------------------------------------- roles */
 
 export function textStyleFor(role: ClipRole, theme: Theme): Partial<TextStyle> {

@@ -9,9 +9,11 @@
  */
 
 import { ALL_FORMATS, Input, UrlSource, VideoSampleSink, type VideoSample } from "mediabunny";
+import { loadFonts } from "@/lib/fonts";
 import { api } from "@/lib/server";
 import { assetTimeFor, drawFrame, visibleClips } from "./compositor";
 import { assetUrl } from "./media";
+import { fontsInUse } from "./themes";
 import type { Project } from "./types";
 
 export interface Still {
@@ -33,6 +35,8 @@ async function toBase64(blob: Blob): Promise<string> {
 
 /** Frames at each time, drawn at `width` with the project's aspect ratio. */
 export async function renderFrames(project: Project, times: number[], width: number): Promise<OffscreenCanvas[]> {
+  // What the export will draw: the same web fonts, loaded before the first frame.
+  await loadFonts(fontsInUse(project)).catch(() => []);
   const height = Math.max(2, Math.round((width * project.height) / project.width / 2) * 2);
   const scaled: Project = { ...project, width, height };
   const sinks = new Map<string, { input: Input; sink: VideoSampleSink | null }>();

@@ -34,6 +34,7 @@ import {
   type Quality,
   type VideoSample,
 } from "mediabunny";
+import { registerFonts, type FontFile } from "@/lib/fonts";
 import { mediaFileUrl, sessionFileUrl } from "@/lib/media-store";
 import { assetTimeFor, drawFrame, makeCanvas } from "./compositor";
 import type { MediaAsset, Project } from "./types";
@@ -57,7 +58,7 @@ export interface WorkerAudio {
 }
 
 export type ToWorker =
-  | { type: "run"; project: Project; options: WorkerOptions; audio: WorkerAudio | null }
+  | { type: "run"; project: Project; options: WorkerOptions; audio: WorkerAudio | null; fonts?: FontFile[] }
   | { type: "cancel" };
 
 export type FromWorker =
@@ -315,6 +316,8 @@ self.onmessage = async (event: MessageEvent<ToWorker>) => {
   }
   cancelled = false;
   try {
+    // Before the first frame: a face registered late draws the frames before it in a fallback.
+    if (message.fonts?.length) await registerFonts((self as unknown as { fonts: FontFaceSet }).fonts, message.fonts);
     await run(message.project, message.options, message.audio);
   } catch (err) {
     post({

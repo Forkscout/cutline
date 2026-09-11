@@ -11,7 +11,7 @@
 import { z } from "zod";
 import { listSessions } from "@/lib/media-store";
 import { capabilities, transcribe } from "@/lib/ai";
-import { apiJson } from "@/lib/server";
+import { api, apiJson } from "@/lib/server";
 import {
   ACTION_TOOLS,
   TAB_TOOLS,
@@ -28,7 +28,14 @@ import { exportProject } from "./export";
 import { audioEnvelope, describeChange, leanProject } from "./inspect";
 import { captionsForAsset, wordsOnTimeline, type Transcript } from "./transcript";
 import { readProperty } from "./keyframes";
-import { mergeTheme, themeById, themeOf } from "./themes";
+import { THEMES, brandOverrides, fontsInUse, mergeTheme, paletteOf, themeById, themeOf } from "./themes";
+import { themeSheet } from "./styleframes";
+import { analysisOf } from "./analyze";
+import { askClient, type ClientQuestion } from "./client-questions";
+import { assetUrl } from "./media";
+import { renderFrames as drawFrames } from "./snapshot";
+import { loadFonts } from "@/lib/fonts";
+import * as macros from "./agent-macros";
 import { importSession } from "./media";
 import {
   apply,
@@ -333,6 +340,17 @@ const text = (t: string): BridgeContent => ({ type: "text", text: t });
 const json = (value: unknown): BridgeContent => text(JSON.stringify(value));
 const round = (n: number) => Math.round(n * 1000) / 1000;
 
+let measurer: CanvasRenderingContext2D | null = null;
+
+/** Width of a line of text as the compositor will draw it: the same canvas font string. */
+function measureText(text: string, font: macros.Font): number {
+  measurer ??= document.createElement("canvas").getContext("2d");
+  if (!measurer) return text.length * font.size * 0.55;
+  measurer.font = `${font.weight} ${font.size}px ${font.family}`;
+  if ("letterSpacing" in measurer) (measurer as unknown as { letterSpacing: string }).letterSpacing = `${font.letterSpacing ?? 0}px`;
+  return Math.max(...text.split("\n").map((line) => measurer!.measureText(line).width));
+}
+
 export class AgentBridge {
   private ws: WebSocket | null = null;
   private stopped = false;
@@ -490,6 +508,23 @@ export class AgentBridge {
   }
 
   /** Applies an action as the agent's edit, joining the turn's undo step. */
+  /** Runs a macro against the live project; every clip it makes is committed inside the agent's turn. */
+  private async macro<T>(run: (ctx: macros.MacroContext) => T): Promise<T> {
+    // Text is measured in the faces it will be drawn in, so they load first.
+    await loadFonts(fontsInUse(this.host.history().present)).catch(() => []);
+    const ctx: macros.MacroContext = {
+      project: () => this.host.history().present,
+      commit: (action) => void this.commit(action),
+      measure: measureText,
+    };
+    try {
+      return run(ctx);
+    } catch (err) {
+      if (err instanceof macros.MacroError) throw new ToolError(err.message);
+      throw err;
+    }
+  }
+
   private commit(action: Action): { label: string; change: ReturnType<typeof describeChange> } {
     const bridge = this.current();
     if (bridge !== this) return bridge.commit(action);
@@ -627,6 +662,109 @@ export class AgentBridge {
           json({
             text: words.map((w) => w.text).join(" "),
             words: words.map((w) => ({ start: round(w.start), end: round(w.end), text: w.text })),
+          }),
+        ];
+      }
+      case "layoutMove":
+        return [json(await this.macro((ctx) => macros.layoutMove(ctx, raw as unknown as macros.LayoutMoveArgs)))];
+      case "addTitle":
+        return [json(await this.macro((ctx) => macros.addTitle(ctx, raw as unknown as macros.TitleArgs)))];
+      case "addPoints":
+        return [json(await this.macro((ctx) => macros.addPoints(ctx, raw as unknown as macros.PointsArgs)))];
+      case "addChips":
+        return [json(await this.macro((ctx) => macros.addChips(ctx, raw as unknown as macros.ChipsArgs)))];
+      case "addStat":
+        return [json(await this.macro((ctx) => macros.addStat(ctx, raw as unknown as macros.StatArgs)))];
+      case "addFlow":
+        return [json(await this.macro((ctx) => macros.addFlow(ctx, raw as unknown as macros.FlowArgs)))];
+      case "addBars":
+        return [json(await this.macro((ctx) => macros.addBars(ctx, raw as unknown as macros.BarsArgs)))];
+      case "addLowerThird":
+        return [json(await this.macro((ctx) => macros.addLowerThird(ctx, raw as unknown as macros.LowerThirdArgs)))];
+      case "addBackdrop":
+        return [json(await this.macro((ctx) => macros.addBackdrop(ctx, raw as unknown as macros.BackdropArgs)))];
+      case "previewThemes": {
+        const ids = (raw.themes as string[] | undefined) ?? THEMES.map((t) => t.id);
+        const sheet = await themeSheet(project, Number(raw.time), ids.map((id) => themeById(id)), (raw.width as number | undefined) ?? 480);
+        return [
+          { type: "image", data: sheet.data, mimeType: sheet.mimeType },
+          text(`Frame at ${raw.time}s in ${sheet.themes.map((t, i) => `${i + 1}. ${t.name} (${t.id})`).join(", ")}. Nothing was changed; set_theme applies one.`),
+        ];
+      }
+      case "themeFromMedia": {
+        const asset = project.assets.find((a) => a.id === raw.assetId);
+        if (!asset) throw new ToolError(`No asset ${String(raw.assetId)}. Import the logo or reference first; get_project lists assets.`);
+        if (!asset.hasVideo) throw new ToolError(`${asset.name} has no picture.`);
+        let pixels: Uint8ClampedArray;
+        const read = (source: CanvasImageSource, w: number, h: number) => {
+          const canvas = new OffscreenCanvas(96, Math.max(1, Math.round((96 * h) / w)));
+          const ctx = canvas.getContext("2d")!;
+          ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+          return ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        };
+        if (asset.kind === "image") {
+          const response = await api(assetUrl(asset));
+          const bitmap = await createImageBitmap(await response.blob());
+          pixels = read(bitmap, bitmap.width, bitmap.height);
+          bitmap.close();
+        } else {
+          // Just that file, full frame: a project of one clip, drawn as the export would.
+          const alone: Project = {
+            ...project,
+            background: { type: "transparent" },
+            padding: 0,
+            captionsEnabled: false,
+            tracks: [{ ...project.tracks.find((t) => t.kind === "video")!, clips: [{ ...mediaClip(asset, 0), transform: { ...mediaClip(asset, 0).transform } }] }],
+          };
+          const [frame] = await drawFrames(alone, [Math.min(Number(raw.time ?? 1), Math.max(0, asset.durationSec - 0.05))], 320);
+          if (!frame) throw new ToolError("Could not draw that frame.");
+          pixels = read(frame, frame.width, frame.height);
+        }
+        const base = raw.base ? themeById(String(raw.base)) : themeOf(project);
+        const proposal = brandOverrides(paletteOf(pixels), base);
+        return [
+          json({
+            base: base.id,
+            palette: proposal.palette,
+            accent: proposal.accent,
+            contrastOnBackground: proposal.contrast,
+            overrides: proposal.overrides,
+            notes: proposal.notes,
+            next: Object.keys(proposal.overrides).length
+              ? `set_theme({ themeId: "${base.id.replace(/-custom$/, "")}", overrides }) applies it; preview_themes shows it first.`
+              : "Nothing to change.",
+          }),
+        ];
+      }
+      case "analyzeMedia": {
+        const asset = project.assets.find((a) => a.id === raw.assetId);
+        if (!asset) throw new ToolError(`No asset ${String(raw.assetId)}. get_project lists them.`);
+        const job = analysisOf(asset);
+        const done = await Promise.race([job.promise, new Promise<null>((r) => setTimeout(() => r(null), TRANSCRIBE_WAIT_MS))]);
+        if (!done) return [json({ status: "running", progress: round(job.progress), next: "Call analyze_media again with the same assetId to keep waiting." })];
+        return [json({ status: "done", ...done })];
+      }
+      case "askClient": {
+        const asked = raw.questions as { question: string; options?: string[]; multiple?: boolean; suggested?: string; why?: string }[];
+        const questions: ClientQuestion[] = asked.map((q, i) => ({
+          id: `q${i + 1}`,
+          question: q.question,
+          kind: q.options?.length ? (q.multiple ? "multi" : "choice") : "text",
+          options: q.options ?? [],
+          suggested: q.suggested ?? null,
+          why: q.why ?? null,
+        }));
+        const pending = askClient(String(raw.title ?? "A few questions before I start"), questions);
+        const done = await Promise.race([pending, new Promise<null>((r) => setTimeout(() => r(null), TRANSCRIBE_WAIT_MS))]);
+        if (!done) return [json({ status: "waiting", next: "The form is open in the editor. Call ask_client again with the same questions to keep waiting." })];
+        if (done.status === "declined") {
+          return [json({ status: "declined", next: "They closed the form. Ask in chat, or go with your suggested answers and say that you did." })];
+        }
+        return [
+          json({
+            status: "answered",
+            answers: questions.map((q) => ({ question: q.question, answer: done.answers[q.id] ?? null })),
+            next: "Record what matters with set_brief.",
           }),
         ];
       }

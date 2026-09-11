@@ -9,9 +9,11 @@
  * about layout, colour, effects or order.
  */
 
+import { loadFonts } from "@/lib/fonts";
 import { assetFile } from "./media";
 import { assetOf, fadeGainAt, projectDuration, trackAudible } from "./project";
 import type { Container } from "./presets";
+import { fontsInUse } from "./themes";
 import type { Clip, Project } from "./types";
 import type { FromWorker, ToWorker, WorkerAudio } from "./export-worker";
 
@@ -165,6 +167,10 @@ export async function exportProject(
   const mixed = await mixAudio(project, from, to);
   const audio = mixed ? toWorkerAudio(mixed) : null;
 
+  // The worker has no document and so none of the page's fonts: it is handed
+  // the files of every web font the text uses, or it would draw fallbacks.
+  const fonts = await loadFonts(fontsInUse(project)).catch(() => []);
+
   const worker = new Worker(new URL("./export-worker.ts", import.meta.url), { type: "module" });
 
   return new Promise<Blob>((resolve, reject) => {
@@ -226,6 +232,7 @@ export async function exportProject(
         to,
       },
       audio,
+      fonts,
     };
     worker.postMessage(payload, audio ? [audio.data.buffer] : []);
   });

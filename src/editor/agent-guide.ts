@@ -66,7 +66,7 @@ Write what you learned into the brief as decisions: "Source has its own card 1�
     title: "Layouts and rhythm",
     summary: "Side panel, B-roll, picture-in-picture, lower thirds — when and how.",
     body: `**side-panel** — the speaker in a rounded card on one side (panelWidth of the frame, default 25%), graphics in the rest. layout_move({ at, to: "panel" }) moves the speaker in over theme.motion.move seconds; layout_move({ at, to: "full" }) brings them back. Centre the crop on the subject (subjectX from analyze_media).
-**b-roll** — the speaker stays full frame; graphics cut in full screen over a scrim for a few seconds at a time. Good when the face carries the video.
+**b-roll** — the speaker stays full frame; graphics cut in full screen over a scrim for a few seconds at a time. Good when the face carries the video. add_backdrop lays the scrim; the macros after it use the whole frame.
 **pip** — graphics or a screen recording own the frame; the speaker sits small in a corner (layout_move to "pip").
 **lower-thirds** — add_lower_third for names and roles, a point or two; nothing else.
 

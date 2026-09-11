@@ -34,7 +34,7 @@ import { clipAt, valueAt } from "./editor/keyframes";
 import { parseSubtitles, toSrt } from "./editor/captions";
 import { captionsForAsset, captionsFromWords, dropLoops, wordsFromVerboseJson, wordsOnTimeline } from "./editor/transcript";
 import { createProject as newProject, mediaClip as newMediaClip, reduce, shapeClip } from "./editor/project";
-import { contrast, mergeTheme, themeById } from "./editor/themes";
+import { brandOverrides, contrast, mergeTheme, paletteOf, themeById } from "./editor/themes";
 import { exportProject } from "./editor/export";
 import type { ClipRef, MediaAsset, Project } from "./editor/types";
 
@@ -458,6 +458,24 @@ async function run() {
       tuned.palette.accent === "#22C55E" && tuned.palette.text === themeById("studio-dark").palette.text && tuned.id === "studio-dark-custom",
       `${tuned.id} accent ${tuned.palette.accent}`);
     check("contrast is measured the WCAG way", Math.abs(contrast("#000000", "#ffffff") - 21) < 0.01 && contrast("#777", "#777") === 1);
+
+    // A logo: a dark green mark on a transparent ground, with a little white.
+    const logo: number[] = [];
+    for (let i = 0; i < 400; i += 1) {
+      if (i < 240) logo.push(0, 0, 0, 0);
+      else if (i < 380) logo.push(14, 90, 52, 255);
+      else logo.push(255, 255, 255, 255);
+    }
+    const palette = paletteOf(logo);
+    check("a logo's transparent ground is left out of its palette",
+      palette.length === 2 && palette[0]!.share > 0.8, palette.map((p) => `${p.hex} ${p.share}`).join(", "));
+    const onDark = brandOverrides(palette, themeById("studio-dark"));
+    const onLight = brandOverrides(palette, themeById("clean-light"));
+    check("the brand colour becomes an accent that reads on a dark background",
+      onDark.contrast >= 3 && onDark.overrides.palette?.accent === onDark.accent, `${onDark.accent} at ${onDark.contrast}:1`);
+    check("and on a light one", onLight.contrast >= 3, `${onLight.accent} at ${onLight.contrast}:1`);
+    const grey = brandOverrides(paletteOf([128, 128, 128, 255, 200, 200, 200, 255]), themeById("studio-dark"));
+    check("a neutral picture leaves the theme's accent alone", Object.keys(grey.overrides).length === 0, grey.notes.join(" "));
   }
 
   /* --- record a real take ------------------------------------------ */

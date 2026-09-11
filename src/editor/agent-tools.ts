@@ -440,6 +440,170 @@ export const EDITOR_TOOLS = {
       end: z.number().min(0).optional().describe("Range end, seconds; default the end"),
     },
   }),
+  layoutMove: tool({
+    name: "layout_move",
+    title: "Layout move",
+    description:
+      "Moves the speaker's clip between full frame, a side panel (a rounded card theme.layout.panelWidth wide, cropped around the subject) and picture-in-picture, with keyframes over the theme's move time. Graphics macros then use the space beside the panel. Start the move ~0.3 s before the sentence it serves; never return to full frame for less than ~3 s.",
+    input: {
+      at: s.seconds("When the move starts"),
+      to: z.enum(["panel", "full", "pip"]),
+      side: z.enum(["right", "left"]).optional().describe("Default right"),
+      subjectX: z.number().min(0).max(1).optional().describe("Where the subject sits across the source, 0..1 (analyze_media finds it); default the last panel's, else the middle"),
+      duration: z.number().min(0.1).max(3).optional().describe("Seconds; default the theme's"),
+      trackId: z.string().optional().describe("With clipId, the clip to move; default the speaker at that time"),
+      clipId: z.string().optional(),
+    },
+  }),
+  addTitle: tool({
+    name: "add_title",
+    title: "Add title",
+    description:
+      "A kicker (the section, 2–4 words), a title wrapped to the space, an optional subtitle and an optional footer line, styled from the theme. Placed beside the speaker's panel when there is one, under anything the scene already shows. Returns the clips and `bottom`, where the next element can go.",
+    input: {
+      start: s.seconds("When it arrives"),
+      end: s.seconds("When the scene ends"),
+      kicker: z.string().max(60).optional(),
+      title: z.string().min(1).max(160),
+      subtitle: z.string().max(240).optional(),
+      footer: z.string().max(80).optional(),
+      y: z.number().min(0).optional().describe("Top edge, px at 1080p; default under what is already there"),
+    },
+  }),
+  addPoints: tool({
+    name: "add_points",
+    title: "Add points",
+    description: "A list, one row per item, each arriving at its own time (the word it belongs to), with a check, a cross, a dot or a number before it.",
+    input: {
+      end: s.seconds("When the scene ends"),
+      items: z
+        .array(z.object({ at: s.seconds("When it arrives"), text: z.string().min(1), icon: z.enum(["check", "cross", "dot", "number", "none"]).optional() }))
+        .min(1)
+        .max(10),
+      y: z.number().min(0).optional(),
+      size: z.number().min(12).max(80).optional().describe("px at 1080p; default the theme's body size"),
+    },
+  }),
+  addChips: tool({
+    name: "add_chips",
+    title: "Add chips",
+    description: "Pills in a row — tags, options, a rhythm like Cash · Hold · Cash — measured in the theme's face and wrapped to the space. tone: accent (default), positive, neutral.",
+    input: {
+      end: s.seconds("When the scene ends"),
+      items: z
+        .array(z.object({ at: s.seconds("When it arrives"), text: z.string().min(1).max(40), tone: z.enum(["accent", "positive", "neutral"]).optional() }))
+        .min(1)
+        .max(12),
+      y: z.number().min(0).optional(),
+      size: z.number().min(12).max(80).optional(),
+    },
+  }),
+  addStat: tool({
+    name: "add_stat",
+    title: "Add stat",
+    description: "One striking number or short value, large, with what it means beside or below it.",
+    input: {
+      start: s.seconds("When it arrives"),
+      end: s.seconds("When the scene ends"),
+      value: z.string().min(1).max(16),
+      label: z.string().max(120).optional(),
+      y: z.number().min(0).optional(),
+    },
+  }),
+  addFlow: tool({
+    name: "add_flow",
+    title: "Add flow",
+    description: "Two to five boxes left to right with arrows between — a sequence, a cause and effect — each arriving on its word; the last highlighted unless highlight is none.",
+    input: {
+      end: s.seconds("When the scene ends"),
+      steps: z.array(z.object({ at: s.seconds("When it arrives — the word it belongs to"), text: z.string().min(1) })).min(2).max(5),
+      y: z.number().min(0).optional(),
+      highlight: z.enum(["last", "none"]).optional(),
+    },
+  }),
+  addBars: tool({
+    name: "add_bars",
+    title: "Add bars",
+    description:
+      "Bars that grow on their words: horizontal with labels (a comparison) or vertical (a ladder). scale log for values spanning orders of magnitude; display is the text shown for a value (\"1,26,000\").",
+    input: {
+      end: s.seconds("When the scene ends"),
+      items: z
+        .array(z.object({ at: s.seconds("When it arrives"), label: z.string().min(1).max(30), value: z.number(), display: z.string().max(20).optional() }))
+        .min(2)
+        .max(12),
+      orientation: z.enum(["horizontal", "vertical"]).optional(),
+      scale: z.enum(["linear", "log"]).optional(),
+      highlight: z.enum(["last", "max", "none"]).optional(),
+      y: z.number().min(0).optional(),
+      height: z.number().min(120).max(700).optional().describe("Vertical bars: the tallest, px at 1080p; default 420"),
+    },
+  }),
+  addLowerThird: tool({
+    name: "add_lower_third",
+    title: "Add lower third",
+    description: "A name and a role on a plate at the bottom of the graphics' space — for introducing a speaker or a place.",
+    input: { start: s.seconds("When it arrives"), end: s.seconds("When it leaves"), name: z.string().min(1).max(60), role: z.string().max(80).optional() },
+  }),
+  addBackdrop: tool({
+    name: "add_backdrop",
+    title: "Add backdrop",
+    description: "A plate over the whole frame in the theme's background, for graphics that cut away from a full-frame speaker (b-roll layout). Add it before the graphics of that stretch.",
+    input: { start: s.seconds("When it arrives"), end: s.seconds("When it leaves"), opacity: z.number().min(0).max(1).optional().describe("Default the theme's scrim, 0.78") },
+  }),
+  previewThemes: tool({
+    name: "preview_themes",
+    title: "Preview themes",
+    readOnly: true,
+    description:
+      "One frame of the edit drawn in several themes side by side, labelled — how the client chooses a look from a picture. Only clips the macros made restyle, so build one scene with them first and preview a time inside it. Changes nothing; choose with set_theme.",
+    input: {
+      time: s.seconds("A frame with the scene you built"),
+      themes: z.array(s.themeId).min(1).max(6).optional().describe("Default all six"),
+      width: z.number().int().min(240).max(960).optional().describe("Each cell, px; default 480"),
+    },
+  }),
+  themeFromMedia: tool({
+    name: "theme_from_media",
+    title: "Theme from media",
+    readOnly: true,
+    description:
+      "Reads the colours of a logo or a reference (an image asset, or a video asset at a time) and proposes theme overrides: its strongest colour as the accent, adjusted until it reads on the base theme's background. Returns the palette, the overrides and the contrast; apply with set_theme({ themeId: base, overrides }).",
+    input: {
+      assetId: z.string().min(1).describe("From get_project; import the logo or reference first"),
+      time: z.number().min(0).optional().describe("Video assets: the frame to read, seconds into the file; default 1"),
+      base: s.themeId.optional().describe("The theme to bring the brand into; default the project's"),
+    },
+  }),
+  analyzeMedia: tool({
+    name: "analyze_media",
+    title: "Analyze media",
+    readOnly: true,
+    description:
+      "What is in a video before you decide how to cut it: graphics already burned into it (keep those stretches full frame, or a panel's crop slices them), where the subject sits across the frame (layout_move's subjectX), shot cuts, and silences. Decodes small frames across the whole file; a long file can answer 'running' — call again with the same assetId.",
+    input: { assetId: z.string().min(1).describe("From get_project") },
+  }),
+  askClient: tool({
+    name: "ask_client",
+    title: "Ask the client",
+    description:
+      "Opens a form in the client's editor with your questions and returns their answers. Give each question a suggested answer they can accept, options when there are a few sensible ones, and why you ask. If they have not answered within ~90 s it answers 'waiting' — call again with the same questions to keep waiting. 'declined' means they closed it: ask in chat, or go with your suggestions and say so. Record what you learn with set_brief.",
+    input: {
+      title: z.string().max(80).optional(),
+      questions: z
+        .array(
+          z.object({
+            question: z.string().min(3).max(200),
+            options: z.array(z.string().min(1).max(60)).max(8).optional(),
+            multiple: z.boolean().optional().describe("Several options may be chosen"),
+            suggested: z.string().max(200).optional().describe("The default you would pick"),
+            why: z.string().max(200).optional(),
+          }),
+        )
+        .min(1)
+        .max(8),
+    },
+  }),
   startTurn: tool({
     name: "start_turn",
     title: "Start turn",

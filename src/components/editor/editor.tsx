@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { AgentBridge } from "@/editor/agent-bridge";
 import { runAutoCaptions, type AutoCaptionOptions } from "@/components/editor/auto-captions";
 import { BriefPanel } from "@/components/editor/brief-panel";
+import { ClientQuestionsDialog } from "@/components/editor/client-questions-dialog";
 import { AssetUrls } from "@/editor/media";
 import {
   apply,
@@ -678,6 +679,7 @@ export function Editor({
             <Scissors className="size-3.5" />
           </Button>
           <ExportDialog project={project} />
+          <ClientQuestionsDialog />
           <Button variant="ghost" size="icon" className="size-7" onClick={onClose} title="Close editor">
             <X className="size-4" />
           </Button>

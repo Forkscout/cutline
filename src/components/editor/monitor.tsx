@@ -14,6 +14,8 @@ import type { ClipRef, Project } from "@/editor/types";
 import type { AssetUrls } from "@/editor/media";
 import { PlaybackEngine } from "@/editor/playback";
 import { projectDuration } from "@/editor/project";
+import { fontsInUse } from "@/editor/themes";
+import { loadFonts } from "@/lib/fonts";
 import type { Action } from "@/editor/project";
 import { MonitorOverlay } from "@/components/editor/monitor-overlay";
 import { Button } from "@/components/ui/button";
@@ -100,6 +102,19 @@ export function Monitor({
   useEffect(() => {
     void engineRef.current?.setProject(project).then(() => engineRef.current?.render());
   }, [project]);
+
+  // A web font draws on a canvas only once it has loaded; until then the text
+  // shows in a fallback, so the frame is drawn again when the faces arrive.
+  const fontKey = fontsInUse(project).join("|");
+  useEffect(() => {
+    let live = true;
+    void loadFonts(fontKey.split("|"))
+      .catch(() => [])
+      .then(() => live && engineRef.current?.render());
+    return () => {
+      live = false;
+    };
+  }, [fontKey]);
 
   const duration = projectDuration(project);
   const guides = project.guides;
