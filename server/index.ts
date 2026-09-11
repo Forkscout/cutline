@@ -16,11 +16,10 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import type { Context } from "hono";
 import { Hono } from "hono";
-import { serveStatic, upgradeWebSocket, websocket } from "hono/bun";
+import { upgradeWebSocket, websocket } from "hono/bun";
 import { setCookie } from "hono/cookie";
 import type { WSContext } from "hono/ws";
 import type { ToCursor } from "../src/lib/cursor-protocol";
@@ -38,6 +37,7 @@ import { DiskMediaStore, TruncatedUpload, fileResponse } from "./media";
 import { BadFileName, WorkspaceStore, isWorkspaceKind } from "./workspace";
 import { BadId, DiskProjectStore, assertSafeId, cutlineHome } from "./store";
 import { SESSION_COOKIE, guard, hostGuard, localhostPairs } from "./security";
+import { serveApp } from "./static";
 
 const PORT = Number(process.env.CUTLINE_PORT ?? 5311);
 const WEB_PORT = Number(process.env.CUTLINE_WEB_PORT ?? 5310);
@@ -581,13 +581,7 @@ app.use("*", hostGuard(hosts));
 app.route("/api", api);
 app.all("/mcp", mcpHandler({ bridge, media, workspace, agents, token: () => mcpToken, allowedOrigins: origins }));
 
-if (existsSync(path.join(DIST, "index.html"))) {
-  app.use("/assets/*", serveStatic({ root: path.relative(process.cwd(), DIST) }));
-  app.get("*", async (c) => {
-    const html = await Bun.file(path.join(DIST, "index.html")).text();
-    return c.html(html.replace("</head>", `<meta name="cutline-token" content="${TOKEN}" /></head>`));
-  });
-}
+serveApp(app, DIST, TOKEN);
 
 const server = Bun.serve({
   fetch: app.fetch,

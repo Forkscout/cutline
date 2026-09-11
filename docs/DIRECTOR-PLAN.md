@@ -234,7 +234,8 @@ calls. Export runs in the user's browser, so there is no render bill.
    with recipes.
 7. ✅ Settings (AI services, agents, usage). Pro credits need a hosted
    backend and a payment provider, which the non-goals rule out: not built.
-8. Distribution: a published image on GHCR, then a single binary per OS.
+8. ✅ Distribution: the GHCR workflow (by hand or on a tag — nothing
+   published yet) and single binaries, `scripts/package.ts`.
 
 ## 9. How to know it works
 

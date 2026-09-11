@@ -134,6 +134,29 @@ On Linux, Docker cannot reach a service bound to 127.0.0.1 on the host: start
 whisper-server with `--host 172.17.0.1` (Docker's bridge address). Docker
 Desktop on macOS and Windows needs nothing extra.
 
+### As a single binary
+
+One file: the server with the web app inside it, nothing else to install.
+
+```bash
+bun scripts/package.ts          # for this machine, into out/
+bun scripts/package.ts --all    # macOS, Linux and Windows
+```
+
+Run it and open the address it prints. Projects, recordings and media go to
+`~/Cutline`, the same as every other way of running it.
+
+### From a published image
+
+Nothing is published yet. When you want an image, run the *image* workflow
+(Actions → image → Run workflow) or push a `v*` tag: it builds for amd64 and
+arm64 and pushes to `ghcr.io/<owner>/cutline`. It never runs on a merge —
+publishing is a decision, not a side effect. Then:
+
+```bash
+docker run -d -p 127.0.0.1:5311:5311 -v ~/Cutline:/data ghcr.io/<owner>/cutline:latest
+```
+
 ### Auto-captions
 
 Right-click anything with sound — a clip on the timeline or an item in the

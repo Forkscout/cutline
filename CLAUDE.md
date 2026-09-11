@@ -634,6 +634,16 @@ is a question only the tab can answer. Usage reads `~/Cutline/usage.jsonl`,
 which model and transcription calls append to: tokens and minutes by day, model
 and project — not money, which is the provider's to say.
 
+**Distribution is a decision, not a side effect.**
+`.github/workflows/image.yml` builds the container image for amd64 and arm64
+and pushes it to GHCR — only on `workflow_dispatch` or a `v*` tag, never on a
+merge. `scripts/package.ts` makes single binaries: it writes
+`server/embedded.ts` from what Vite built (Bun's `--compile` embeds files
+imported with `{ type: "file" }`), compiles for one target or all of them, and
+puts the empty module back, because a stale one would make `bun run dev` serve
+yesterday's app. `server/static.ts` serves the embedded copies when there are
+any and `dist/` otherwise; the page leaves with the run's token either way.
+
 ## How the editor fits together
 
 ```

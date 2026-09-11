@@ -1,0 +1,57 @@
+# Publishes the container image to GHCR — by hand, or when a version tag is
+# pushed. Never on a push to main: what is published is a decision, not a side
+# effect of merging.
+#
+#   docker run -d -p 127.0.0.1:5311:5311 -v ~/Cutline:/data ghcr.io/<owner>/cutline:latest
+name: image
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish as, besides the commit's sha (optional)"
+        required: false
+        type: string
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # arm64 is built under emulation: a Mac with Docker Desktop is the
+      # common case, and pulling an amd64 image there is slow to run.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=tag
+            type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.tag != '' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
