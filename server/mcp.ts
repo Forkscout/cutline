@@ -17,7 +17,10 @@ import path from "node:path";
 import type { Context } from "hono";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { z } from "zod";
+import { GUIDE, GUIDE_TOPICS, PROMPTS, guideIndex } from "../src/editor/agent-guide";
 import { ACTION_TOOLS, EDITOR_TOOLS, SERVER_INSTRUCTIONS, type ToolSpec } from "../src/editor/agent-tools";
+import { THEMES } from "../src/editor/themes";
 import type { TabBridge } from "./bridge";
 import type { DiskMediaStore } from "./media";
 import { sameSecret } from "./security";
@@ -90,6 +93,70 @@ function buildServer(bridge: TabBridge, media: DiskMediaStore): McpServer {
       return { content: [{ type: "text", text: JSON.stringify(summary) }] };
     },
   );
+
+  // The playbook. Answered here, so an agent can read it before any editor is open.
+  server.registerTool(
+    "guide",
+    {
+      title: "Director's guide",
+      description: `How to work in Cutline as a director: the workflow and its checkpoints, what to ask the client, what to check in the source, layouts and rhythm, themes, graphics, review, and the gotchas. Call with no topic for the index. Topics: ${GUIDE_TOPICS.join(", ")}.`,
+      inputSchema: { topic: z.enum(GUIDE_TOPICS as [string, ...string[]]).optional() },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ topic }) => ({
+      content: [{ type: "text", text: topic ? `# ${GUIDE[topic]!.title}\n\n${GUIDE[topic]!.body}` : guideIndex() }],
+    }),
+  );
+
+  server.registerTool(
+    "list_themes",
+    {
+      title: "List themes",
+      description: "The built-in design themes: what each is for, its palette, faces and motion. Show them on the video with preview_themes; choose with set_theme.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async () => ({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            THEMES.map((t) => ({
+              id: t.id,
+              name: t.name,
+              description: t.description,
+              background: t.palette.backgroundTo ? [t.palette.background, t.palette.backgroundTo] : t.palette.background,
+              text: t.palette.text,
+              accent: t.palette.accent,
+              fonts: { display: t.fonts.display.split(",")[0], body: t.fonts.body.split(",")[0] },
+              motion: t.motion.enter,
+            })),
+          ),
+        },
+      ],
+    }),
+  );
+
+  for (const [id, topic] of Object.entries(GUIDE)) {
+    server.registerResource(
+      `guide-${id}`,
+      `cutline://guide/${id}`,
+      { title: topic.title, description: topic.summary, mimeType: "text/markdown" },
+      async (uri) => ({ contents: [{ uri: uri.href, mimeType: "text/markdown", text: `# ${topic.title}\n\n${topic.body}` }] }),
+    );
+  }
+
+  server.registerPrompt(
+    "direct",
+    { title: PROMPTS.direct.title, description: PROMPTS.direct.description, argsSchema: { goal: z.string().optional() } },
+    ({ goal }) => ({ messages: [{ role: "user", content: { type: "text", text: PROMPTS.direct.text(goal) } }] }),
+  );
+  server.registerPrompt("brief", { title: PROMPTS.brief.title, description: PROMPTS.brief.description }, () => ({
+    messages: [{ role: "user", content: { type: "text", text: PROMPTS.brief.text() } }],
+  }));
+  server.registerPrompt("review", { title: PROMPTS.review.title, description: PROMPTS.review.description }, () => ({
+    messages: [{ role: "user", content: { type: "text", text: PROMPTS.review.text() } }],
+  }));
 
   return server;
 }

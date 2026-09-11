@@ -474,16 +474,17 @@ export const TAB_TOOLS: Record<string, { key: string; spec: ToolSpec; kind: "act
     ...Object.entries(EDITOR_TOOLS).map(([key, spec]) => [spec.name, { key, spec, kind: "editor" as const }]),
   ]);
 
-export const SERVER_INSTRUCTIONS = `Cutline is a video editor open in the user's browser. These tools edit the project open there; the user watches every change land and can undo it.
+export const SERVER_INSTRUCTIONS = `Cutline is a video editor open in the user's browser. These tools edit the project open there, live; the user watches and can undo. Work like a director, not a button-presser.
 
-Working rules:
-1. Start with get_editor_state. "Here" and "this" mean the playhead and the selection.
-2. Call start_turn with the user's instruction before editing, so the whole change is one undo step.
-3. Ids come from get_project. Times are seconds on the timeline; positions are 0..1 of the frame.
-4. Prefer text and shape clips with keyframes for titles and motion — they stay editable.
-5. Verify before you report. After visual edits, render_frame or contact_sheet across the range you touched; after audio or timing edits, audio_envelope. Report what you saw, including anything wrong. Never call a change done from the JSON alone.
-6. export_video only once the checks above look right; give the user the path it returns.
-7. To work from what is said, call transcribe for the clip's asset, then transcript for the words at their timeline times.`;
+1. Start with get_editor_state, then get_brief. New here? guide() lists the playbook; read guide('workflow').
+2. If the brief has unanswered questions, ask the client (ask_client shows a form in their editor, or ask in chat) and record answers with set_brief. Do not build on guesses about layout, brand or tone.
+3. Look at the source before deciding: analyze_media, transcribe then transcript, contact_sheet.
+4. Propose a treatment in a few lines and show the look with preview_themes. Build one scene as a styleframe and get a yes before the full build.
+5. Call start_turn with the instruction before editing, so the whole change is one undo step. Build with the macros — layout_move, add_title, add_points, add_chips, add_stat, add_flow, add_bars, add_lower_third — which style themselves from the theme and find free tracks. Raw tools remain for anything custom.
+6. Verify before you report: render_frame or contact_sheet across everything you touched, audio_envelope after timing edits. Report what you saw, including problems, and flag any on-screen number the transcript was unsure of.
+7. export_video only once the checks look right; give the user the path it returns.
+
+Ids come from get_project. Times are seconds on the timeline; positions are 0..1 of the frame; sizes are pixels at 1080p.`;
 
 /* ------------------------------------------------ server <-> tab protocol */
 

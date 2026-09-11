@@ -411,6 +411,16 @@ has one, with the background and the captions, so a finished edit changes its
 look in one step. Colours and faces change; sizes and positions do not, so a
 face with different widths can crowd a row of chips: look after a restyle.
 
+**The playbook ships with the server** (`editor/agent-guide.ts`). The
+`instructions` every MCP client receives tell an agent to work as a director —
+brief, look at the source, propose, get a yes on a styleframe, build with the
+macros, review — and the `guide` tool, the `cutline://guide/*` resources and the
+`/direct`, `/brief` and `/review` prompts carry the detail: what to ask the
+client, what to check in the footage, layouts and rhythm, themes, graphics,
+review, and the gotchas. `guide` and `list_themes` are answered by the server,
+so an agent can read them before any editor is open. Agents follow the guide
+literally: when a tool changes, change the topic that teaches it.
+
 ## Transcription and AI services
 
 **Not tied to one engine or one machine.** Transcription goes through a
