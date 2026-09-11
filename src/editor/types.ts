@@ -9,7 +9,8 @@
  * changing the sequence resolution or exporting at another size moves nothing.
  */
 
-import type { SourceKind } from "@/recorder/types";
+// Relative, not "@/": the server imports this file too, and has no alias.
+import type { SourceKind } from "../recorder/source-kind";
 
 /* ------------------------------------------------------------------ media */
 

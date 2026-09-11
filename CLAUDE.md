@@ -223,6 +223,59 @@ another's name.
 in `security.ts` are the one seam where real authentication would go. Keep all
 four true.
 
+## The agent (MCP)
+
+`/mcp` on the same server makes Cutline an MCP server over streamable HTTP. The
+server prints the line that registers it:
+
+```
+claude mcp add --transport http cutline http://127.0.0.1:5311/mcp --header "Authorization: Bearer $(cat ~/Cutline/mcp-token)"
+```
+
+**The tab is the source of truth.** The server never edits a project. It relays
+each tool call over a WebSocket (`/api/bridge`) to the editor tab the user
+touched last, which turns it into the same reducer action the interface would
+dispatch. An edit written to disk behind the tab's back would be overwritten by
+its next autosave; relaying also means the user watches every edit land, with a
+badge naming the tool. Only the tab holding the project lock takes agent edits.
+
+**Tools are generated from the reducer.** `src/editor/agent-tools.ts` has one
+tool per `Action` variant, keyed by the action type, with zod schemas from
+`agent-schemas.ts`. `agent-bridge.ts` fails the typecheck if an action has no
+tool, or a tool builds the wrong shape of action — add an action and the
+compiler asks for its tool. Arguments are validated on the server and again in
+the tab.
+
+**Eyes.** `render_frame` and `contact_sheet` decode frames from the originals at
+exact times and draw them through `drawFrame`: what the export will contain,
+not whatever a preview `<video>` had decoded. `audio_envelope` reads the peaks
+computed at import. The server's instructions and the tool descriptions both
+tell the agent to look before it reports.
+
+**One undo step per turn.** `start_turn(instruction)` names a history entry
+"Agent: …", and every edit until the next turn coalesces into it — but only
+while the agent's last entry is still the present one, so a user edit in
+between stays its own step. Every history write in `editor.tsx` goes through
+`update()`, a ref that React state mirrors, so the bridge reads the latest
+history synchronously rather than one render stale.
+
+**Scoped to the open project.** Nothing deletes recordings or projects;
+`remove_asset` drops an item from the project and keeps the file.
+
+**Stateless, with its own token.** A fresh MCP server per request, so a restart
+under `bun --watch` strands no client session. The bearer token lives in
+`~/Cutline/mcp-token` (0600), because the per-run page token changes on every
+start. A request carrying a browser Origin is refused.
+
+**Checking it.** `bun scripts/mcp-check.ts setup` creates a test project and
+prints a `?project=` link. Open it, then `bun scripts/mcp-check.ts run <id>`
+drives it as a real MCP client. It checks that every action has a tool, and
+that bad auth and malformed calls are refused. It checks that the rendered PNG
+has the layer where it was placed, and that one undo reverts a whole turn
+exactly. It checks that a planted two-second gap shows in the envelope, and
+that the tab's JSON equals what autosave writes, byte for byte.
+`cleanup <id>` removes the project.
+
 ## How the editor fits together
 
 ```

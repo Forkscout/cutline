@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Captions,
+  Bot,
   Film,
   Gauge,
   History,
@@ -15,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { AgentBridge } from "@/editor/agent-bridge";
 import { AssetUrls } from "@/editor/media";
 import {
   apply,
@@ -82,6 +84,18 @@ export function Editor({
   onProjectChange?: (project: Project) => void;
 }) {
   const [history, setHistory] = useState<EditHistory>(() => newHistory(initial));
+  // The agent bridge applies an edit and needs the result at once, so the
+  // latest history lives in a ref that every update goes through and React
+  // state mirrors it. Functional setState alone would leave the bridge reading
+  // a history one render stale, and an agent edit racing a user edit could
+  // drop one of them.
+  const historyRef = useRef(history);
+  const update = useCallback((fn: (h: EditHistory) => EditHistory) => {
+    const next = fn(historyRef.current);
+    historyRef.current = next;
+    setHistory(next);
+    return next;
+  }, []);
   const [selected, setSelected] = useState<ClipRef | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<string | null>(null);
   const [time, setTime] = useState(0);
@@ -127,9 +141,48 @@ export function Editor({
     };
   }, []);
 
-  const dispatch = useCallback((action: Action, coalesce = false) => {
-    setHistory((prev) => apply(prev, action, coalesce));
-  }, []);
+  const dispatch = useCallback(
+    (action: Action, coalesce = false) => {
+      update((prev) => apply(prev, action, coalesce));
+    },
+    [update],
+  );
+
+  /* ---------------------------------------------------------------- agent */
+
+  const timeRef = useRef(time);
+  timeRef.current = time;
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const [agentTool, setAgentTool] = useState<string | null>(null);
+
+  // Only the tab that saves takes agent edits — the same rule as autosave, for
+  // the same reason: two tabs applying them would fork the project.
+  useEffect(() => {
+    if (!isPrimary) return;
+    let fade: number | undefined;
+    const bridge = new AgentBridge(
+      {
+        history: () => historyRef.current,
+        update,
+        playhead: () => timeRef.current,
+        selection: () => selectedRef.current,
+        // Held briefly after each call, so a burst of edits reads as one
+        // stretch of activity instead of a flickering badge.
+        onActivity: (tool) => {
+          window.clearTimeout(fade);
+          if (tool) setAgentTool(tool);
+          else fade = window.setTimeout(() => setAgentTool(null), 2500);
+        },
+      },
+      { id: initial.id, name: initial.name },
+    );
+    bridge.start();
+    return () => {
+      window.clearTimeout(fade);
+      bridge.stop();
+    };
+  }, [isPrimary, initial.id, initial.name, update]);
 
   /* ------------------------------------------------------------- saving */
 
@@ -173,8 +226,8 @@ export function Editor({
 
   /* ------------------------------------------------------------ commands */
 
-  const doUndo = useCallback(() => setHistory((h) => undo(h)), []);
-  const doRedo = useCallback(() => setHistory((h) => redo(h)), []);
+  const doUndo = useCallback(() => update((h) => undo(h)), [update]);
+  const doRedo = useCallback(() => update((h) => redo(h)), [update]);
 
   const firstVideoTrack = project.tracks.find((t) => t.kind === "video") ?? project.tracks[0];
 
@@ -571,6 +624,16 @@ export function Editor({
           </button>
         )}
 
+        {agentTool && (
+          <span
+            title="An agent is editing this project through MCP. Every change is in History and can be undone."
+            className="ml-1 flex items-center gap-1 rounded-full bg-primary/15 px-2.5 py-1 text-[11px] font-medium text-primary"
+          >
+            <Bot className="size-3 animate-pulse" />
+            Agent · {agentTool.replaceAll("_", " ")}
+          </span>
+        )}
+
         <div className="ml-auto flex items-center gap-1">
           <Button variant="ghost" size="icon" className="size-7" disabled={!canUndo} onClick={doUndo} title="Undo (⌘Z)">
             <Undo2 className="size-3.5" />
@@ -676,7 +739,7 @@ export function Editor({
                   {allHistory.map((entry, i) => (
                     <button
                       key={i}
-                      onClick={() => setHistory((h) => jumpTo(h, i))}
+                      onClick={() => update((h) => jumpTo(h, i))}
                       className={cn(
                         "block w-full truncate rounded px-2 py-1 text-left text-[11px] hover:bg-accent",
                         i === history.past.length && "bg-accent font-medium",

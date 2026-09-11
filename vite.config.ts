@@ -36,6 +36,7 @@ export default defineConfig({
     // changeOrigin stays false so the server sees the browser's real Host and
     // Origin and can check them. Vite's own host check already refuses a
     // rebound hostname for the page itself, which is what protects the token.
-    proxy: { "/api": { target: `http://127.0.0.1:${SERVER_PORT}`, changeOrigin: false } },
+    // ws: the editor tab holds a WebSocket to the server for the agent bridge.
+    proxy: { "/api": { target: `http://127.0.0.1:${SERVER_PORT}`, changeOrigin: false, ws: true } },
   },
 });

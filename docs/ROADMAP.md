@@ -66,7 +66,10 @@ default. The user's machine doing the rendering and transcription is a cost
 advantage a server-rendering competitor does not have.
 
 Done: recordings and imported media live on the server, served with byte
-ranges. Next in this direction: the MCP endpoint at `/mcp` in the same process.
+ranges, and `/mcp` lets an agent edit the open project through the editor tab.
+Next in this direction: an export tool for the agent, alpha-channel overlays
+(the gate in the AI checklist's animation section), and a headless mode for
+batch work with no tab open.
 
 ---
 

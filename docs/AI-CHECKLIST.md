@@ -382,7 +382,7 @@ walk any of them back.
 
 ### The bridge
 
-- [ ] **An MCP endpoint that reaches into the open tab**
+- [x] **An MCP endpoint that reaches into the open tab**
   **Problem** — Projects, recordings and media are on disk now, behind the local
   server, so an agent can read them. But the project being edited lives in the
   tab's memory until it autosaves, and a page cannot listen on a port — edits
@@ -395,7 +395,7 @@ walk any of them back.
   **Test** — Start the bridge, open a project, call `get_project` from an MCP
   client; assert the JSON matches what the tab holds, byte for byte.
 
-- [ ] **Tools generated from the reducer, not written beside it**
+- [x] **Tools generated from the reducer, not written beside it**
   **Problem** — A hand-written tool list drifts from the reducer the first time
   an action is added, and the agent then either cannot do something the UI can
   or does it with the wrong shape.
@@ -412,7 +412,7 @@ An agent that cannot see its output ships broken frames. That sentence is where
 the earliest version of this repository started; the compositor can now draw any
 frame on demand, so this is finally cheap.
 
-- [ ] **`render_frame(time)` returns an image**
+- [x] **`render_frame(time)` returns an image**
   **Problem** — Without it the agent edits blind and reports success from the
   JSON, which is exactly how a frozen scene or a cropped face gets called done.
   **Approach** — Run `drawFrame` at the requested time into an offscreen canvas
@@ -422,14 +422,14 @@ frame on demand, so this is finally cheap.
   **Test** — Request a frame at a time where a known layer is visible; assert
   the returned image contains that layer's colour at its placed position.
 
-- [ ] **Hearing and reading, alongside seeing**
+- [ ] **Hearing and reading, alongside seeing** — `audio_envelope` is built and tested; `transcript` waits on section 1
   **Problem** — Half the defects that ship are audio: a silent stretch, a
   clipped peak. No image shows them.
   **Approach** — `audio_envelope(range)` from the peaks already computed at
   import, and `transcript(range)` once section 1 exists.
   **Test** — Plant a silence; assert the envelope reports it at the right time.
 
-- [ ] **The agent verifies before it reports**
+- [ ] **The agent verifies before it reports** — in the instructions and tool descriptions; not yet tested against a real agent with a planted defect
   **Problem** — The failure this whole section exists to prevent is an agent
   saying "done" after one look.
   **Approach** — The server's instructions require sampling the touched range
@@ -484,7 +484,7 @@ frame on demand, so this is finally cheap.
 
 ### Control, and its limits
 
-- [ ] **Full control of the project, not of the machine**
+- [x] **Full control of the project, not of the machine**
   **Problem** — "Full control" is a phrase that is fine for a timeline and not
   fine for a user's recordings.
   **Approach** — Tools are scoped to the open project. No tool deletes
@@ -492,7 +492,7 @@ frame on demand, so this is finally cheap.
   **Test** — Assert the tool list contains nothing that can remove a file
   outside the project's own scratch space.
 
-- [ ] **One undo step per agent turn, named**
+- [x] **One undo step per agent turn, named**
   **Problem** — Forty reducer actions in forty history entries makes "undo what
   the agent just did" forty key presses.
   **Approach** — Coalesce each agent turn into one history entry, labelled with

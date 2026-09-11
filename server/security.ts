@@ -31,7 +31,7 @@ export interface GuardOptions {
   allowedOrigins: string[];
 }
 
-function sameSecret(a: string, b: string): boolean {
+export function sameSecret(a: string, b: string): boolean {
   const left = Buffer.from(a);
   const right = Buffer.from(b);
   // timingSafeEqual throws on unequal lengths, and returning early on length

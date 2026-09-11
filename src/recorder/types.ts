@@ -14,7 +14,9 @@
  * into the screen video file would be exactly the kind of un-take-back-able
  * decision this recorder exists to avoid. It gets its own file.
  */
-export type SourceKind = "screen" | "camera" | "microphone" | "system-audio";
+import type { SourceKind } from "./source-kind";
+
+export type { SourceKind };
 
 /** A span of wall-clock time the recorder was paused; absent from the file. */
 export interface PauseSpan {

@@ -20,8 +20,10 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { Context } from "hono";
 import { Hono } from "hono";
-import { serveStatic } from "hono/bun";
+import { serveStatic, upgradeWebSocket, websocket } from "hono/bun";
 import { setCookie } from "hono/cookie";
+import { TabBridge } from "./bridge";
+import { loadMcpToken, mcpHandler } from "./mcp";
 import { DiskMediaStore, TruncatedUpload, fileResponse } from "./media";
 import { BadId, DiskProjectStore, cutlineHome } from "./store";
 import { SESSION_COOKIE, guard, hostGuard, localhostPairs } from "./security";
@@ -37,6 +39,8 @@ const DIST = path.resolve(import.meta.dir, "../dist");
 
 const projects = new DiskProjectStore(cutlineHome(), WORKSPACE);
 const media = new DiskMediaStore(cutlineHome(), WORKSPACE);
+const bridge = new TabBridge();
+const MCP_TOKEN = await loadMcpToken(cutlineHome());
 
 const hosts = localhostPairs(PORT, WEB_PORT);
 const origins = [WEB_PORT, PORT].flatMap((p) => [`http://localhost:${p}`, `http://127.0.0.1:${p}`]);
@@ -70,6 +74,19 @@ api.post("/session", (c) => {
 });
 
 api.get("/usage", async (c) => c.json(await media.usage()));
+
+/**
+ * The editor tab's end of the agent bridge. Behind the same guard as the rest
+ * of /api — a WebSocket upgrade carries the session cookie and an Origin, so a
+ * foreign page can no more open one than it can call any other route.
+ */
+api.get(
+  "/bridge",
+  upgradeWebSocket(() => ({
+    onMessage: (event, ws) => bridge.message(ws, String(event.data)),
+    onClose: (_event, ws) => bridge.close(ws),
+  })),
+);
 
 /* --- projects --- */
 
@@ -152,6 +169,7 @@ const app = new Hono();
 // would read the token straight out of it.
 app.use("*", hostGuard(hosts));
 app.route("/api", api);
+app.all("/mcp", mcpHandler({ bridge, media, token: MCP_TOKEN, allowedOrigins: origins }));
 
 if (existsSync(path.join(DIST, "index.html"))) {
   app.use("/assets/*", serveStatic({ root: path.relative(process.cwd(), DIST) }));
@@ -163,6 +181,7 @@ if (existsSync(path.join(DIST, "index.html"))) {
 
 const server = Bun.serve({
   fetch: app.fetch,
+  websocket,
   port: PORT,
   hostname: "127.0.0.1",
   // Bun refuses bodies over 128 MB by default, which is a few minutes of screen
@@ -174,3 +193,7 @@ const server = Bun.serve({
 });
 console.log(`cutline server  ${server.url}`);
 console.log(`workspace       ${media.workspaceDir}`);
+// The token is read from its file rather than printed, so it stays out of logs.
+console.log(
+  `mcp             claude mcp add --transport http cutline ${server.url}mcp --header "Authorization: Bearer $(cat ${path.join(cutlineHome(), "mcp-token")})"`,
+);

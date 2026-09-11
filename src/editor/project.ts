@@ -894,16 +894,20 @@ const ACTION_LABELS: Partial<Record<Action["type"], string>> = {
   setCaptions: "Set captions",
 };
 
-export function apply(history: History, action: Action, coalesce = false): History {
+/**
+ * `label` names the history entry instead of the action's default — how an
+ * agent turn shows up as "Agent: tighten the intro" rather than "Split clip".
+ */
+export function apply(history: History, action: Action, coalesce = false, label?: string): History {
   const next = reduce(history.present, action);
   if (next === history.present) return history;
-  const label = ACTION_LABELS[action.type] ?? "Edit";
+  const entryLabel = label ?? ACTION_LABELS[action.type] ?? "Edit";
   // Dragging emits an action per pointer move; without coalescing, one drag
   // would take fifty presses of undo to walk back.
   const past = coalesce
     ? history.past
     : [...history.past, { project: history.present, label: history.label }].slice(-HISTORY_LIMIT);
-  return { present: next, past, future: [], label };
+  return { present: next, past, future: [], label: entryLabel };
 }
 
 export function undo(history: History): History {

@@ -1,4 +1,5 @@
-import { Suspense, lazy, useCallback, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Circle, Clapperboard, Moon, Square, Sun } from "lucide-react";
 import type { RecorderPhase } from "@/recorder/types";
 import { checkSupport, missingRequirements } from "@/recorder/mime";
@@ -44,6 +45,32 @@ export function App() {
   const handleProjectChange = useCallback((p: Project) => {
     liveProject.current = p;
   }, []);
+
+  // `?project=<id>` opens that project directly: a reload stays in the editor,
+  // and an agent can hand the user a link to what it just built.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("project");
+    if (!id) return;
+    void (async () => {
+      // Lazily, so mediabunny stays out of the bundle that draws the recorder.
+      const [{ loadProject, detectOfflineMedia }, { syncLocalRecordings }] = await Promise.all([
+        import("@/editor/persistence"),
+        import("@/lib/sync"),
+      ]);
+      await syncLocalRecordings().catch(() => undefined);
+      const project = await loadProject(id).catch(() => null);
+      if (project) setEditing(await detectOfflineMedia(project));
+      else toast.error("That project could not be opened.");
+    })();
+  }, []);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (editing) url.searchParams.set("project", editing.id);
+    else if (url.searchParams.has("project")) url.searchParams.delete("project");
+    else return;
+    window.history.replaceState(null, "", url);
+  }, [editing]);
 
   const handleControls = useCallback((next: StudioControls | null) => setControls(next), []);
   const handleFinished = useCallback(() => {

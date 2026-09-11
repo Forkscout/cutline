@@ -113,6 +113,20 @@ listens on 127.0.0.1 only, and every request needs a per-run token.
 
 `bun run start` builds the app and serves everything from the one process.
 
+### Letting an agent edit
+
+Cutline is also an MCP server. With it running, register it with Claude Code
+once:
+
+```bash
+claude mcp add --transport http cutline http://127.0.0.1:5311/mcp --header "Authorization: Bearer $(cat ~/Cutline/mcp-token)"
+```
+
+Open a project and ask. The agent edits the project open in your editor through
+the same actions the interface uses, so you watch each change land, and its
+whole turn is one undo step. It can render any frame, check the audio for gaps
+and clipping, and is told to look before it reports.
+
 **Chrome or Edge.** The recorder streams to disk through `createSyncAccessHandle`,
 which only exists in a worker, and the exporter encodes with WebCodecs. Neither
 has a fallback here, and pretending otherwise would just fail later and less

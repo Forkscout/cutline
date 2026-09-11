@@ -227,7 +227,7 @@ async function firstFrameBitmap(input: MediaInput): Promise<ImageBitmap | null> 
 /* ---------------------------------------------------------------- waveform */
 
 /** Buckets per second of audio. Enough to read a sentence's shape at a glance. */
-const PEAKS_PER_SECOND = 40;
+export const PEAKS_PER_SECOND = 40;
 
 /**
  * Min/max pairs per bucket, normalised to 0..1.
