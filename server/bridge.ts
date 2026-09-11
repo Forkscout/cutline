@@ -12,6 +12,7 @@ import type { BridgeContent, FromTab, ToTab } from "../src/editor/agent-tools";
 
 interface Tab {
   ws: WSContext;
+  pageId: string;
   projectId: string;
   name: string;
   /** When the user last connected or focused this tab. The latest one is "the editor". */
@@ -50,7 +51,19 @@ export class TabBridge {
       return;
     }
     if (message.type === "hello") {
-      this.tabs.set(key, { ws, projectId: message.projectId, name: message.name, seenAt: Date.now() });
+      // A page holds one socket. If it already had another, that one is stale —
+      // a reconnect whose predecessor never closed — and answering calls on it
+      // would split the agent's work across two editors' worth of state.
+      for (const [otherKey, other] of this.tabs) {
+        if (otherKey !== key && other.pageId === message.pageId) {
+          this.tabs.delete(otherKey);
+          other.ws.close(4000, "Replaced by a newer connection from the same page");
+        }
+      }
+      this.tabs.set(key, { ws, pageId: message.pageId, projectId: message.projectId, name: message.name, seenAt: Date.now() });
+      console.log(
+        `bridge          editor connected: ${message.name} [page ${String(message.pageId).slice(0, 8)}, ${message.where ?? "?"}] (${this.tabs.size} open)`,
+      );
     } else if (message.type === "focus") {
       const tab = this.tabs.get(key);
       if (tab) tab.seenAt = Date.now();
@@ -66,7 +79,9 @@ export class TabBridge {
 
   close(ws: WSContext): void {
     const key = ws.raw as object;
+    const tab = this.tabs.get(key);
     this.tabs.delete(key);
+    if (tab) console.log(`bridge          editor disconnected: ${tab.name} [page ${String(tab.pageId).slice(0, 8)}] (${this.tabs.size} open)`);
     for (const [id, waiting] of this.pending) {
       if (waiting.tab !== key) continue;
       this.pending.delete(id);

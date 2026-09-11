@@ -401,6 +401,17 @@ export const EDITOR_TOOLS = {
     description: "Call once at the start of each request, with the user's instruction. Every edit until the next start_turn becomes one undo step named after it, so the user can take the whole change back with one press.",
     input: { instruction: z.string().min(1).max(200) },
   }),
+  exportVideo: tool({
+    name: "export_video",
+    title: "Export video",
+    description:
+      "Renders the timeline to a new video file through the same pipeline as the Export button, saves it under ~/Cutline, and returns its path. Never overwrites an earlier export. It is the slow step — check the whole range with contact_sheet and audio_envelope first.",
+    input: {
+      container: z.enum(["mp4", "webm"]).optional().describe("Default mp4"),
+      height: z.number().int().min(144).max(2160).optional().describe("Output height in pixels; default the project's"),
+      useInOut: z.boolean().optional().describe("Only the range between the project's in and out points"),
+    },
+  }),
   undo: tool({
     name: "undo",
     title: "Undo",
@@ -425,7 +436,8 @@ Working rules:
 2. Call start_turn with the user's instruction before editing, so the whole change is one undo step.
 3. Ids come from get_project. Times are seconds on the timeline; positions are 0..1 of the frame.
 4. Prefer text and shape clips with keyframes for titles and motion — they stay editable.
-5. Verify before you report. After visual edits, render_frame or contact_sheet across the range you touched; after audio or timing edits, audio_envelope. Report what you saw, including anything wrong. Never call a change done from the JSON alone.`;
+5. Verify before you report. After visual edits, render_frame or contact_sheet across the range you touched; after audio or timing edits, audio_envelope. Report what you saw, including anything wrong. Never call a change done from the JSON alone.
+6. export_video only once the checks above look right; give the user the path it returns.`;
 
 /* ------------------------------------------------ server <-> tab protocol */
 
@@ -438,7 +450,8 @@ export type ToTab = { type: "call"; id: string; tool: string; args: unknown };
 
 /** Tab to server. */
 export type FromTab =
-  | { type: "hello"; projectId: string; name: string }
+  /** pageId is one per page load, so the server can drop a stale second socket from it. */
+  | { type: "hello"; pageId: string; projectId: string; name: string; where?: string }
   | { type: "focus" }
   | { type: "result"; id: string; ok: true; content: BridgeContent[] }
   | { type: "result"; id: string; ok: false; error: string };

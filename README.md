@@ -125,7 +125,8 @@ claude mcp add --transport http cutline http://127.0.0.1:5311/mcp --header "Auth
 Open a project and ask. The agent edits the project open in your editor through
 the same actions the interface uses, so you watch each change land, and its
 whole turn is one undo step. It can render any frame, check the audio for gaps
-and clipping, and is told to look before it reports.
+and clipping, and export the finished video to `~/Cutline` — and it is told to
+look before it reports.
 
 **Chrome or Edge.** The recorder streams to disk through `createSyncAccessHandle`,
 which only exists in a worker, and the exporter encodes with WebCodecs. Neither

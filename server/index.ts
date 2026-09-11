@@ -153,6 +153,24 @@ api.delete("/media/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+/* --- exports --- */
+
+api.get("/exports", async (c) => c.json(await media.listExports()));
+
+api.on(["GET", "HEAD"], "/exports/:name", (c) =>
+  fileResponse(media.exportFile(c.req.param("name")), c.req.method, c.req.header("range")),
+);
+
+api.put("/exports/:name", async (c) => {
+  const target = media.exportFile(c.req.param("name"));
+  // An export is a delivery. Overwriting one the user may already have sent
+  // somewhere is never what anyone meant, so a name that exists is refused.
+  if ((await media.size(target)) !== null) return c.json({ error: "An export with that name already exists" }, 409);
+  const declared = c.req.header("content-length");
+  const bytes = await media.write(target, c.req.raw.body, declared === undefined ? null : Number(declared));
+  return c.json({ ok: true, bytes, path: target });
+});
+
 api.onError((err, c) => {
   if (err instanceof BadId) return c.json({ error: err.message }, 400);
   if (err instanceof SyntaxError) return c.json({ error: "Body is not valid JSON" }, 400);

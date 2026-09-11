@@ -40,6 +40,7 @@ export class TruncatedUpload extends Error {
 export class DiskMediaStore {
   private readonly recordings: string;
   private readonly media: string;
+  private readonly exports: string;
   readonly workspaceDir: string;
 
   constructor(root: string, workspaceId: string) {
@@ -47,6 +48,7 @@ export class DiskMediaStore {
     this.workspaceDir = path.join(root, "workspaces", workspaceId);
     this.recordings = path.join(this.workspaceDir, "recordings");
     this.media = path.join(this.workspaceDir, "media");
+    this.exports = path.join(this.workspaceDir, "exports");
   }
 
   recordingFile(sessionId: string, name: string): string {
@@ -58,6 +60,27 @@ export class DiskMediaStore {
   mediaFile(id: string): string {
     assertSafeMediaId(id);
     return path.join(this.media, id);
+  }
+
+  exportFile(name: string): string {
+    assertSafeName(name);
+    return path.join(this.exports, name);
+  }
+
+  async listExports(): Promise<{ name: string; bytes: number; modifiedAt: number }[]> {
+    let names: string[];
+    try {
+      names = await readdir(this.exports);
+    } catch {
+      return [];
+    }
+    const out: { name: string; bytes: number; modifiedAt: number }[] = [];
+    for (const name of names) {
+      if (name.endsWith(".part")) continue;
+      const s = await stat(path.join(this.exports, name));
+      if (s.isFile()) out.push({ name, bytes: s.size, modifiedAt: s.mtimeMs });
+    }
+    return out.sort((a, b) => b.modifiedAt - a.modifiedAt);
   }
 
   async listSessions(): Promise<unknown[]> {

@@ -10,6 +10,7 @@
 
 import { z } from "zod";
 import { listSessions } from "@/lib/media-store";
+import { apiJson } from "@/lib/server";
 import {
   ACTION_TOOLS,
   TAB_TOOLS,
@@ -22,6 +23,7 @@ import {
 } from "./agent-tools";
 import { visibleClips } from "./compositor";
 import { createEffect } from "./effects";
+import { exportProject } from "./export";
 import { audioEnvelope, describeChange, leanProject } from "./inspect";
 import { readProperty } from "./keyframes";
 import { importSession } from "./media";
@@ -205,6 +207,38 @@ const TURN_IDLE_MS = 5 * 60_000;
 /** Without start_turn, agent edits still group, but only while they keep coming. */
 const LOOSE_IDLE_MS = 60_000;
 
+/**
+ * A turn belongs to the project, not to the socket. The bridge object is
+ * rebuilt whenever the editor's effect re-runs — a reconnect, a lock change, a
+ * hot reload — and a turn that lived on it lost its name mid-way, splitting one
+ * request into two undo steps. Found by the first real agent session.
+ */
+interface TurnState {
+  label: string | null;
+  lastAgentPresent: Project | null;
+  lastAt: number;
+}
+const turns = new Map<string, TurnState>();
+function turnFor(projectId: string): TurnState {
+  let turn = turns.get(projectId);
+  if (!turn) {
+    turn = { label: null, lastAgentPresent: null, lastAt: 0 };
+    turns.set(projectId, turn);
+  }
+  return turn;
+}
+
+/** One per page load. */
+const PAGE_ID = crypto.randomUUID();
+
+/**
+ * At most one live bridge per page. React may build the editor's effect more
+ * than once (StrictMode mounts twice in development; a hot reload re-runs it),
+ * and two bridges in one page meant two sockets to the server, which then
+ * routed calls to whichever spoke last.
+ */
+let live: AgentBridge | null = null;
+
 const text = (t: string): BridgeContent => ({ type: "text", text: t });
 const json = (value: unknown): BridgeContent => text(JSON.stringify(value));
 const round = (n: number) => Math.round(n * 1000) / 1000;
@@ -213,21 +247,25 @@ export class AgentBridge {
   private ws: WebSocket | null = null;
   private stopped = false;
   private retryMs = 1000;
-  private turnLabel: string | null = null;
-  private lastAgentPresent: Project | null = null;
-  private lastAt = 0;
 
   constructor(
     private host: BridgeHost,
     private project: { id: string; name: string },
   ) {}
 
+  private get turn(): TurnState {
+    return turnFor(this.project.id);
+  }
+
   start(): void {
+    if (live && live !== this) live.stop();
+    live = this;
     this.connect();
     window.addEventListener("focus", this.onFocus);
   }
 
   stop(): void {
+    if (live === this) live = null;
     this.stopped = true;
     window.removeEventListener("focus", this.onFocus);
     this.ws?.close();
@@ -245,12 +283,25 @@ export class AgentBridge {
     this.ws = ws;
     ws.onopen = () => {
       this.retryMs = 1000;
-      this.send({ type: "hello", projectId: this.project.id, name: this.project.name });
+      // Which browser, and whether anyone can see it: when two editors hold the
+      // same project, this is what tells them apart in the server's log.
+      const brand = navigator.userAgent.match(/(Edg|Electron|Chrome|Firefox|Safari)\/[\d.]+/)?.[0] ?? "browser";
+      this.send({
+        type: "hello",
+        pageId: PAGE_ID,
+        projectId: this.project.id,
+        name: this.project.name,
+        where: `${brand}, ${document.visibilityState}`,
+      });
     };
-    ws.onmessage = (event) => void this.receive(JSON.parse(String(event.data)) as ToTab);
-    // The server restarts under `bun --watch` in development; come back when it does.
+    ws.onmessage = (event) => {
+      if (this.ws === ws) void this.receive(JSON.parse(String(event.data)) as ToTab);
+    };
+    // The server restarts under `bun --watch` in development; come back when it
+    // does. A close from a socket that is no longer the current one must not
+    // start a second reconnect chain — that is how one page ended up with two.
     ws.onclose = () => {
-      if (this.stopped) return;
+      if (this.stopped || this.ws !== ws) return;
       window.setTimeout(() => this.connect(), this.retryMs);
       this.retryMs = Math.min(this.retryMs * 2, 10_000);
     };
@@ -291,11 +342,12 @@ export class AgentBridge {
     const action = await executor(args, this.host.history().present);
 
     const now = Date.now();
-    const idle = this.turnLabel ? TURN_IDLE_MS : LOOSE_IDLE_MS;
+    const turn = this.turn;
+    const idle = turn.label ? TURN_IDLE_MS : LOOSE_IDLE_MS;
     // Coalesce only onto the agent's own last entry: if the user edited in
     // between, their edit must stay a separate step they can undo on its own.
-    const continuing = this.lastAgentPresent === this.host.history().present && now - this.lastAt < idle;
-    const label = this.turnLabel ? `Agent: ${this.turnLabel}` : "Agent edit";
+    const continuing = turn.lastAgentPresent === this.host.history().present && now - turn.lastAt < idle;
+    const label = turn.label ? `Agent: ${turn.label}` : "Agent edit";
 
     let before: History | null = null;
     const next = this.host.update((h) => {
@@ -306,8 +358,8 @@ export class AgentBridge {
     if (!prior || next === prior) {
       throw new ToolError("Nothing changed. The ids may be wrong, or the edit was a no-op — check get_project.");
     }
-    this.lastAgentPresent = next.present;
-    this.lastAt = now;
+    turn.lastAgentPresent = next.present;
+    turn.lastAt = now;
     return [json({ ok: true, undoStep: label, ...describeChange(prior.present, next.present) })];
   }
 
@@ -361,11 +413,39 @@ export class AgentBridge {
         if (end <= start) throw new ToolError("end must be after start.");
         return [json(audioEnvelope(project, start, end, (raw.buckets as number | undefined) ?? 60))];
       }
+      case "exportVideo": {
+        const container = (raw.container as "mp4" | "webm" | undefined) ?? "mp4";
+        const started = performance.now();
+        const blob = await exportProject(project, {
+          container,
+          height: (raw.height as number | undefined) ?? project.height,
+          frameRate: project.frameRate,
+          quality: "high",
+          bitrateMbps: null,
+          useInOut: Boolean(raw.useInOut),
+        });
+        const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+        const slug = project.name.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "export";
+        const name = `${slug}-${stamp}.${container}`;
+        const saved = await apiJson<{ bytes: number; path: string }>(`/api/exports/${encodeURIComponent(name)}`, {
+          method: "PUT",
+          body: blob,
+        });
+        return [
+          json({
+            ok: true,
+            path: saved.path,
+            bytes: saved.bytes,
+            seconds: round(projectDuration(project)),
+            renderSeconds: round((performance.now() - started) / 1000),
+          }),
+        ];
+      }
       case "startTurn":
-        this.turnLabel = String(raw.instruction).slice(0, 80);
+        this.turn.label = String(raw.instruction).slice(0, 80);
         // The next edit opens a fresh undo step rather than joining the last turn's.
-        this.lastAgentPresent = null;
-        return [text(`Turn started. Edits until the next start_turn are one undo step: "Agent: ${this.turnLabel}".`)];
+        this.turn.lastAgentPresent = null;
+        return [text(`Turn started. Edits until the next start_turn are one undo step: "Agent: ${this.turn.label}".`)];
       case "undo": {
         let label = "";
         const before = this.host.history();
@@ -374,7 +454,7 @@ export class AgentBridge {
           return undo(h);
         });
         if (after === before) throw new ToolError("Nothing to undo.");
-        this.lastAgentPresent = null;
+        this.turn.lastAgentPresent = null;
         return [text(`Undid "${label}".`)];
       }
     }

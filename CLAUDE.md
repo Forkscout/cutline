@@ -138,7 +138,11 @@ keyframe interpolation, subtitle round-tripping, the take's move to the server, 
 layout, export — and then **decodes the exported file and reads its pixels**,
 checking the background in the padding, the screen layer in the middle, the
 camera where the PiP was placed, that text and captions were drawn, and that an
-effect and a colour grade actually reached the file.
+effect, a colour grade and a dissolve actually reached the file. The dissolve
+check exists because every layer used to overwrite the transition's alpha with
+its own opacity: dissolves did nothing, in preview and in export, for as long as
+they had existed, and it was the first agent to look at its own frames that
+noticed.
 
 That last part is not belt-and-braces. The first export this project produced
 was the right duration, the right codec and the right resolution, and entirely
@@ -261,6 +265,26 @@ history synchronously rather than one render stale.
 
 **Scoped to the open project.** Nothing deletes recordings or projects;
 `remove_asset` drops an item from the project and keeps the file.
+`export_video` renders through the same `exportProject` as the Export button
+and saves under `exports/`; the server refuses a name that already exists, so
+an export is never overwritten.
+
+**A turn belongs to the project, not the socket.** Turn state lives in a
+module-level map keyed by project id. It used to live on the `AgentBridge`
+object, which the editor's effect rebuilds on a reconnect, a lock change or a
+hot reload — and one request quietly became two undo steps.
+
+**One bridge per page.** A new `AgentBridge` stops any live one, a close or a
+message from a socket that is no longer current is ignored, and each `hello`
+carries a `pageId` so the server drops a stale second socket from the same
+page. The server logs every editor that connects, with its browser and whether
+it is visible — that log is how the next item was found.
+
+**Two browsers, one project, is not handled yet.** The project lock is a
+`BroadcastChannel`, which only sees tabs of one browser. With a project open in
+the Claude app's browser and in Chrome at once, both editors save, and the agent
+talks to whichever one the server heard from last. The fix is a server-side
+lock; until then, keep one editor per project.
 
 **Stateless, with its own token.** A fresh MCP server per request, so a restart
 under `bun --watch` strands no client session. The bearer token lives in

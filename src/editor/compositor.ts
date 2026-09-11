@@ -614,7 +614,9 @@ export function drawLayer(
   };
 
   ctx.save();
-  ctx.globalAlpha = Math.max(0, Math.min(1, transform.opacity));
+  // Multiplied, not assigned: drawFrame has already set the transition's
+  // alpha, and assigning here is how every dissolve silently did nothing.
+  ctx.globalAlpha *= Math.max(0, Math.min(1, transform.opacity));
   ctx.globalCompositeOperation = transform.blendMode === "normal" ? "source-over" : transform.blendMode;
 
   // Anchor, rotate and flip about the anchor point rather than the centre, so
@@ -821,7 +823,7 @@ function drawText(
   const lineHeight = fontSize * style.lineHeight;
 
   ctx.save();
-  ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+  ctx.globalAlpha *= Math.max(0, Math.min(1, alpha));
   ctx.globalCompositeOperation =
     t.blendMode === "normal" ? "source-over" : t.blendMode;
   ctx.translate(t.x * project.width + offsetX, t.y * project.height + offsetY);
@@ -891,7 +893,7 @@ function drawShape(
   const h = project.height * 0.3 * t.scale * t.scaleY;
 
   ctx.save();
-  ctx.globalAlpha = Math.max(0, Math.min(1, t.opacity));
+  ctx.globalAlpha *= Math.max(0, Math.min(1, t.opacity));
   ctx.globalCompositeOperation = t.blendMode === "normal" ? "source-over" : t.blendMode;
   ctx.translate(t.x * project.width, t.y * project.height);
   if (t.rotation !== 0) ctx.rotate((t.rotation * Math.PI) / 180);

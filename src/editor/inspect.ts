@@ -36,6 +36,8 @@ export interface ChangeSummary {
   changed: ClipSummary[];
   /** Every id that did not exist before — new effects, keyframes, markers, tracks. */
   newIds: string[];
+  /** Project-level fields that changed: background, padding, captions, markers… */
+  project: string[];
   duration: number;
 }
 
@@ -87,7 +89,12 @@ export function describeChange(before: Project, after: Project): ChangeSummary {
   const removed = [...was].filter(([id]) => !now.has(id)).map(([, e]) => e.summary);
   const oldIds = collectIds(before, new Set());
   const newIds = [...collectIds(after, new Set())].filter((id) => !oldIds.has(id));
-  return { added, removed, changed, newIds, duration: round(projectDuration(after)) };
+  // Without this, an edit to the background or the captions reported that
+  // nothing had changed, which reads to an agent exactly like a failed call.
+  const project = (Object.keys(after) as (keyof Project)[]).filter(
+    (key) => key !== "tracks" && key !== "updatedAt" && JSON.stringify(before[key]) !== JSON.stringify(after[key]),
+  );
+  return { added, removed, changed, newIds, project, duration: round(projectDuration(after)) };
 }
 
 /* ---------------------------------------------------------------- hearing */

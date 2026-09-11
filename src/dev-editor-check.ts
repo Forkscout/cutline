@@ -480,6 +480,33 @@ async function run() {
     check("colour grade reaches the export", spread < 45, `${describe(centre)}, spread ${spread}`);
   }
 
+  /* --- transitions reach the export --------------------------------- */
+  // Every layer used to assign its own opacity over the transition's alpha, so
+  // a dissolve changed nothing — in the preview and in the file — while the
+  // project said it was there. Found by an agent looking at its own frames.
+  log("\ntransitions", "dim");
+  const plain: Project = structuredClone(inverted);
+  plain.tracks[0]!.clips[0]!.effects = [];
+  const dissolving: Project = structuredClone(plain);
+  const screenClip = dissolving.tracks[0]!.clips[0]!;
+  screenClip.transitionIn = { type: "dissolve", duration: screenClip.duration, easing: "linear" };
+  const quick = { container: "mp4", height: 360, frameRate: 12, quality: "low", bitrateMbps: null, useInOut: false } as const;
+  const midpoint = screenClip.start + screenClip.duration / 2;
+  const plainCtx = await frameCanvas(await exportProject(plain, quick), midpoint);
+  const dissolveCtx = await frameCanvas(await exportProject(dissolving, quick), midpoint);
+  if (plainCtx && dissolveCtx) {
+    const cx = plainCtx.canvas.width / 2;
+    const cy = plainCtx.canvas.height / 2;
+    const full = sample(plainCtx, cx, cy);
+    const half = sample(dissolveCtx, cx, cy);
+    const ground = sample(plainCtx, 4, 4);
+    check(
+      "a dissolve is half-way at its midpoint",
+      half.r < full.r - 40 && half.r > ground.r + 40,
+      `${describe(half)}, between ${describe(ground)} and ${describe(full)}`,
+    );
+  }
+
   await deleteSession(meta.id);
   log(`\n${failures === 0 ? "all checks passed" : `${failures} check(s) failed`}`,
       failures === 0 ? "ok" : "bad");
