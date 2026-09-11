@@ -354,7 +354,9 @@ hosted services stand beside the local one as equals. `server/stt.ts` has one
 adapter per kind of API: OpenAI-compatible (OpenAI, Groq, OpenRouter,
 whisper.cpp, speaches, LocalAI) and ElevenLabs. Each says how long a part it
 takes and how big an upload; `transcribe.ts` does the rest the same for all.
-Adding a service is an adapter and a preset. The server makes every call and
+Adding a service is an adapter and a preset. The one connected last is the
+one used; the Captions panel names it, says whether audio leaves the machine,
+and switches between connected services. The server makes every call and
 keeps keys in `~/Cutline/ai.json` (0600); the page never sees one. Adding a
 provider probes it with a quarter-second of silence, so the answer is
 *transcription ✗, and why*, not "connected". LM Studio, as of September 2026,
@@ -371,7 +373,16 @@ repeating a phrase — nine minutes of Hindi came back as "re re re…" from the
 thirtieth second — so its parts are two minutes. Every part reaches two seconds
 into its neighbours and each word is kept from the part its middle falls in;
 `dropLoops` removes any phrase repeated more than three times running, whatever
-produced it. Even so, whisper.cpp's medium model is weak on Hinglish;
+produced it.
+
+**Then every hole is heard again.** Hosted Whisper drops the last seconds of
+each thirty-second window it decodes: nine minutes of Hindi through OpenRouter
+lost 141 s of speech, and cutting 26 s parts only moved the holes to the ends
+of the parts. So any stretch over 2.5 s with no word in it is sent again,
+centred in a short part of its own — the same video then came back with one
+3 s gap, a real pause. A hole that was silence costs a few seconds of audio.
+Hosted parts go four at a time, since a request took ~35 s through OpenRouter
+however short its audio; whisper.cpp takes them in turn. Even so, whisper.cpp's medium model is weak on Hinglish;
 large-v3-turbo is the local model to run:
 
 ```

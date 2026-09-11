@@ -9,6 +9,14 @@
  * a cut is heard whole in one of them; each word is kept from the part its
  * middle falls in. A file with video sends only its audio.
  *
+ * Then every hole is heard again. Hosted Whisper drops the last seconds of
+ * each thirty-second window it decodes: nine minutes of Hindi through
+ * OpenRouter lost 141 s of speech, a few seconds out of every half-minute, and
+ * cutting the audio into 26 s parts only moved the holes to the ends of the
+ * parts. So any stretch longer than `HOLE_SECONDS` with no word in it is sent
+ * again, in the middle of a short part of its own. A hole that really was
+ * silence comes back empty, having cost a few seconds of audio.
+ *
  * Results are cached beside the file, so the same recording opened in a
  * second project is not transcribed, or paid for, twice.
  */
@@ -41,6 +49,38 @@ export interface TranscribeOptions {
 
 /** How far each part reaches into its neighbours, seconds. */
 const OVERLAP_SECONDS = 2;
+/** A stretch this long with no word in it is heard again. */
+const HOLE_SECONDS = 2.5;
+/** A hole is re-heard in pieces of at most this, each padded on both sides. */
+const HOLE_PIECE_SECONDS = 16;
+const HOLE_PAD_SECONDS = 6;
+
+/** Runs jobs with at most `lanes` in flight, keeping results in order. */
+async function inLanes<T>(jobs: (() => Promise<T>)[], lanes: number): Promise<T[]> {
+  const results: T[] = new Array(jobs.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(lanes, jobs.length)) }, async () => {
+      while (next < jobs.length) {
+        const index = next++;
+        results[index] = await jobs[index]!();
+      }
+    }),
+  );
+  return results;
+}
+
+/** Stretches of the file with no word in them, longer than HOLE_SECONDS. */
+function holesIn(words: TranscriptWord[], duration: number): [number, number][] {
+  const holes: [number, number][] = [];
+  let heardTo = 0;
+  for (const w of words) {
+    if (w.start - heardTo > HOLE_SECONDS) holes.push([heardTo, w.start]);
+    heardTo = Math.max(heardTo, w.end);
+  }
+  if (duration - heardTo > HOLE_SECONDS) holes.push([heardTo, duration]);
+  return holes;
+}
 
 async function probeFile(file: string): Promise<{ duration: number; hasVideo: boolean; mime: string; bitrate: number }> {
   const input = new Input({ source: new FilePathSource(file), formats: ALL_FORMATS });
@@ -132,30 +172,64 @@ export async function transcribeFile(
   for (let start = 0; start < duration; start += part) spans.push([start, Math.min(duration, start + part)]);
   const whole = spans.length === 1 && !hasVideo && (await stat(source)).size <= maxBytes;
 
-  const words: TranscriptWord[] = [];
   let timing: Transcript["timing"] = "word";
   let language: string | null = null;
+  let done = 0;
+  let total = spans.length;
+  const tick = (note: string) => options.onProgress?.(Math.min(0.99, done / total), note);
 
-  for (const [index, [start, end]] of spans.entries()) {
-    options.onProgress?.(index / spans.length, `part ${index + 1} of ${spans.length}`);
-    const cut = whole
-      ? { piece: source, offset: 0 }
-      : await cutAudio(source, Math.max(0, start - OVERLAP_SECONDS), Math.min(duration, end + OVERLAP_SECONDS), mime);
+  /** Words heard between two times of the file, kept if `keep` accepts their middle. */
+  const listen = async (from: number, to: number, keep: (middle: number) => boolean, useWhole: boolean) => {
+    const cut = useWhole ? { piece: source, offset: 0 } : await cutAudio(source, from, to, mime);
     try {
       const got = await adapter.transcribe(provider, cut.piece, uploadName(cut.piece, mime), options.language);
-      const first = index === 0;
-      const last = index === spans.length - 1;
-      for (const w of dropLoops(got.words)) {
-        const shifted = { start: w.start + cut.offset, end: w.end + cut.offset, text: w.text };
-        const middle = (shifted.start + shifted.end) / 2;
-        // Each word from the part its middle falls in, so the overlap is heard once.
-        if ((first || middle >= start) && (last || middle < end)) words.push(shifted);
-      }
       if (got.timing === "segment") timing = "segment";
       language ??= got.language;
+      return dropLoops(got.words)
+        .map((w) => ({ start: w.start + cut.offset, end: w.end + cut.offset, text: w.text }))
+        .filter((w) => keep((w.start + w.end) / 2));
     } finally {
-      if (!whole) await rm(cut.piece, { force: true });
+      if (!useWhole) await rm(cut.piece, { force: true });
+      done += 1;
     }
+  };
+
+  const lanes = adapter.concurrency(provider);
+  tick(`${spans.length} part${spans.length === 1 ? "" : "s"}`);
+  const parts = await inLanes(
+    spans.map(([start, end], index) => async () => {
+      const first = index === 0;
+      const last = index === spans.length - 1;
+      const heard = await listen(
+        Math.max(0, start - OVERLAP_SECONDS),
+        Math.min(duration, end + OVERLAP_SECONDS),
+        // Each word from the part its middle falls in, so the overlap is heard once.
+        (middle) => (first || middle >= start) && (last || middle < end),
+        whole,
+      );
+      tick(`${done} of ${total} parts`);
+      return heard;
+    }),
+    lanes,
+  );
+  let words = parts.flat();
+
+  // The second pass: every hole again, centred in a short part of its own.
+  const pieces: [number, number][] = holesIn(words, duration).flatMap(([a, b]) => {
+    const out: [number, number][] = [];
+    for (let at = a; at < b; at += HOLE_PIECE_SECONDS) out.push([at, Math.min(b, at + HOLE_PIECE_SECONDS)]);
+    return out;
+  });
+  if (pieces.length > 0) {
+    total += pieces.length;
+    tick(`filling ${pieces.length} gap${pieces.length === 1 ? "" : "s"}`);
+    const filled = await inLanes(
+      pieces.map(([a, b]) => () =>
+        listen(Math.max(0, a - HOLE_PAD_SECONDS), Math.min(duration, b + HOLE_PAD_SECONDS), (m) => m > a && m < b, false),
+      ),
+      lanes,
+    );
+    words = [...words, ...filled.flat()].sort((x, y) => x.start - y.start);
   }
 
   const transcript: Transcript = {

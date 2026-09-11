@@ -28,6 +28,8 @@ export interface SttAdapter {
   partSeconds(provider: Provider): number;
   /** The largest upload the service takes, bytes, with a margin. */
   maxBytes(provider: Provider): number;
+  /** How many requests to have in flight at once. */
+  concurrency(provider: Provider): number;
   /** Words timed from the start of `file`. `name` carries the format in its extension. */
   transcribe(provider: Provider, file: string, name: string, language?: string): Promise<PartResult>;
   /** What the service can do, found by trying it. */
@@ -140,6 +142,9 @@ const openai: SttAdapter = {
     // OpenAI, Groq's free tier and OpenRouter all refuse an upload over 25 MB.
     return flavorOf(provider) === "whisper.cpp" ? Number.POSITIVE_INFINITY : 24 * MB;
   },
+  // A hosted request took ~35 s through OpenRouter however short its audio,
+  // so parts go side by side; a local server has one model and takes turns.
+  concurrency: (provider) => (flavorOf(provider) === "whisper.cpp" ? 1 : 4),
   async transcribe(provider, file, name, language) {
     const form = new FormData();
     form.set("file", Bun.file(file), name);
@@ -207,6 +212,7 @@ const elevenlabs: SttAdapter = {
   // One request could hold hours; half an hour keeps a failure cheap to retry.
   partSeconds: () => 1800,
   maxBytes: () => 1000 * MB,
+  concurrency: () => 2,
   async transcribe(provider, file, name, language) {
     const form = new FormData();
     form.set("file", Bun.file(file), name);
