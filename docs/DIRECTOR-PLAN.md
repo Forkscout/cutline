@@ -21,7 +21,7 @@ Status as of 12 Sep 2026. ✅ done · 🟡 in progress · ⬜ next.
 | Macros: `layout_move`, `add_title`, `add_points`, `add_chips`, `add_stat`, `add_flow`, `add_bars`, `add_lower_third`, `add_backdrop` | ✅ | `editor/agent-macros.ts` |
 | Web fonts in preview and export alike | ✅ | `lib/fonts.ts` |
 | Storyboard compiler + Storyboard view | ✅ | `editor/storyboard.ts`, `storyboard-view.tsx`, `set_storyboard`/`compile_storyboard` |
-| Director panel inside the editor (no Claude Code or MCP setup needed) | ⬜ | §4 |
+| Director panel inside the editor (no Claude Code or MCP setup needed), ⌘K | ✅ | `editor/director.ts`, `director-panel.tsx`, `server/chat.ts` |
 | `analyze_media` (burned-in graphics, subject from motion, cuts, silences) | ✅ | `editor/analyze.ts` |
 | `preview_themes` sheet, `theme_from_media`, `ask_client` form | ✅ | `editor/styleframes.ts`, `themes.ts`, `client-questions.ts` |
 | Self-QA (`lint_scene`) and facts to confirm | ⬜ | §6 |
@@ -227,7 +227,7 @@ calls. Export runs in the user's browser, so there is no render bill.
 1. ✅ Finish macros and fonts.
 2. ✅ Storyboard compiler, and a Storyboard view — rebuild the TreeFlux
    edit from one JSON as the acceptance test.
-3. Director panel and ⌘K command bar, bring-your-own key first.
+3. ✅ Director panel and ⌘K command bar, bring-your-own key first.
 4. `analyze_media`, `lint_scene`, facts cards.
 5. Styleframe compare, note pins, versions, locks.
 6. Studio (brand kits, looks, references), the import flows of §5, Create

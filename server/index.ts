@@ -27,8 +27,10 @@ import type { ToCursor } from "../src/lib/cursor-protocol";
 import { TabBridge } from "./bridge";
 import { CursorService, type CursorRecording } from "./cursor";
 import { Remuxer } from "./remux";
-import { AiSettings, isLocal, type ProviderKind } from "./ai";
-import { PROVIDER_KINDS, probe } from "./stt";
+import { AiSettings, isLocal, type Provider, type ProviderKind } from "./ai";
+import { probeAll, recordUsage, runChat } from "./chat";
+import type { ChatRequest } from "../src/lib/chat-protocol";
+import { PROVIDER_KINDS } from "./stt";
 import { Jobs, transcribeFile } from "./transcribe";
 import { loadMcpToken, mcpHandler } from "./mcp";
 import { DiskMediaStore, TruncatedUpload, fileResponse } from "./media";
@@ -274,6 +276,7 @@ api.put("/ai/providers/:id", async (c) => {
     name?: string;
     baseUrl?: string;
     transcribeModel?: string;
+    chatModel?: string;
     apiKey?: string;
   }>();
   if (body.kind !== undefined && !PROVIDER_KINDS.includes(body.kind)) {
@@ -291,15 +294,16 @@ api.put("/ai/providers/:id", async (c) => {
     name: body.name?.trim() || url.host,
     baseUrl: url.toString(),
     ...(body.transcribeModel ? { transcribeModel: body.transcribeModel } : {}),
+    ...(body.chatModel !== undefined ? { chatModel: body.chatModel } : {}),
     ...(body.apiKey !== undefined ? { apiKey: body.apiKey } : {}),
   });
-  return c.json(await ai.setCapabilities(id, await probe(provider)));
+  return c.json(await ai.setCapabilities(id, await probeAll(provider)));
 });
 
 api.post("/ai/providers/:id/probe", async (c) => {
   const provider = await ai.get(c.req.param("id"));
   if (!provider) return c.json({ error: "No such provider" }, 404);
-  return c.json(await ai.setCapabilities(provider.id, await probe(provider)));
+  return c.json(await ai.setCapabilities(provider.id, await probeAll(provider)));
 });
 
 api.delete("/ai/providers/:id", async (c) => {
@@ -309,18 +313,62 @@ api.delete("/ai/providers/:id", async (c) => {
 
 /** Which service each capability resolves to right now, and whether it stays on this machine. */
 api.get("/ai/capabilities", async (c) => {
-  const provider = await ai.resolveTranscribe();
+  const [transcriber, director] = await Promise.all([ai.resolveTranscribe(), ai.resolveChat()]);
+  const view = (p: Provider, model: string) => ({ providerId: p.id, kind: p.kind, name: p.name, model, local: isLocal(p.baseUrl) });
   return c.json({
-    transcribe: provider
-      ? {
-          providerId: provider.id,
-          kind: provider.kind,
-          name: provider.name,
-          model: provider.transcribeModel,
-          local: isLocal(provider.baseUrl),
-        }
-      : null,
+    transcribe: transcriber ? view(transcriber, transcriber.transcribeModel) : null,
+    chat: director?.chatModel ? view(director, director.chatModel) : null,
   });
+});
+
+/* --- the Director's model calls --- */
+
+const chatJobs = new Jobs();
+const chatAborts = new Map<string, AbortController>();
+const USAGE_FILE = path.join(cutlineHome(), "usage.jsonl");
+
+/**
+ * One model call for the Director, answered with a job to poll — a reply with
+ * a dozen tool calls can outlast a request — and logged to usage.jsonl.
+ */
+api.post("/ai/chat", async (c) => {
+  const body = await c.req.json<ChatRequest>();
+  if (typeof body.system !== "string" || !Array.isArray(body.messages) || !Array.isArray(body.tools)) {
+    return c.json({ error: "system, messages and tools are required" }, 400);
+  }
+  const provider = await ai.resolveChat();
+  if (!provider) return c.json({ error: "No model is connected for the Director." }, 409);
+  const controller = new AbortController();
+  let id = "";
+  id = chatJobs.start(async () => {
+    try {
+      const result = await runChat(provider, body, controller.signal);
+      await recordUsage(USAGE_FILE, {
+        at: Date.now(),
+        providerId: provider.id,
+        provider: provider.name,
+        model: result.model,
+        projectId: typeof body.projectId === "string" ? body.projectId : null,
+        ...result.usage,
+      }).catch(() => {});
+      return result;
+    } finally {
+      chatAborts.delete(id);
+    }
+  });
+  chatAborts.set(id, controller);
+  return c.json({ jobId: id });
+});
+
+api.get("/ai/chat/:jobId", (c) => {
+  const job = chatJobs.get(c.req.param("jobId"));
+  return job ? c.json(job) : c.json({ error: "No such job" }, 404);
+});
+
+/** Stop: the page's Stop button, so a long reply is not paid for to the end. */
+api.delete("/ai/chat/:jobId", (c) => {
+  chatAborts.get(c.req.param("jobId"))?.abort();
+  return c.json({ ok: true });
 });
 
 /* --- transcription --- */
@@ -350,7 +398,7 @@ api.post("/transcribe", async (c) => {
   // A local service connected before whisper.cpp was told apart carries no
   // flavor, and would get none of its handling. Probing it again is free.
   if (provider.kind === "openai" && !provider.capabilities?.flavor && isLocal(provider.baseUrl)) {
-    const capabilities = await probe(provider);
+    const capabilities = await probeAll(provider);
     await ai.setCapabilities(provider.id, capabilities);
     provider = { ...provider, capabilities };
   }

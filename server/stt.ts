@@ -243,9 +243,24 @@ const elevenlabs: SttAdapter = {
   },
 };
 
+/* --------------------------------------------------------- Anthropic */
+
+/** Anthropic has no speech-to-text. It is connected for the Director, and says so here. */
+const anthropic: SttAdapter = {
+  partSeconds: () => 600,
+  maxBytes: () => 0,
+  concurrency: () => 1,
+  async transcribe() {
+    throw new Error("Anthropic has no speech-to-text. Connect a transcription service in the Captions panel.");
+  },
+  async probe() {
+    return { checkedAt: Date.now(), reachable: false, models: [], transcribe: false, message: "No speech-to-text: Anthropic is for the Director." };
+  },
+};
+
 /* ------------------------------------------------------------ lookup */
 
-const ADAPTERS: Record<ProviderKind, SttAdapter> = { openai, elevenlabs };
+const ADAPTERS: Record<ProviderKind, SttAdapter> = { openai, elevenlabs, anthropic };
 
 export const PROVIDER_KINDS = Object.keys(ADAPTERS) as ProviderKind[];
 

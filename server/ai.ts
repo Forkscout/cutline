@@ -3,7 +3,8 @@
  *
  * A provider is a kind of API, a base URL and an optional key. Most services
  * speak OpenAI's — OpenAI itself, Groq, OpenRouter, a whisper.cpp server on
- * this machine — and ElevenLabs has its own; `stt.ts` has one adapter per kind.
+ * this machine — ElevenLabs has its own, and Anthropic's, which only the
+ * Director uses; `stt.ts` and `chat.ts` have one adapter per kind.
  * Keys live in `~/Cutline/ai.json`, readable only by the user, and never go
  * back to the page: this server makes every call, so the browser never holds a
  * key and local services never see a cross-origin request.
@@ -30,10 +31,14 @@ export interface Capabilities {
    * (recognised by its Server header) and OpenRouter (by its host).
    */
   flavor?: "whisper.cpp" | "openrouter";
+  /** The chosen chat model answered: the Director can run on it. */
+  chat?: boolean;
+  /** Why it cannot, in the service's own words. */
+  chatMessage?: string;
 }
 
 /** Which API the provider speaks; `stt.ts` has an adapter for each. */
-export type ProviderKind = "openai" | "elevenlabs";
+export type ProviderKind = "openai" | "elevenlabs" | "anthropic";
 
 export interface Provider {
   id: string;
@@ -43,6 +48,8 @@ export interface Provider {
   apiKey?: string;
   /** The model to transcribe with: whisper-1, openai/whisper-large-v3, scribe_v2. */
   transcribeModel: string;
+  /** The model the Director runs on: claude-sonnet-5, anthropic/claude-sonnet-5, gpt-5. None: not used for chat. */
+  chatModel?: string;
   capabilities?: Capabilities;
 }
 
@@ -61,13 +68,18 @@ export function isLocal(baseUrl: string): boolean {
 
 export function authHeaders(provider: Provider): Record<string, string> {
   if (!provider.apiKey) return {};
-  return provider.kind === "elevenlabs"
-    ? { "xi-api-key": provider.apiKey }
-    : { authorization: `Bearer ${provider.apiKey}` };
+  switch (provider.kind) {
+    case "elevenlabs":
+      return { "xi-api-key": provider.apiKey };
+    case "anthropic":
+      return { "x-api-key": provider.apiKey };
+    default:
+      return { authorization: `Bearer ${provider.apiKey}` };
+  }
 }
 
 /** The model a kind of service is asked for when the user names none. */
-export const DEFAULT_MODEL: Record<ProviderKind, string> = { openai: "whisper-1", elevenlabs: "scribe_v2" };
+export const DEFAULT_MODEL: Record<ProviderKind, string> = { openai: "whisper-1", elevenlabs: "scribe_v2", anthropic: "" };
 
 /**
  * The URL a request actually goes to. Inside a container "localhost" is the
@@ -159,7 +171,7 @@ export class AiSettings {
    */
   async upsert(
     id: string,
-    patch: { kind?: ProviderKind; name: string; baseUrl: string; transcribeModel?: string; apiKey?: string },
+    patch: { kind?: ProviderKind; name: string; baseUrl: string; transcribeModel?: string; chatModel?: string; apiKey?: string },
   ): Promise<Provider> {
     const data = await this.read();
     const existing = data.providers.find((p) => p.id === id);
@@ -173,6 +185,8 @@ export class AiSettings {
     };
     const key = patch.apiKey === undefined ? existing?.apiKey : patch.apiKey;
     if (key) next.apiKey = key;
+    const chatModel = patch.chatModel === undefined ? existing?.chatModel : patch.chatModel.trim();
+    if (chatModel) next.chatModel = chatModel;
     // The service connected last is the one used: connecting OpenRouter after a
     // local server means "use OpenRouter now". It used to mean nothing at all —
     // the first one added kept answering.
@@ -194,6 +208,11 @@ export class AiSettings {
     const data = await this.read();
     data.providers = data.providers.filter((p) => p.id !== id);
     await this.write(data);
+  }
+
+  /** The most recently connected provider whose chat model answered. */
+  async resolveChat(): Promise<Provider | null> {
+    return (await this.read()).providers.find((p) => p.chatModel && p.capabilities?.chat) ?? null;
   }
 
   /** The most recently connected provider that can transcribe. */

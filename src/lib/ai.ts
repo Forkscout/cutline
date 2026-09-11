@@ -4,10 +4,11 @@
  */
 
 import type { Transcript } from "@/editor/transcript";
+import type { ChatRequest, ChatResponse } from "./chat-protocol";
 import { apiJson } from "./server";
 
-/** Which API a provider speaks: OpenAI's (OpenAI, Groq, OpenRouter, whisper.cpp…) or ElevenLabs'. */
-export type ProviderKind = "openai" | "elevenlabs";
+/** Which API a provider speaks: OpenAI's (OpenAI, Groq, OpenRouter, whisper.cpp…), ElevenLabs' or Anthropic's. */
+export type ProviderKind = "openai" | "elevenlabs" | "anthropic";
 
 export interface ProviderReport {
   id: string;
@@ -15,6 +16,8 @@ export interface ProviderReport {
   name: string;
   baseUrl: string;
   transcribeModel: string;
+  /** The model the Director runs on, when it is used for that. */
+  chatModel?: string;
   hasKey: boolean;
   /** On this machine, so nothing leaves it. */
   local: boolean;
@@ -25,11 +28,23 @@ export interface ProviderReport {
     transcribe: boolean;
     message?: string;
     flavor?: "whisper.cpp" | "openrouter";
+    chat?: boolean;
+    chatMessage?: string;
   };
 }
 
+export interface ServiceInUse {
+  providerId: string;
+  kind: ProviderKind;
+  name: string;
+  model: string;
+  local: boolean;
+}
+
 export interface Capabilities {
-  transcribe: { providerId: string; kind: ProviderKind; name: string; model: string; local: boolean } | null;
+  transcribe: ServiceInUse | null;
+  /** The model the Director runs on. */
+  chat?: ServiceInUse | null;
 }
 
 export const listProviders = () => apiJson<ProviderReport[]>("/api/ai/providers");
@@ -41,7 +56,7 @@ export const capabilities = () => apiJson<Capabilities>("/api/ai/capabilities");
  */
 export function saveProvider(
   id: string,
-  provider: { kind?: ProviderKind; name: string; baseUrl: string; transcribeModel?: string; apiKey?: string },
+  provider: { kind?: ProviderKind; name: string; baseUrl: string; transcribeModel?: string; chatModel?: string; apiKey?: string },
 ): Promise<ProviderReport> {
   return apiJson<ProviderReport>(`/api/ai/providers/${encodeURIComponent(id)}`, {
     method: "PUT",
@@ -75,5 +90,31 @@ export async function transcribe(
     if (job.status === "error") throw new Error(job.error ?? "Transcription failed.");
     onProgress?.(job.progress, job.note);
     await new Promise((resolve) => setTimeout(resolve, 600));
+  }
+}
+
+/**
+ * One model call for the Director, through the server, which holds the key.
+ * Aborting stops the call on the server too, so a long reply is not paid for
+ * to the end.
+ */
+export async function chat(request: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
+  const { jobId } = await apiJson<{ jobId: string }>("/api/ai/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  const stop = () => void apiJson(`/api/ai/chat/${jobId}`, { method: "DELETE" }).catch(() => {});
+  signal?.addEventListener("abort", stop, { once: true });
+  try {
+    for (;;) {
+      if (signal?.aborted) throw new DOMException("Stopped", "AbortError");
+      const job = await apiJson<{ status: string; result?: ChatResponse; error?: string }>(`/api/ai/chat/${jobId}`);
+      if (job.status === "done" && job.result) return job.result;
+      if (job.status === "error") throw new Error(job.error ?? "The model call failed.");
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+  } finally {
+    signal?.removeEventListener("abort", stop);
   }
 }

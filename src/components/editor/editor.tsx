@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
+import { Clapperboard,
   Captions,
   Bot,
   Film,
@@ -19,6 +19,8 @@ import { toast } from "sonner";
 import { AgentBridge } from "@/editor/agent-bridge";
 import { runAutoCaptions, type AutoCaptionOptions } from "@/components/editor/auto-captions";
 import { BriefPanel } from "@/components/editor/brief-panel";
+import { DirectorCommand, DirectorPanel } from "@/components/editor/director-panel";
+import { Director } from "@/editor/director";
 import { StoryboardView } from "@/components/editor/storyboard-view";
 import { compileStoryboard } from "@/editor/storyboard";
 import { measureOnCanvas, type MacroContext } from "@/editor/agent-macros";
@@ -227,6 +229,27 @@ export function Editor({
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
   const [agentTool, setAgentTool] = useState<string | null>(null);
+  const [commandOpen, setCommandOpen] = useState(false);
+  // The Director runs in this tab on the bridge's executors, and lights the
+  // same badge an MCP agent's calls do, held the same way.
+  const directorFade = useRef<number | undefined>(undefined);
+  const director = useMemo(
+    () =>
+      new Director(initial.id, () => {
+        const bridge = bridgeRef.current;
+        if (!bridge) return null;
+        return {
+          execute: (name, args) => bridge.execute(name, args),
+          onActivity: (tool) => {
+            window.clearTimeout(directorFade.current);
+            if (tool) setAgentTool(tool);
+            else directorFade.current = window.setTimeout(() => setAgentTool(null), 2500);
+          },
+        };
+      }),
+    [initial.id],
+  );
+  useEffect(() => () => director.stop(), [director]);
 
   // Only the tab that saves takes agent edits — the same rule as autosave, for
   // the same reason: two tabs applying them would fork the project.
@@ -437,6 +460,12 @@ export function Editor({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // ⌘K reaches the director from anywhere, a text field included.
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCommandOpen(true);
+        return;
+      }
       const target = e.target as HTMLElement | null;
       // Never steal a key from a field the user is typing in.
       if (
@@ -729,6 +758,14 @@ export function Editor({
           </Button>
           <ExportDialog project={project} />
           <ClientQuestionsDialog />
+          <DirectorCommand
+            open={commandOpen}
+            onOpenChange={setCommandOpen}
+            onSubmit={(text, shown) => {
+              setRightTab("director");
+              void director.send(text, shown);
+            }}
+          />
           <Button variant="ghost" size="icon" className="size-7" onClick={onClose} title="Close editor">
             <X className="size-4" />
           </Button>
@@ -794,7 +831,10 @@ export function Editor({
 
             <ResizablePanel defaultSize="25" minSize="16" className="border-l">
               <Tabs value={rightTab} onValueChange={setRightTab} className="flex h-full flex-col gap-0">
-                <TabsList className="mx-2 mt-2 grid h-7 grid-cols-3">
+                <TabsList className="mx-2 mt-2 grid h-7 grid-cols-4">
+                  <TabsTrigger value="director" className="text-[10px]">
+                    <Clapperboard className="size-3" />Director
+                  </TabsTrigger>
                   <TabsTrigger value="inspector" className="text-[10px]">Inspector</TabsTrigger>
                   <TabsTrigger value="scopes" className="text-[10px]">
                     <Gauge className="size-3" />Scopes
@@ -803,6 +843,10 @@ export function Editor({
                     <History className="size-3" />History
                   </TabsTrigger>
                 </TabsList>
+
+                <TabsContent value="director" className="mt-2 min-h-0 flex-1">
+                  <DirectorPanel director={director} />
+                </TabsContent>
 
                 <TabsContent value="inspector" className="mt-2 min-h-0 flex-1">
                   <Inspector project={project} selected={selected} time={time} dispatch={dispatch} />
