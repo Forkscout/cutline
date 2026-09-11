@@ -4,7 +4,14 @@ import { toast } from "sonner";
 import { parseSubtitles, toSrt, toVtt } from "@/editor/captions";
 import type { Action } from "@/editor/project";
 import type { MediaAsset, Project } from "@/editor/types";
-import { capabilities, saveProvider, type Capabilities, type ProviderKind, type ProviderReport } from "@/lib/ai";
+import {
+  capabilities,
+  listProviders,
+  saveProvider,
+  type Capabilities,
+  type ProviderKind,
+  type ProviderReport,
+} from "@/lib/ai";
 import type { AutoCaptionOptions } from "@/components/editor/auto-captions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -66,7 +73,7 @@ const PRESETS: Preset[] = [
  * Connecting a transcription service, in the place it is first needed —
  * never a settings page to visit before recording.
  */
-function ConnectTranscription({ onConnected }: { onConnected: () => void }) {
+function ConnectTranscription({ onConnected, onCancel }: { onConnected: () => void; onCancel?: () => void }) {
   const [preset, setPreset] = useState<Preset>(PRESETS[0]!);
   const [baseUrl, setBaseUrl] = useState(PRESETS[0]!.baseUrl);
   const [model, setModel] = useState(PRESETS[0]!.model);
@@ -104,7 +111,16 @@ function ConnectTranscription({ onConnected }: { onConnected: () => void }) {
 
   return (
     <div className="space-y-1.5">
-      <p className="text-[10px] text-muted-foreground">Auto-captions needs a speech-to-text service. Where should it run?</p>
+      <div className="flex items-center">
+        <p className="text-[10px] text-muted-foreground">
+          {onCancel ? "Add a speech-to-text service." : "Auto-captions needs a speech-to-text service. Where should it run?"}
+        </p>
+        {onCancel && (
+          <button className="ml-auto text-[10px] text-muted-foreground underline-offset-2 hover:underline" onClick={onCancel}>
+            Cancel
+          </button>
+        )}
+      </div>
       <div className="flex flex-wrap gap-1">
         {PRESETS.map((p) => (
           <Button key={p.label} size="sm" className="h-5 px-1.5 text-[10px]"
@@ -155,14 +171,32 @@ function AutoCaptions({
   onAutoCaption: (assetId: string, options?: AutoCaptionOptions) => Promise<boolean>;
 }) {
   const [caps, setCaps] = useState<Capabilities | null>(null);
+  const [providers, setProviders] = useState<ProviderReport[]>([]);
   const [editing, setEditing] = useState(false);
   const [language, setLanguage] = useState<string>("auto");
   const [busy, setBusy] = useState<string | null>(null);
 
   const refresh = () =>
-    capabilities()
-      .then(setCaps)
-      .catch(() => setCaps({ transcribe: null }));
+    Promise.all([
+      capabilities().then(setCaps).catch(() => setCaps({ transcribe: null })),
+      listProviders().then(setProviders).catch(() => setProviders([])),
+    ]);
+
+  // Saving a provider again makes it the one in use, keeping its stored key.
+  const use = async (id: string) => {
+    const p = providers.find((x) => x.id === id);
+    if (!p) return;
+    setBusy("Switching…");
+    try {
+      const report = await saveProvider(p.id, { kind: p.kind, name: p.name, baseUrl: p.baseUrl, transcribeModel: p.transcribeModel });
+      if (!report.capabilities?.transcribe) toast.error(`${p.name} cannot transcribe right now`, { description: report.capabilities?.message });
+      await refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not switch.");
+    } finally {
+      setBusy(null);
+    }
+  };
   useEffect(() => {
     void refresh();
   }, []);
@@ -196,16 +230,49 @@ function AutoCaptions({
           setEditing(false);
           void refresh();
         }}
+        {...(caps.transcribe ? { onCancel: () => setEditing(false) } : {})}
       />
     );
   }
 
+  const active = caps.transcribe;
+  const usable = providers.filter((p) => p.capabilities?.transcribe);
+  const service = (
+    <div className="space-y-1 rounded-md border p-1.5">
+      <div className="flex items-center gap-1 text-[10px]">
+        <span className="size-1.5 rounded-full bg-primary" />
+        <span className="font-medium">Speech-to-text</span>
+        <span className={cn("ml-auto rounded-full px-1.5 py-0.5", active.local ? "bg-primary/15 text-foreground" : "bg-muted")}>
+          {active.local ? "on this machine" : "hosted"}
+        </span>
+      </div>
+      <select className="h-6 w-full rounded-md border bg-background px-1 text-[10px]" value={active.providerId}
+        disabled={busy !== null} onChange={(e) => void use(e.target.value)}>
+        {usable.map((p) => (
+          <option key={p.id} value={p.id}>{providerLabel(p)} · {p.transcribeModel}</option>
+        ))}
+      </select>
+      <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+        <span className="truncate">{active.local ? "Nothing leaves this machine." : `Audio is sent to ${active.name}.`}</span>
+        <button className="ml-auto shrink-0 underline-offset-2 hover:underline" onClick={() => setEditing(true)}>
+          + Add service
+        </button>
+      </div>
+    </div>
+  );
+
   if (sources.length === 0) {
-    return <p className="text-[10px] text-muted-foreground">Put a clip with sound on the timeline to caption it.</p>;
+    return (
+      <div className="space-y-1.5">
+        {service}
+        <p className="text-[10px] text-muted-foreground">Put a clip with sound on the timeline to caption it.</p>
+      </div>
+    );
   }
 
   return (
     <div className="space-y-1.5">
+      {service}
       <div className="grid grid-cols-2 gap-1">
         <select className="h-6 rounded-md border bg-background px-1 text-[10px]" value={source?.id}
           onChange={(e) => setSourceId(e.target.value)} disabled={busy !== null}>
@@ -225,15 +292,14 @@ function AutoCaptions({
         <Sparkles className="size-3.5" />
         {busy ?? (source?.transcript ? "Transcribe again" : "Generate captions")}
       </Button>
-      <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-        <span className={cn("rounded-full px-1.5 py-0.5", caps.transcribe.local ? "bg-primary/15 text-foreground" : "bg-muted")}>
-          {caps.transcribe.local ? "on this machine" : `sent to ${caps.transcribe.name}`}
-        </span>
-        <span className="truncate">{caps.transcribe.model}</span>
-        <button className="ml-auto underline-offset-2 hover:underline" onClick={() => setEditing(true)}>change</button>
-      </div>
     </div>
   );
+}
+
+/** A connected service as people know it: "whisper.cpp · this Mac", not "127.0.0.1:8178". */
+function providerLabel(p: ProviderReport): string {
+  if (p.capabilities?.flavor === "whisper.cpp") return p.local ? "whisper.cpp · this Mac" : "whisper.cpp";
+  return p.name;
 }
 
 export function CaptionsPanel({
