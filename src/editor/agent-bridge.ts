@@ -25,6 +25,7 @@ import { visibleClips } from "./compositor";
 import { createEffect } from "./effects";
 import { exportProject } from "./export";
 import { audioEnvelope, describeChange, leanProject } from "./inspect";
+import { wordsOnTimeline } from "./transcript";
 import { readProperty } from "./keyframes";
 import { importSession } from "./media";
 import {
@@ -465,6 +466,21 @@ export class AgentBridge {
             bytes: saved.bytes,
             seconds: round(projectDuration(project)),
             renderSeconds: round((performance.now() - started) / 1000),
+          }),
+        ];
+      }
+      case "transcript": {
+        const from = (raw.start as number | undefined) ?? 0;
+        const to = (raw.end as number | undefined) ?? Number.POSITIVE_INFINITY;
+        const words = wordsOnTimeline(project).filter((w) => w.end > from && w.start < to);
+        if (words.length === 0) {
+          const any = project.assets.some((a) => a.transcript);
+          return [text(any ? "Nothing is said in that range." : "No transcript yet. Generate captions in the Captions panel first.")];
+        }
+        return [
+          json({
+            text: words.map((w) => w.text).join(" "),
+            words: words.map((w) => ({ start: round(w.start), end: round(w.end), text: w.text })),
           }),
         ];
       }

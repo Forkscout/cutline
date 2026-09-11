@@ -337,6 +337,33 @@ exactly. It checks that a planted two-second gap shows in the envelope, and
 that the tab's JSON equals what autosave writes, byte for byte.
 `cleanup <id>` removes the project.
 
+## Transcription and AI services
+
+**One API shape, whatever runs the model.** Every AI call goes through an
+OpenAI-compatible provider — a name, a base URL, an optional key — that the
+user connects where a feature first needs it (the Captions panel), never in a
+settings page before recording. The server makes every call and keeps keys in
+`~/Cutline/ai.json` (0600); the page never sees one. Adding a provider probes
+it: `/models`, and a quarter-second of silence sent to `/audio/transcriptions`,
+so the answer is *text ✓ · transcription ✗*, not "connected". LM Studio lists
+models but, as of September 2026, cannot transcribe; a whisper.cpp server can:
+
+```
+whisper-server -m ~/.cache/whisper-cpp/ggml-medium.bin \
+  --inference-path /v1/audio/transcriptions --convert -l auto --port 8178
+```
+
+**Transcripts live in the file's time, captions in the timeline's.**
+`server/transcribe.ts` cuts long audio into ten-minute parts by copying packets
+— a trimming conversion makes mediabunny decode, and Bun has no audio decoder,
+so it discards the track as "undecodable" — shifts each part's words back by
+where its first packet really starts, and caches the result beside the file.
+whisper.cpp reports words as tokens (" Cut", "line"): a piece without leading
+space continues the word before it. The transcript is stored on the asset;
+`wordsOnTimeline` maps it through the clips, so a trim never invalidates it,
+and `captionsFromWords` breaks lines at pauses and sentence ends, lets a line
+run a little long to finish its sentence, and otherwise breaks at a comma.
+
 ## How the editor fits together
 
 ```

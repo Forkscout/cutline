@@ -113,6 +113,20 @@ listens on 127.0.0.1 only, and every request needs a per-run token.
 
 `bun run start` builds the app and serves everything from the one process.
 
+### Auto-captions
+
+The Captions panel transcribes any clip with sound through a speech-to-text
+service with an OpenAI-compatible API — hosted with a key, or on your own
+machine. whisper.cpp's server is free and private:
+
+```bash
+whisper-server -m ~/.cache/whisper-cpp/ggml-medium.bin --inference-path /v1/audio/transcriptions --convert -l auto --port 8178
+```
+
+Then press Connect in the Captions panel (the address is filled in) and
+Generate captions. LM Studio has no transcription endpoint yet, so it cannot
+serve this.
+
 ### Letting an agent edit
 
 Cutline is also an MCP server. With it running, register it with Claude Code

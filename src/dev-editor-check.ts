@@ -32,6 +32,8 @@ import {
 import { createEffect } from "./editor/effects";
 import { clipAt, valueAt } from "./editor/keyframes";
 import { parseSubtitles, toSrt } from "./editor/captions";
+import { captionsFromWords, wordsOnTimeline } from "./editor/transcript";
+import { createProject as newProject, mediaClip as newMediaClip } from "./editor/project";
 import { exportProject } from "./editor/export";
 import type { ClipRef, MediaAsset, Project } from "./editor/types";
 
@@ -330,6 +332,57 @@ async function run() {
   check("SRT round-trips", parseSubtitles(toSrt(cues)).length === 2);
   check("WebVTT parses too",
     parseSubtitles("WEBVTT\n\n00:00:02.000 --> 00:00:04.000\nVtt line").length === 1);
+
+  /* --- transcripts become captions, through the clips ----------------- */
+  log("\ntranscripts", "dim");
+  {
+    const said = [
+      ["Hello", 0.0, 0.4], ["there.", 0.45, 0.9],
+      ["This", 1.0, 1.3], ["is", 1.35, 1.6], ["Cutline.", 1.65, 2.0],
+      ["After", 3.0, 3.4], ["a", 3.45, 3.8], ["pause.", 3.85, 4.3],
+    ] as const;
+    const voice: MediaAsset = {
+      id: "voice", origin: { type: "file" }, name: "voice", kind: "audio", mimeType: "audio/webm",
+      bytes: 1, durationSec: 5, hasVideo: false, hasAudio: true, width: 0, height: 0, frameRate: 30,
+      createdAt: 0, binId: null, tags: [], rating: 0, colorLabel: null, favorite: false,
+      transcript: {
+        version: 1, provider: "check", model: "none", language: "en", durationSec: 5, timing: "word", createdAt: 0,
+        words: said.map(([text, start, end]) => ({ text, start, end })),
+      },
+    };
+    const heard = newProject("transcript check");
+    const clip = newMediaClip(voice, 10);
+    // Source 1.0–4.0 s, heard at timeline 10–13 s: "Hello there." is trimmed
+    // off the head and "pause." mostly off the tail.
+    clip.inPoint = 1;
+    clip.duration = 3;
+    heard.assets = [voice];
+    heard.tracks.find((t) => t.kind === "audio")!.clips = [clip];
+
+    const onTimeline = wordsOnTimeline(heard);
+    check("words land on the timeline through their clip",
+      onTimeline.length === 5 && Math.abs((onTimeline[0]?.start ?? 0) - 10) < 0.001,
+      onTimeline.map((w) => `${w.text}@${w.start.toFixed(2)}`).join(" "));
+    const cues = captionsFromWords(onTimeline);
+    check("a pause and a sentence end each start a new caption",
+      cues.length === 2 && cues[0]?.text === "This is Cutline." && cues[1]?.text === "After a",
+      cues.map((c) => `"${c.text}"`).join(", "));
+    const long = captionsFromWords(
+      Array.from({ length: 40 }, (_, i) => ({ text: "caption", start: i * 0.3, end: i * 0.3 + 0.25 })),
+    );
+    check("no caption runs longer than a line", long.every((c) => c.text.length <= 42), `${long.length} cues`);
+
+    // The sentence the UI check spoke. A line may run a little long to take
+    // the word that ends its sentence, and breaks after a comma, not mid-clause.
+    const spoken = "Welcome to Cutline. This take was recorded to test automatic captions. Every word should appear on the timeline, at the moment it is spoken."
+      .split(" ")
+      .map((text, i) => ({ text, start: i * 0.3, end: i * 0.3 + 0.25 }));
+    const lines = captionsFromWords(spoken).map((c) => c.text);
+    check("a sentence's last word stays on its line, and lines break at commas",
+      lines.join(" | ") ===
+        "Welcome to Cutline. | This take was recorded to test automatic captions. | Every word should appear on the timeline, | at the moment it is spoken.",
+      lines.map((l) => `"${l}"`).join(", "));
+  }
 
   /* --- record a real take ------------------------------------------ */
   log("\nrecording fixture", "dim");

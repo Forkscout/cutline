@@ -11,6 +11,7 @@
 
 // Relative, not "@/": the server imports this file too, and has no alias.
 import type { SourceKind } from "../recorder/source-kind";
+import type { Transcript } from "./transcript";
 
 /* ------------------------------------------------------------------ media */
 
@@ -59,6 +60,12 @@ export interface MediaAsset {
   peaks?: number[];
   /** True when the underlying bytes could not be found on load. */
   offline?: boolean;
+  /**
+   * What was said, word by word, in the file's own time. Mapped onto the
+   * timeline through whichever clips use the asset, so trimming a clip never
+   * invalidates it.
+   */
+  transcript?: Transcript;
 }
 
 export interface Bin {

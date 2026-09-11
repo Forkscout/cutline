@@ -39,7 +39,9 @@ works out what it can do, and every capability routes itself.
   the transcribe capability resolves to that one and text resolves to the higher
   priority one.
 
-- [ ] **Adding a provider reports capabilities, not success**
+- [x] **Adding a provider reports capabilities, not success** — `/models` and a
+  quarter-second of silence sent for transcription; the report names what is
+  missing and, for a service that cannot transcribe, what would
   **Problem** — "Connection successful" is what lets someone point the app at
   Ollama, see a green tick, and discover only at the captions button that the
   entire transcript half of this list is unavailable.
@@ -70,7 +72,8 @@ works out what it can do, and every capability routes itself.
   **Test** — With no providers and no downloaded models, assert no AI control in
   the interface can produce an error dialog.
 
-- [ ] **Say where it will run, before it runs**
+- [x] **Say where it will run, before it runs** — the Captions panel's chip
+  reads *on this machine* or *sent to …* from the resolved base URL
   **Problem** — The README promises nothing leaves the machine. The moment a
   cloud key exists, that promise needs to be visible per action rather than
   taken on trust.
@@ -83,7 +86,7 @@ works out what it can do, and every capability routes itself.
 
 | capability | default | why |
 |---|---|---|
-| `transcribe` | in-browser Whisper | The foundation of section 2, and the case that must be zero-config. Free, private, one download. This machine already has `whisper-large-v3-turbo` cached. |
+| `transcribe` | an OpenAI-compatible `/audio/transcriptions` provider | The user's decision: one API shape, whatever runs the model. A whisper.cpp `whisper-server` on this machine is the free, private default; OpenAI or Groq with a key work unchanged. LM Studio, as of September 2026, has no transcription endpoint — the probe reports that rather than failing at the button. |
 | per-frame vision and audio | in-browser, never configurable | Segmentation, face tracking and denoise run every frame. Thirty HTTP round-trips a second is not a design, wherever the endpoint lives. |
 | `text`, `vision` | whatever provider exists | Chapters, titles, translation, retake grouping, natural-language edits. Genuine niceties — the editor works without them, so absence should hide the feature, not block the app. |
 | `image`, `video` | cloud, realistically | Generated b-roll and backgrounds. Nothing local generates these at usable quality yet; keep the capability defined so that changes without a rewrite. |
@@ -109,12 +112,13 @@ into per-task routing, without the user filling in a form per task.
   **Test** — Assert the message for a CORS failure differs from the one for a
   genuinely unreachable server.
 
-- [ ] **Be honest about where the key goes**
-  **Problem** — There is no backend here, so a cloud key sits in the browser
-  and travels with every request from the page. That is the user's call to
-  make, but only if they are told.
-  **Approach** — Say it plainly next to the field, and let the default routing
-  above mean most people never add one.
+- [x] **Be honest about where the key goes**
+  **Problem** — A cloud key in the browser travels with every request from the
+  page. That is the user's call to make, but only if they are told.
+  **Approach** — There is a backend now, so keys live in `~/Cutline/ai.json`
+  (owner-only) and never go back to the page; the local server makes every call,
+  which also removes the CORS problem above for local services. The field says
+  where the key goes.
   **Test** — Assert nothing leaves the machine when every capability resolves
   locally, by watching the network panel with a cloud key present but unused.
 
@@ -127,7 +131,10 @@ into per-task routing, without the user filling in a form per task.
 
 Almost everything else is a view over this.
 
-- [ ] **Auto-captions**
+- [x] **Auto-captions** — through the connected provider; ten-minute parts cut
+  by copying packets, cached beside the file. `bun scripts/transcribe-check.ts`
+  speaks a known script and checks the words (8% WER on whisper.cpp medium),
+  their times, the parts' offsets and the cache
   **Problem** — Captions are effectively mandatory now and writing them by hand
   is the slowest part of publishing.
   **Approach** — Whisper (`whisper-base` for speed, `large-v3-turbo` where
@@ -136,7 +143,9 @@ Almost everything else is a view over this.
   **Test** — Transcribe a fixture with a known script; assert word error rate
   under a threshold and that every word's timestamp falls inside the clip.
 
-- [ ] **Word-level alignment to the timeline**
+- [ ] **Word-level alignment to the timeline** — words are stored in the file's
+  own time and mapped through the clips (`wordsOnTimeline`); the export-level
+  cut test below is not written yet
   **Problem** — A transcript that is not frame-accurate cannot drive edits.
   **Approach** — Store words with start/end against the same clock as the
   clips, so a cut derived from a word is exact.
@@ -422,7 +431,7 @@ frame on demand, so this is finally cheap.
   **Test** — Request a frame at a time where a known layer is visible; assert
   the returned image contains that layer's colour at its placed position.
 
-- [ ] **Hearing and reading, alongside seeing** — `audio_envelope` is built and tested; `transcript` waits on section 1
+- [x] **Hearing and reading, alongside seeing** — `audio_envelope`, and `transcript(range)` serving the words heard on the timeline
   **Problem** — Half the defects that ship are audio: a silent stretch, a
   clipped peak. No image shows them.
   **Approach** — `audio_envelope(range)` from the peaks already computed at

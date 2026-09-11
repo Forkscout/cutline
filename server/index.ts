@@ -27,9 +27,11 @@ import type { ToCursor } from "../src/lib/cursor-protocol";
 import { TabBridge } from "./bridge";
 import { CursorService, type CursorRecording } from "./cursor";
 import { Remuxer } from "./remux";
+import { AiSettings, isLocal, probe } from "./ai";
+import { Jobs, transcribeFile } from "./transcribe";
 import { loadMcpToken, mcpHandler } from "./mcp";
 import { DiskMediaStore, TruncatedUpload, fileResponse } from "./media";
-import { BadId, DiskProjectStore, cutlineHome } from "./store";
+import { BadId, DiskProjectStore, assertSafeId, cutlineHome } from "./store";
 import { SESSION_COOKIE, guard, hostGuard, localhostPairs } from "./security";
 
 const PORT = Number(process.env.CUTLINE_PORT ?? 5311);
@@ -46,6 +48,8 @@ const media = new DiskMediaStore(cutlineHome(), WORKSPACE);
 const bridge = new TabBridge();
 const cursor = new CursorService();
 const remuxer = new Remuxer();
+const ai = new AiSettings(cutlineHome());
+const jobs = new Jobs();
 const MCP_TOKEN = await loadMcpToken(cutlineHome());
 
 const hosts = localhostPairs(PORT, WEB_PORT);
@@ -243,6 +247,98 @@ api.get(
     };
   }),
 );
+
+/* --- AI services --- */
+
+api.get("/ai/providers", async (c) => c.json(await ai.list()));
+
+/**
+ * Adds or edits a provider, then probes it — the answer is what it can do,
+ * not merely whether it answered.
+ */
+api.put("/ai/providers/:id", async (c) => {
+  const id = c.req.param("id");
+  assertSafeId(id);
+  const body = await c.req.json<{ name?: string; baseUrl?: string; transcribeModel?: string; apiKey?: string }>();
+  let url: URL;
+  try {
+    url = new URL(body.baseUrl ?? "");
+  } catch {
+    return c.json({ error: "The base URL is not a URL." }, 400);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return c.json({ error: "The base URL must be http or https." }, 400);
+  const provider = await ai.upsert(id, {
+    name: body.name?.trim() || url.host,
+    baseUrl: url.toString(),
+    ...(body.transcribeModel ? { transcribeModel: body.transcribeModel } : {}),
+    ...(body.apiKey !== undefined ? { apiKey: body.apiKey } : {}),
+  });
+  return c.json(await ai.setCapabilities(id, await probe(provider)));
+});
+
+api.post("/ai/providers/:id/probe", async (c) => {
+  const provider = await ai.get(c.req.param("id"));
+  if (!provider) return c.json({ error: "No such provider" }, 404);
+  return c.json(await ai.setCapabilities(provider.id, await probe(provider)));
+});
+
+api.delete("/ai/providers/:id", async (c) => {
+  await ai.remove(c.req.param("id"));
+  return c.json({ ok: true });
+});
+
+/** Which service each capability resolves to right now, and whether it stays on this machine. */
+api.get("/ai/capabilities", async (c) => {
+  const provider = await ai.resolveTranscribe();
+  return c.json({
+    transcribe: provider
+      ? { providerId: provider.id, name: provider.name, model: provider.transcribeModel, local: isLocal(provider.baseUrl) }
+      : null,
+  });
+});
+
+/* --- transcription --- */
+
+/**
+ * Starts transcribing a take's file or an imported file, and answers with a
+ * job to poll: an hour of audio outlasts any request timeout.
+ */
+api.post("/transcribe", async (c) => {
+  const body = await c.req.json<{
+    sessionId?: string;
+    fileName?: string;
+    mediaId?: string;
+    language?: string;
+    force?: boolean;
+    chunkSeconds?: number;
+  }>();
+  const source = body.mediaId
+    ? media.mediaFile(body.mediaId)
+    : media.recordingFile(body.sessionId ?? "", body.fileName ?? "");
+  const cache = body.mediaId
+    ? media.mediaFile(`${body.mediaId}.transcript.json`)
+    : media.recordingFile(body.sessionId ?? "", `${body.fileName}.transcript.json`);
+  if ((await media.size(source)) === null) return c.json({ error: "No such file" }, 404);
+  const provider = await ai.resolveTranscribe();
+  if (!provider) return c.json({ error: "No transcription service is connected." }, 409);
+  if (body.language !== undefined && !/^[a-z]{2,3}$/.test(body.language)) {
+    return c.json({ error: "language must be an ISO 639 code, like hi or en" }, 400);
+  }
+  const jobId = jobs.start((progress) =>
+    transcribeFile(source, cache, provider, {
+      ...(body.language ? { language: body.language } : {}),
+      ...(body.chunkSeconds ? { chunkSeconds: body.chunkSeconds } : {}),
+      force: Boolean(body.force),
+      onProgress: progress,
+    }),
+  );
+  return c.json({ jobId });
+});
+
+api.get("/transcribe/:jobId", (c) => {
+  const job = jobs.get(c.req.param("jobId"));
+  return job ? c.json(job) : c.json({ error: "No such job" }, 404);
+});
 
 /* --- exports --- */
 

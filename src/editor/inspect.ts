@@ -15,7 +15,9 @@ import type { Clip, Project } from "./types";
 export function leanProject(project: Project): Project {
   return {
     ...project,
-    assets: project.assets.map(({ thumbnail: _t, peaks: _p, ...asset }) => asset),
+    // Transcripts too: an hour is ~9,000 words, and the `transcript` tool
+    // serves them by range instead.
+    assets: project.assets.map(({ thumbnail: _t, peaks: _p, transcript: _w, ...asset }) => asset),
   };
 }
 
