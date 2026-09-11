@@ -96,6 +96,35 @@ export async function saveProject(project: Project): Promise<void> {
   clearRecovery();
 }
 
+export interface VersionSummary {
+  id: string;
+  label: string;
+  createdAt: number;
+  /** 1, 2, 3… in the order they were saved. */
+  n: number;
+}
+
+/** Saves the project as it is now, under a name, beside it on the server. */
+export async function saveVersion(project: Project, label: string): Promise<VersionSummary> {
+  const envelope: Envelope = { version: SCHEMA_VERSION, project };
+  return apiJson<VersionSummary>(`/api/projects/${encodeURIComponent(project.id)}/versions`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ label, ...envelope }),
+  });
+}
+
+export const listVersions = (projectId: string) =>
+  apiJson<VersionSummary[]>(`/api/projects/${encodeURIComponent(projectId)}/versions`);
+
+/** A saved version, brought up to date the way an opened project is. */
+export async function loadVersion(projectId: string, versionId: string): Promise<Project> {
+  const raw = await apiJson<Partial<Envelope> & Partial<Project>>(
+    `/api/projects/${encodeURIComponent(projectId)}/versions/${encodeURIComponent(versionId)}`,
+  );
+  return migrate((raw.project ?? raw) as Project);
+}
+
 export async function loadProject(projectId: string): Promise<Project | null> {
   const response = await api(`/api/projects/${encodeURIComponent(projectId)}`);
   if (response.status === 404) return null;
@@ -128,7 +157,7 @@ export async function duplicateProject(project: Project): Promise<Project> {
  * Fills in anything a newer schema added. Old projects should open, not error —
  * a missing field is a default, never a failure.
  */
-function migrate(project: Project): Project {
+export function migrate(project: Project): Project {
   return {
     ...project,
     markers: project.markers ?? [],

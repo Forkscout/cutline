@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { clipBox, hitTest, visibleClips, type ClipBox } from "@/editor/compositor";
 import { clipAt } from "@/editor/keyframes";
 import type { Action } from "@/editor/project";
@@ -54,6 +56,8 @@ export function MonitorOverlay({
   selected,
   onSelect,
   dispatch,
+  noting = false,
+  onNoted,
 }: {
   project: Project;
   time: number;
@@ -61,11 +65,20 @@ export function MonitorOverlay({
   selected: ClipRef | null;
   onSelect: (ref: ClipRef | null) => void;
   dispatch: (action: Action, coalesce?: boolean) => void;
+  /** The next click on the picture drops a note there. */
+  noting?: boolean;
+  onNoted?: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [rect, setRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [guide, setGuide] = useState<{ x?: number; y?: number }>({});
   const [hovered, setHovered] = useState<string | null>(null);
+  const [openNote, setOpenNote] = useState<string | null>(null);
+  const noteField = useRef<HTMLTextAreaElement>(null);
+  // Focus lands in a note's card once it is open, after the press that opened it.
+  useEffect(() => {
+    if (openNote) noteField.current?.focus();
+  }, [openNote]);
 
   // The canvas is laid out by the browser (fit, or a zoom factor), so the only
   // reliable source for its on-screen size is measurement.
@@ -215,6 +228,20 @@ export function MonitorOverlay({
     return null;
   };
 
+  /** Notes pinned to the picture, numbered in time order; shown around their moment. */
+  const notes = project.markers.filter((m) => m.pin).sort((a, b) => a.time - b.time);
+  const pins = notes.filter((m) => time >= m.time - 0.25 && time <= m.time + Math.max(m.duration, 1.5));
+  const note = notes.find((m) => m.id === openNote);
+  const dropNote = (clientX: number, clientY: number) => {
+    const p = toProject(clientX, clientY);
+    const id = crypto.randomUUID();
+    const pin = { x: Math.max(0, Math.min(1, p.x / project.width)), y: Math.max(0, Math.min(1, p.y / project.height)) };
+    dispatch({ type: "addMarker", marker: { id, time, duration: 0, name: "Note", note: "", color: "#F59E0B", author: "client", pin } });
+    setOpenNote(id);
+    onNoted?.();
+  };
+  const mmss = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+
   if (!rect) return <div ref={hostRef} className="pointer-events-none absolute inset-0" />;
 
   const px = (value: number) => value * scale;
@@ -228,7 +255,7 @@ export function MonitorOverlay({
         top: rect.top,
         width: rect.width,
         height: rect.height,
-        cursor: hovered ? "move" : "default",
+        cursor: noting ? "crosshair" : hovered ? "move" : "default",
       }}
       onPointerMove={(e) => {
         const layer = layerAt(e.clientX, e.clientY);
@@ -237,6 +264,13 @@ export function MonitorOverlay({
       onPointerLeave={() => setHovered(null)}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
+        if (noting) {
+          // Otherwise the press on the picture takes focus back from the note's card, and
+          // what the client types goes to the editor's shortcuts instead.
+          e.preventDefault();
+          dropNote(e.clientX, e.clientY);
+          return;
+        }
         const layer = layerAt(e.clientX, e.clientY);
         if (!layer) {
           onSelect(null);
@@ -245,6 +279,78 @@ export function MonitorOverlay({
         beginDrag(e, "move", layer);
       }}
     >
+      {pins.map((m) => (
+        <button
+          key={m.id}
+          className={cn(
+            "absolute z-20 flex size-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-background text-[10px] font-semibold shadow",
+            m.resolved ? "bg-muted text-muted-foreground" : "bg-amber-400 text-black",
+          )}
+          style={{ left: px(m.pin!.x * project.width), top: px(m.pin!.y * project.height) }}
+          title={m.note || "Note"}
+          aria-label={`Note ${notes.indexOf(m) + 1}`}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => setOpenNote(openNote === m.id ? null : m.id)}
+        >
+          {notes.indexOf(m) + 1}
+        </button>
+      ))}
+      {note?.pin && (
+        <div
+          className="absolute z-30 w-56 space-y-1.5 rounded-md border bg-popover p-2 text-[11px] text-popover-foreground shadow-lg"
+          style={{
+            left: Math.max(0, Math.min(px(note.pin.x * project.width) + 14, rect.width - 232)),
+            top: Math.max(0, Math.min(px(note.pin.y * project.height) - 8, rect.height - 160)),
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+            <span>
+              Note {notes.indexOf(note) + 1} · {mmss(note.time)}
+              {note.author === "agent" ? " · from the agent" : ""}
+            </span>
+            <button className="ml-auto hover:text-foreground" aria-label="Close note" onClick={() => setOpenNote(null)}>
+              ✕
+            </button>
+          </div>
+          <Textarea
+            ref={noteField}
+            rows={3}
+            value={note.note}
+            placeholder="What should change here?"
+            className="min-h-0 resize-none text-[11px]"
+            onChange={(e) => dispatch({ type: "patchMarker", markerId: note.id, patch: { note: e.target.value } }, true)}
+          />
+          {note.reply && <p className="text-[10px] text-muted-foreground">Done: {note.reply}</p>}
+          <div className="flex gap-1">
+            <Button
+              size="sm"
+              variant="secondary"
+              className="h-6 px-2 text-[10px]"
+              onClick={() =>
+                dispatch({
+                  type: "patchMarker",
+                  markerId: note.id,
+                  patch: note.resolved ? { resolved: false, color: "#F59E0B" } : { resolved: true, color: "#71717A" },
+                })
+              }
+            >
+              {note.resolved ? "Reopen" : "Resolve"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="ml-auto h-6 px-2 text-[10px]"
+              onClick={() => {
+                dispatch({ type: "deleteMarker", markerId: note.id });
+                setOpenNote(null);
+              }}
+            >
+              Delete
+            </Button>
+          </div>
+        </div>
+      )}
       {/* An outline follows the pointer over unselected layers, so it is
           discoverable that the picture itself can be grabbed. CSS :hover cannot
           do this — the boxes have to stay pointer-transparent for hit testing

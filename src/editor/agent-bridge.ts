@@ -22,14 +22,15 @@ import {
   type FromTab,
   type ToTab,
 } from "./agent-tools";
-import { visibleClips } from "./compositor";
+import { clipBox, hitTest, visibleClips } from "./compositor";
 import { createEffect } from "./effects";
 import { exportProject } from "./export";
 import { audioEnvelope, describeChange, leanProject } from "./inspect";
 import { captionsForAsset, wordsOnTimeline, type Transcript } from "./transcript";
 import { needsConfirming, scanNumbers } from "./facts";
 import { lintScene } from "./lint";
-import { readProperty } from "./keyframes";
+import { listVersions, loadVersion, saveVersion } from "./persistence";
+import { clipAt, readProperty } from "./keyframes";
 import { THEMES, brandOverrides, fontsInUse, mergeTheme, paletteOf, themeById, themeOf } from "./themes";
 import { themeSheet } from "./styleframes";
 import { analysisOf } from "./analyze";
@@ -52,7 +53,7 @@ import {
   type Action,
   type History, replaceValue } from "./project";
 import { contactSheet, renderStill } from "./snapshot";
-import type { Clip, ClipRef, Project } from "./types";
+import type { Clip, ClipRef, Project, Marker, Track } from "./types";
 
 /** A mistake the agent can fix, reported back to it as the tool's error. */
 class ToolError extends Error {}
@@ -176,6 +177,11 @@ const EXECUTORS: Executors = {
       name: a.name ?? "Agent note",
       note: a.note ?? "",
       color: a.color ?? "#c3f53c",
+      // A note pinned to the picture, and who left it: dropped here, list_notes had nothing to point at.
+      ...(a.pin ? { pin: a.pin } : {}),
+      ...(a.author ? { author: a.author } : {}),
+      ...(a.resolved !== undefined ? { resolved: a.resolved } : {}),
+      ...(a.reply ? { reply: a.reply } : {}),
     },
   }),
   patchMarker: (a) => ({ type: "patchMarker", markerId: a.markerId, patch: a.patch }),
@@ -250,6 +256,15 @@ const EXECUTORS: Executors = {
     if (!shown) throw new ToolError(`${a.value} is not on screen as a whole value; list_facts shows the numbers on screen.`);
     const existing = project.facts.find((f) => f.value === a.value);
     return { type: "correctFact", id: existing?.id ?? crypto.randomUUID(), from: a.value, to: a.to, ...(a.note ? { note: a.note } : {}) };
+  },
+  restoreVersion: async (a, project) => {
+    let doc: Project;
+    try {
+      doc = await loadVersion(project.id, a.versionId);
+    } catch (err) {
+      throw new ToolError(`Could not open version ${a.versionId} (${err instanceof Error ? err.message : String(err)}); list_versions shows them.`);
+    }
+    return { type: "restoreVersion", project: doc, label: a.versionId };
   },
   setTheme: (a, project) => {
     const base = a.themeId ? themeById(a.themeId) : themeOf(project);
@@ -380,6 +395,45 @@ const text = (t: string): BridgeContent => ({ type: "text", text: t });
 const json = (value: unknown): BridgeContent => text(JSON.stringify(value));
 const round = (n: number) => Math.round(n * 1000) / 1000;
 
+
+/** The track an agent's edit would change, when the user has locked it. A track's own settings stay editable. */
+function lockedTrackIn(project: Project, action: Action): Track | null {
+  if (action.type === "patchTrack") return null;
+  const named = action as { ref?: ClipRef; refs?: ClipRef[]; trackId?: string; toTrackId?: string };
+  const ids = new Set<string>();
+  if (named.ref) ids.add(named.ref.trackId);
+  for (const ref of named.refs ?? []) ids.add(ref.trackId);
+  if (named.trackId) ids.add(named.trackId);
+  if (named.toTrackId) ids.add(named.toTrackId);
+  return project.tracks.find((t) => t.locked && ids.has(t.id)) ?? null;
+}
+
+/** What is under a note's pin at its moment, topmost first — from clipBox, as the handles are. */
+function underPin(project: Project, marker: Marker) {
+  if (!marker.pin) return [];
+  const x = marker.pin.x * project.width;
+  const y = marker.pin.y * project.height;
+  const hits: { track: Track; clip: Clip }[] = [];
+  let baseTaken = false;
+  for (const { track, clip: raw } of visibleClips(project, marker.time)) {
+    if (track.kind !== "video") continue;
+    const clip = clipAt(raw, marker.time - raw.start);
+    const asset = project.assets.find((a) => a.id === clip.assetId);
+    if (clip.kind === "media" && !asset?.hasVideo) continue;
+    const isBase = clip.kind === "media" && !baseTaken;
+    if (isBase) baseTaken = true;
+    const box = clipBox(project, clip, asset ? { width: asset.width, height: asset.height } : null, isBase);
+    if (box && hitTest(box, x, y)) hits.push({ track, clip: raw });
+  }
+  return hits.reverse().map(({ track, clip }) => ({
+    trackId: track.id,
+    clipId: clip.id,
+    kind: clip.kind,
+    ...(clip.text?.content ? { text: clip.text.content.slice(0, 80) } : {}),
+    ...(clip.scene ? { scene: clip.scene } : {}),
+    ...(clip.component ? { component: clip.component } : {}),
+  }));
+}
 
 export class AgentBridge {
   private ws: WebSocket | null = null;
@@ -558,6 +612,11 @@ export class AgentBridge {
   private commit(action: Action): { label: string; change: ReturnType<typeof describeChange> } {
     const bridge = this.current();
     if (bridge !== this) return bridge.commit(action);
+    // A track the user locked is theirs: an agent's edit to it is refused, not applied.
+    const locked = lockedTrackIn(this.host.history().present, action);
+    if (locked) {
+      throw new ToolError(`Track ${locked.name} is locked — the user locked it so nothing on it changes. Ask them to unlock it, or work on another track.`);
+    }
     const now = Date.now();
     const turn = this.turn;
     const idle = turn.label ? TURN_IDLE_MS : LOOSE_IDLE_MS;
@@ -721,6 +780,34 @@ export class AgentBridge {
         return [json(await this.macro((ctx) => macros.addSplit(ctx, raw as unknown as macros.SplitArgs)))];
       case "addTree":
         return [json(await this.macro((ctx) => macros.addTree(ctx, raw as unknown as macros.TreeArgs)))];
+      case "saveVersion": {
+        const saved = await saveVersion(project, String(raw.label));
+        return [json({ ok: true, ...saved, next: "restore_version({ versionId }) puts it back." })];
+      }
+      case "listVersions":
+        return [json(await listVersions(project.id))];
+      case "listNotes": {
+        const notes = project.markers.filter((m) => (m.note.trim() || m.pin) && (raw.all === true || !m.resolved));
+        return [
+          json(
+            notes.map((m) => ({
+              id: m.id,
+              time: round(m.time),
+              note: m.note,
+              author: m.author ?? "client",
+              resolved: Boolean(m.resolved),
+              ...(m.reply ? { reply: m.reply } : {}),
+              ...(m.pin ? { pin: m.pin, under: underPin(project, m) } : {}),
+            })),
+          ),
+        ];
+      }
+      case "resolveNote": {
+        const marker = project.markers.find((m) => m.id === raw.id);
+        if (!marker) throw new ToolError(`There is no note ${String(raw.id)}; list_notes shows them.`);
+        this.commit({ type: "patchMarker", markerId: marker.id, patch: { resolved: true, reply: String(raw.reply), color: "#71717A" } });
+        return [json({ ok: true, id: marker.id })];
+      }
       case "lintScene": {
         let report;
         try {

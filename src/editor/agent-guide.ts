@@ -153,7 +153,9 @@ Then audio_envelope if you changed timing. Report what you checked and what you 
 
 **Checks, then eyes.** lint_scene on every scene after building: overlapping text, off-frame and outside title-safe, contrast measured on the rendered frame against what is really behind the text, text over the speaker, text too brief to read. Fix what it finds and lint again until it is clean — then look, because a check cannot tell you a scene is dull.
 
-**Facts before export.** list_facts compares every number on screen with what was said around it. Anything nobody said nearby, and anything you flagged with set_fact, goes to the client (ask_client) before export; record their answer with set_fact({ status: "confirmed" }), or correct_fact({ value, to }) to change it everywhere it is shown. Never ship a figure the transcript did not support without saying so.`,
+**Facts before export.** list_facts compares every number on screen with what was said around it. Anything nobody said nearby, and anything you flagged with set_fact, goes to the client (ask_client) before export; record their answer with set_fact({ status: "confirmed" }), or correct_fact({ value, to }) to change it everywhere it is shown. Never ship a figure the transcript did not support without saying so.
+
+**Notes and versions.** The client pins notes on the picture (a marker with a pin). list_notes shows each with what is under the pin — the clip, its scene and component — so you know what to change. Fix it, then resolve_note with one sentence on what you did; answer a question without resolving it. save_version before a big change and after each round of notes (\"v3 · notes pass\"); restore_version when a direction did not work — History keeps what it replaced. A track the user locked is theirs: edits to it are refused, so ask before working there.`,
   },
 
   gotchas: {

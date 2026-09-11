@@ -360,6 +360,13 @@ export interface Marker {
   name: string;
   note: string;
   color: string;
+  /** A note pinned to a place in the picture, 0..1 of the frame. */
+  pin?: { x: number; y: number };
+  /** The client reviewing, or an agent leaving a note for them. */
+  author?: "client" | "agent";
+  /** Dealt with, and what was done, in the words of whoever did it. */
+  resolved?: boolean;
+  reply?: string;
 }
 
 /* -------------------------------------------------------------- sequence */

@@ -555,6 +555,15 @@ async function run() {
       p.facts[0]?.status === "corrected" && p.facts[0].value === "40" && p.facts[0].was === "60");
   }
 
+  /* --- versions --------------------------------------------------------- */
+  log("\nversions", "dim");
+  {
+    const now = newProject("versions");
+    const then = { ...newProject("then"), name: "As it was" };
+    const restored = reduce(now, { type: "restoreVersion", project: then, label: "v1" });
+    check("a restore takes the version's content and keeps the project's id", restored.id === now.id && restored.name === "As it was");
+  }
+
   /* --- checks ---------------------------------------------------------- */
   log("\nchecks", "dim");
   {

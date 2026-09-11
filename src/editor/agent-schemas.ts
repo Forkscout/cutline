@@ -174,7 +174,17 @@ export const trackPatch = z
   .partial();
 
 export const markerPatch = z
-  .object({ time: seconds("Timeline position"), duration: seconds("Span"), name: z.string(), note: z.string(), color })
+  .object({
+    time: seconds("Timeline position"),
+    duration: seconds("Span"),
+    name: z.string(),
+    note: z.string(),
+    color,
+    pin: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) }).describe("Pins a note to a place in the picture, 0..1 of the frame"),
+    author: z.enum(["client", "agent"]),
+    resolved: z.boolean(),
+    reply: z.string().max(500),
+  })
   .partial();
 
 export const captionCue = z.object({

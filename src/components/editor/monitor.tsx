@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import {
+import { MessageSquarePlus, Palette,
   ChevronLeft,
   ChevronRight,
   Grid3x3,
@@ -43,6 +43,9 @@ export function Monitor({
   dispatch,
   selected,
   onSelect,
+  noting = false,
+  onToggleNoting,
+  onCompareLooks,
 }: {
   project: Project;
   urls: AssetUrls;
@@ -52,6 +55,9 @@ export function Monitor({
   dispatch: (action: Action, coalesce?: boolean) => void;
   selected: ClipRef | null;
   onSelect: (ref: ClipRef | null) => void;
+  noting?: boolean;
+  onToggleNoting?: (on: boolean) => void;
+  onCompareLooks?: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // The overlay needs the element itself, and a ref is not reactive.
@@ -135,6 +141,8 @@ export function Monitor({
           selected={selected}
           onSelect={onSelect}
           dispatch={dispatch}
+          noting={noting}
+          onNoted={() => onToggleNoting?.(false)}
         />
       </div>
 
@@ -174,6 +182,24 @@ export function Monitor({
         </span>
 
         <div className="ml-auto flex items-center gap-1">
+          {onToggleNoting && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn("h-7 gap-1 px-2 text-[11px]", noting && "bg-muted text-primary")}
+              title="Leave a note: click the picture where it applies"
+              onClick={() => onToggleNoting(!noting)}
+            >
+              <MessageSquarePlus className="size-3.5" />
+              Note
+            </Button>
+          )}
+          {onCompareLooks && (
+            <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-[11px]" title="See this frame in other looks" onClick={onCompareLooks}>
+              <Palette className="size-3.5" />
+              Looks
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"

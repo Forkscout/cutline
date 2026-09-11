@@ -153,6 +153,25 @@ api.delete("/projects/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+/* Versions: named snapshots beside a project. Restoring one is an edit in the tab, so History can undo it. */
+
+api.get("/projects/:id/versions", async (c) => c.json(await projects.listVersions(c.req.param("id"))));
+
+api.get("/projects/:id/versions/:vid", async (c) => {
+  const json = await projects.getVersion(c.req.param("id"), c.req.param("vid"));
+  if (json === null) return c.json({ error: "No such version" }, 404);
+  return c.body(json, 200, { "content-type": "application/json" });
+});
+
+api.post("/projects/:id/versions", async (c) => {
+  const id = c.req.param("id");
+  const body = await c.req.text();
+  if (body.length > MAX_PROJECT_BYTES) return c.json({ error: "Project too large" }, 413);
+  const parsed = JSON.parse(body) as { label?: string; version?: number; project?: { id?: string } };
+  if (parsed.project?.id !== id) return c.json({ error: "Project id does not match the URL" }, 400);
+  return c.json(await projects.putVersion(id, parsed.label ?? "", JSON.stringify({ version: parsed.version, project: parsed.project })));
+});
+
 /* --- recordings --- */
 
 api.get("/recordings", async (c) => c.json(await media.listSessions()));

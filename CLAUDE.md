@@ -507,6 +507,20 @@ replaces a whole value — the 7 in 17 and in 7,000 is left alone — in every
 text clip and in the storyboard, so a recompile keeps the fix. The Director tab
 shows both, with no model connected.
 
+**Notes, versions and locks.** A note is a marker with a `pin`, 0..1 of the
+frame: the client drops one by clicking the picture in Note mode, and
+`list_notes` tells an agent what is under it at that moment — from `clipBox`
+and `hitTest`, as the handles are — so "make this bigger" arrives with the
+clip, scene and component it means. `resolve_note` records what was done
+beside the note. Versions are snapshots beside the project, in
+`projects/<id>.versions/` (the document first and its meta last, each written
+atomically, so a version is listed only once it can be opened), and restoring
+one is a reducer action in the tab, so History keeps what it replaced. A track
+the user locked is theirs: the bridge refuses an agent's edit to it, the macros
+never pick it, and a compile leaves compiled clips on it alone. Compare looks
+draws the frame at the playhead in three themes through `renderStill`; one
+click restyles the edit.
+
 ## Transcription and AI services
 
 **Not tied to one engine or one machine.** Transcription goes through a

@@ -379,7 +379,9 @@ export type Action =
   /** Adds or updates a fact to confirm, by id. */
   | { type: "setFact"; fact: Fact }
   /** Replaces a value everywhere it is shown — every text clip and the storyboard — and records the fact as corrected. */
-  | { type: "correctFact"; id: string; from: string; to: string; note?: string };
+  | { type: "correctFact"; id: string; from: string; to: string; note?: string }
+  /** Puts the project back to a saved version; the id stays, and History keeps what it replaced. */
+  | { type: "restoreVersion"; project: Project; label: string };
 
 /** Applies `fn` to every clip named in `refs`, wherever those clips live. */
 function mapClips(
@@ -887,6 +889,8 @@ export function reduce(project: Project, action: Action): Project {
     }
     case "setStoryboard":
       return touched({ ...project, storyboard: action.storyboard });
+    case "restoreVersion":
+      return touched({ ...action.project, id: project.id });
     case "setFact": {
       const exists = project.facts.some((f) => f.id === action.fact.id);
       return touched({

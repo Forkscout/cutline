@@ -380,6 +380,13 @@ export const ACTION_TOOLS = {
       note: z.string().max(300).optional(),
     },
   }),
+  restoreVersion: tool({
+    name: "restore_version",
+    title: "Restore version",
+    description:
+      "Puts the project back to a saved version (list_versions). What it replaces stays in History, so one undo brings it back — save_version first if it deserves a name.",
+    input: { versionId: z.string().min(1) },
+  }),
   setTheme: tool({
     name: "set_theme",
     title: "Set theme",
@@ -745,6 +752,35 @@ export const EDITOR_TOOLS = {
       "Every number on screen, checked against what was said around it, and every fact recorded: which need the client's word (flagged open, or not heard nearby as digits or a number word), where each is shown and what the transcript heard there. Ask the client about those (ask_client), then set_fact({ value, status: \"confirmed\" }) or correct_fact({ value, to }). Report any left unconfirmed.",
     input: {},
   }),
+  saveVersion: tool({
+    name: "save_version",
+    title: "Save version",
+    description:
+      "Saves the project as it is now under a name — \"v2 · notes pass\" — so it can be compared or restored later. Save one before a big change and after each round of notes.",
+    input: { label: z.string().min(1).max(80) },
+  }),
+  listVersions: tool({
+    name: "list_versions",
+    title: "List versions",
+    readOnly: true,
+    description: "The project's saved versions, newest first: id, label and when. restore_version puts one back.",
+    input: {},
+  }),
+  listNotes: tool({
+    name: "list_notes",
+    title: "List notes",
+    readOnly: true,
+    description:
+      "The client's notes: each marker with a note — when it is, where it is pinned in the picture, and what is under the pin at that moment (clip, text, scene and component) — and whether it has been resolved. Fix each, then resolve_note with what you did. Leave a note for the client with add_marker({ time, note, pin, author: \"agent\" }).",
+    input: { all: z.boolean().optional().describe("Include resolved notes") },
+  }),
+  resolveNote: tool({
+    name: "resolve_note",
+    title: "Resolve note",
+    description:
+      "Marks a note dealt with and records what you did, in a sentence the client will read beside it. Resolve only what you changed; answer a question without resolving it.",
+    input: { id: z.string(), reply: z.string().min(1).max(500) },
+  }),
   startTurn: tool({
     name: "start_turn",
     title: "Start turn",
@@ -788,6 +824,7 @@ export const SERVER_INSTRUCTIONS = `Cutline is a video editor open in the user's
 5. Call start_turn with the instruction before editing, so the whole change is one undo step. Write the edit as a storyboard — set_storyboard, get_storyboard, compile_storyboard; guide('storyboard') — rather than hundreds of calls: scenes anchored to the words, compiled the same way every time, changed one scene at a time with set_scene. The macros (layout_move, add_title, add_points, add_chips, add_stat, add_flow, add_bars, add_lower_third) are the same vocabulary for one-off additions; raw tools remain for anything custom.
 6. Verify before you report: lint_scene on what you built, fixing until it is clean; render_frame or contact_sheet across everything you touched; audio_envelope after timing edits. list_facts shows numbers on screen nobody said: ask the client, record answers with set_fact or correct_fact, and report any still unconfirmed.
 7. export_video only once the checks look right; give the user the path it returns.
+8. When the client leaves notes, list_notes, fix each, resolve_note with what you did, and save_version after the pass — \"v3 · notes pass\".
 
 Ids come from get_project. Times are seconds on the timeline; positions are 0..1 of the frame; sizes are pixels at 1080p.`;
 

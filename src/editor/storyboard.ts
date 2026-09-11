@@ -205,7 +205,7 @@ export function compileStoryboard(ctx: macros.MacroContext, options: { only?: st
   for (const track of ctx.project().tracks) {
     for (const clip of track.clips) {
       if (!clip.scene || !(compiling.has(clip.scene) || (!options.only && !known.has(clip.scene)))) continue;
-      if (clip.userEdited) report.kept += 1;
+      if (clip.userEdited || track.locked) report.kept += 1;
       else stale.push({ trackId: track.id, clipId: clip.id });
     }
   }
@@ -216,7 +216,7 @@ export function compileStoryboard(ctx: macros.MacroContext, options: { only?: st
   //    layout just before it starts, back to full frame across gaps of 3 s or more.
   const first = timed[0]!;
   const speaker = macros.findSpeaker(ctx.project(), first.from + 0.5);
-  if (speaker && !speaker.clip.userEdited) {
+  if (speaker && !speaker.clip.userEdited && !speaker.track.locked) {
     ctx.commit({
       type: "patchClip",
       ref: { trackId: speaker.track.id, clipId: speaker.clip.id },
@@ -246,8 +246,12 @@ export function compileStoryboard(ctx: macros.MacroContext, options: { only?: st
     const last = timed[timed.length - 1]!;
     const clipEnd = speaker.clip.start + speaker.clip.duration;
     if (current !== "full" && clipEnd - last.to >= 3) macros.layoutMove(ctx, { at: last.to + 0.05, to: "full", ...ref });
-  } else if (speaker?.clip.userEdited) {
-    report.errors.push("The speaker's clip was edited by hand, so its layout moves were left as they are.");
+  } else if (speaker) {
+    report.errors.push(
+      speaker.track.locked
+        ? "The speaker's track is locked, so its layout moves were left as they are."
+        : "The speaker's clip was edited by hand, so its layout moves were left as they are.",
+    );
   }
 
   // 4. The scenes' components, through the macros, each clip tagged with its scene and component.

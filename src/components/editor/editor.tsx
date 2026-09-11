@@ -20,6 +20,8 @@ import { AgentBridge } from "@/editor/agent-bridge";
 import { runAutoCaptions, type AutoCaptionOptions } from "@/components/editor/auto-captions";
 import { BriefPanel } from "@/components/editor/brief-panel";
 import { DirectorCommand, DirectorPanel } from "@/components/editor/director-panel";
+import { StyleframeCompare } from "@/components/editor/styleframe-compare";
+import { VersionsMenu } from "@/components/editor/versions-menu";
 import { Director } from "@/editor/director";
 import { StoryboardView } from "@/components/editor/storyboard-view";
 import { compileStoryboard } from "@/editor/storyboard";
@@ -230,6 +232,8 @@ export function Editor({
   selectedRef.current = selected;
   const [agentTool, setAgentTool] = useState<string | null>(null);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [noting, setNoting] = useState(false);
+  const [compareOpen, setCompareOpen] = useState(false);
   // The Director runs in this tab on the bridge's executors, and lights the
   // same badge an MCP agent's calls do, held the same way.
   const directorFade = useRef<number | undefined>(undefined);
@@ -736,6 +740,8 @@ export function Editor({
           </button>
         )}
 
+        <VersionsMenu project={project} dispatch={dispatch} />
+
         {agentTool && (
           <span
             title="An agent is editing this project through MCP. Every change is in History and can be undone."
@@ -758,6 +764,7 @@ export function Editor({
           </Button>
           <ExportDialog project={project} />
           <ClientQuestionsDialog />
+          <StyleframeCompare open={compareOpen} onOpenChange={setCompareOpen} project={project} time={time} dispatch={dispatch} />
           <DirectorCommand
             open={commandOpen}
             onOpenChange={setCommandOpen}
@@ -805,7 +812,7 @@ export function Editor({
                   />
                 </TabsContent>
                 <TabsContent value="brief" className="mt-2 min-h-0 flex-1">
-                  <BriefPanel project={project} dispatch={dispatch} />
+                  <BriefPanel onCompareLooks={() => setCompareOpen(true)} project={project} dispatch={dispatch} />
                 </TabsContent>
               </Tabs>
             </ResizablePanel>
@@ -814,6 +821,9 @@ export function Editor({
 
             <ResizablePanel defaultSize="56" minSize="30">
               <Monitor
+              noting={noting}
+              onToggleNoting={setNoting}
+              onCompareLooks={() => setCompareOpen(true)}
                 project={project}
                 urls={urls}
                 dispatch={dispatch}

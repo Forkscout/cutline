@@ -46,9 +46,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 export function BriefPanel({
   project,
   dispatch,
-}: {
+ onCompareLooks,}: {
   project: Project;
   dispatch: (action: Action, coalesce?: boolean) => void;
+  onCompareLooks?: () => void;
 }) {
   const b = project.brief;
   const theme = project.theme;
@@ -60,7 +61,14 @@ export function BriefPanel({
   return (
     <div className="h-full min-h-0 space-y-3 overflow-y-auto p-2">
       <section className="space-y-1.5">
-        <Label className="text-[11px] font-medium">Theme</Label>
+        <div className="flex items-center">
+          <Label className="text-[11px] font-medium">Theme</Label>
+          {onCompareLooks && (
+            <button className="ml-auto text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline" onClick={onCompareLooks}>
+              Compare looks
+            </button>
+          )}
+        </div>
         <select
           className={selectClass}
           value={theme?.id ?? ""}

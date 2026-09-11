@@ -41,12 +41,30 @@ export interface ProjectSummary {
   assetCount: number;
 }
 
+export interface VersionSummary {
+  id: string;
+  label: string;
+  createdAt: number;
+  n: number;
+}
+
 export interface ProjectStore {
   list(): Promise<ProjectSummary[]>;
   /** Raw JSON as stored, or null when there is no such project. */
   get(id: string): Promise<string | null>;
   put(id: string, json: string): Promise<void>;
   remove(id: string): Promise<void>;
+  /** Named snapshots of a project, newest first. */
+  listVersions(id: string): Promise<VersionSummary[]>;
+  getVersion(id: string, versionId: string): Promise<string | null>;
+  putVersion(id: string, label: string, json: string): Promise<VersionSummary>;
+}
+
+/** Write beside, then rename: a crash leaves the old file or the new one, never half. */
+async function writeAtomic(target: string, text: string): Promise<void> {
+  const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temp, text, "utf8");
+  await rename(temp, target);
 }
 
 export function cutlineHome(): string {
@@ -146,5 +164,53 @@ export class DiskProjectStore implements ProjectStore {
 
   async remove(id: string): Promise<void> {
     await rm(this.file(id), { force: true });
+    await rm(this.versionsDir(id), { recursive: true, force: true });
+  }
+
+  /** Versions sit beside their project, in <id>.versions/: a document and its meta, each. */
+  private versionsDir(id: string): string {
+    assertSafeId(id);
+    return path.join(this.dir, `${id}.versions`);
+  }
+
+  async listVersions(id: string): Promise<VersionSummary[]> {
+    let names: string[];
+    try {
+      names = await readdir(this.versionsDir(id));
+    } catch {
+      return [];
+    }
+    const out: VersionSummary[] = [];
+    for (const name of names) {
+      if (!name.endsWith(".meta.json")) continue;
+      try {
+        out.push(JSON.parse(await readFile(path.join(this.versionsDir(id), name), "utf8")) as VersionSummary);
+      } catch {
+        // One unreadable version must not hide the others.
+      }
+    }
+    return out.sort((a, b) => b.n - a.n);
+  }
+
+  async getVersion(id: string, versionId: string): Promise<string | null> {
+    assertSafeId(versionId);
+    try {
+      return await readFile(path.join(this.versionsDir(id), `${versionId}.json`), "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw err;
+    }
+  }
+
+  async putVersion(id: string, label: string, json: string): Promise<VersionSummary> {
+    JSON.parse(json);
+    const dir = this.versionsDir(id);
+    await mkdir(dir, { recursive: true });
+    const n = ((await this.listVersions(id))[0]?.n ?? 0) + 1;
+    const summary: VersionSummary = { id: `v${n}-${Date.now().toString(36)}`, label: label.trim().slice(0, 80) || `Version ${n}`, createdAt: Date.now(), n };
+    // The document first and its meta last: a version is listed only once it can be opened.
+    await writeAtomic(path.join(dir, `${summary.id}.json`), json);
+    await writeAtomic(path.join(dir, `${summary.id}.meta.json`), JSON.stringify(summary));
+    return summary;
   }
 }
