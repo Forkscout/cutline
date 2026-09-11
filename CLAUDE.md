@@ -317,10 +317,41 @@ history synchronously rather than one render stale.
 and saves under `exports/`; the server refuses a name that already exists, so
 an export is never overwritten.
 
-**A turn belongs to the project, not the socket.** Turn state lives in a
-module-level map keyed by project id. It used to live on the `AgentBridge`
-object, which the editor's effect rebuilds on a reconnect, a lock change or a
-hot reload — and one request quietly became two undo steps.
+**A turn belongs to the project, not the socket.** Turn state is keyed by
+project id and kept on `globalThis`, not in the module. It first lived on the
+`AgentBridge` object, which the editor's effect rebuilds on a reconnect, a lock
+change or a hot reload; then in a module-level map, which a hot reload of
+`agent-bridge.ts` or of anything it imports evaluates afresh. Both times one
+request quietly became several undo steps, the later ones named "Agent edit".
+The page id, the holds, transcriptions in flight and the live bridge sit beside
+it for the same reason — a new page id made the server take the page for a
+stranger. A reload is a new page. The server also remembers each project's
+last `start_turn` and names it with every call, so a reloaded page, or an
+editor the hold moved to, names the step the same; after a server restart,
+which empties that, the tab's own copy stands.
+
+**A call belongs to the page, not the socket.** The server keeps a call
+pending for the page it went to and takes the answer from any socket of that
+page; the tab sends each answer on whatever socket it has by then (`deliver`,
+with an outbox while it has none). A page that drops its socket has 10 s to
+come back before its calls fail with "The editor closed before it answered." —
+a `transcribe` waiting its 90 s used to fail that way the moment the bridge was
+rebuilt, while the work carried on in the tab. An edit that finishes after its
+bridge was rebuilt commits through the bridge serving the project now
+(`current()`).
+
+**A reconnect is not a touch.** Calls go to the editor the user touched last,
+and after a restart every editor reconnects in no particular order — a hidden
+tab's timers run late. `mcp-check`'s restart step once put its marker in a
+different project, open in another browser that happened to reconnect first.
+So each `hello` carries the page's `touchedAt` (loaded or last focused), the
+server gives the editors 3 s after a start before it picks one, and when the
+holder the user touched last drops its socket without closing it (close code
+1006, not 1000/1001/1005), new calls wait up to the 10 s grace for it rather
+than going elsewhere. With no editor at all, a call made within 10 s of a start
+waits for one instead of reporting that none is open. `mcp-check` reads the
+editor state after its restart and edits only if the call reached its own
+project.
 
 **One bridge per page.** A new `AgentBridge` stops any live one, a close or a
 message from a socket that is no longer current is ignored, and each `hello`
@@ -340,7 +371,9 @@ carries `wasHolder`, and an editor that held the project before takes it back
 from one that was only given it by default. Agent calls go only to holders, and
 a non-holder refuses edits itself in case one is in flight. With the server
 down, only the browser's lock is in force. `bun scripts/lock-check.ts` checks
-all of it with two stand-in editors.
+all of it with two stand-in editors — and, with one page on three sockets, that
+a call outlives the socket it went out on, that every call names the turn, and
+that a page which does not come back fails its calls after the grace.
 
 **Stateless, with its own token.** A fresh MCP server per request, so a restart
 under `bun --watch` strands no client session. The bearer token lives in
@@ -352,7 +385,8 @@ prints a `?project=` link. Open it, then `bun scripts/mcp-check.ts run <id>`
 drives it as a real MCP client. It checks that every action has a tool, and
 that bad auth and malformed calls are refused. It checks that the rendered PNG
 has the layer where it was placed, and that one undo reverts a whole turn
-exactly. It checks that a planted two-second gap shows in the envelope, and
+exactly — also a turn the server restarted in the middle of, which the check
+causes by writing `server/index.ts` back unchanged. It checks that a planted two-second gap shows in the envelope, and
 that the tab's JSON equals what autosave writes, byte for byte.
 `cleanup <id>` removes the project.
 

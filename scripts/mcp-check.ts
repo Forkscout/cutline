@@ -6,10 +6,12 @@
  *   bun scripts/mcp-check.ts cleanup <id>   deletes it
  *
  * `run` needs `bun run dev` running and the project open in a browser tab —
- * the tools edit the project in the editor, never on disk.
+ * the tools edit the project in the editor, never on disk. It restarts the
+ * server once mid-turn, the way a save does under `bun --watch`, by writing a
+ * server file back with the bytes it already has.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { inflateSync } from "node:zlib";
@@ -96,6 +98,38 @@ function check(name: string, ok: boolean, detail = "") {
 
 type Result = { content: { type: string; text?: string; data?: string }[]; isError?: boolean };
 
+/**
+ * Restarts the server the way a save does under `bun --watch`, and waits for
+ * it to answer again. False when nothing restarted: a server not being watched.
+ */
+async function restartServer(): Promise<boolean> {
+  // A socket that never says hello is invisible to the bridge. Its close is how the restart shows.
+  const ws = new WebSocket("ws://127.0.0.1:5311/api/bridge", { headers: { "x-cutline-token": await pageToken() } } as never);
+  await new Promise((resolve, reject) => {
+    ws.onopen = resolve;
+    ws.onerror = reject;
+  });
+  const closed = new Promise<boolean>((resolve) => {
+    ws.onclose = () => resolve(true);
+    setTimeout(() => resolve(false), 5000);
+  });
+  const file = path.join(import.meta.dir, "../server/index.ts");
+  writeFileSync(file, readFileSync(file));
+  if (!(await closed)) {
+    ws.close();
+    return false;
+  }
+  for (let i = 0; i < 50; i += 1) {
+    try {
+      await fetch(MCP);
+      return true;
+    } catch {
+      await Bun.sleep(200);
+    }
+  }
+  return false;
+}
+
 async function run(projectId: string) {
   const client = new Client({ name: "cutline-mcp-check", version: "1" });
   await client.connect(
@@ -154,6 +188,8 @@ async function run(projectId: string) {
   check("add_clip returns the new clip's id", Boolean(box), added.undoStep);
   await call("set_transform", { trackId: v1, clipId: box, patch: { x: 0.25, y: 0.5, scale: 0.3 } });
   await call("add_marker", { time: 1, name: "check" });
+  const named = jsonOf<{ lastUndoStep: string }>(await call("get_editor_state"));
+  check("the turn's edits are one undo step, named after it", named.lastUndoStep === "Agent: mcp check: red box", named.lastUndoStep);
 
   const frame = await call("render_frame", { time: 1, width: 640, format: "png" });
   const image = frame.content.find((c) => c.type === "image");
@@ -175,6 +211,27 @@ async function run(projectId: string) {
   await call("undo");
   const after = textOf(await call("get_project", { full: true }));
   check("one undo takes back the whole turn, exactly", after === before);
+
+  console.log("\na turn across a server restart");
+  await call("start_turn", { instruction: "mcp check: across a restart" });
+  await call("add_marker", { time: 2, name: "before the restart" });
+  if (await restartServer()) {
+    // Read-only first: if the call went to another editor, the check must not edit the project open there.
+    const back = jsonOf<{ projectId: string }>(await call("get_editor_state"));
+    check("after the restart, calls reach the same editor, not the first one back", back.projectId === projectId, back.projectId);
+    if (back.projectId === projectId) {
+      const edit = await call("add_marker", { time: 3, name: "after the restart" });
+      const step = edit.isError ? textOf(edit) : jsonOf<{ undoStep: string }>(edit).undoStep;
+      check("an edit after the restart joins the turn's undo step", step === "Agent: mcp check: across a restart", step);
+      const across = jsonOf<{ lastUndoStep: string }>(await call("get_editor_state"));
+      check("the turn keeps its name across the restart", across.lastUndoStep === "Agent: mcp check: across a restart", across.lastUndoStep);
+    }
+    await call("undo");
+    check("and one undo still takes back all of it", textOf(await call("get_project", { full: true })) === before);
+  } else {
+    console.log("SKIP  the server did not restart — is it running under bun --watch?");
+    await call("undo");
+  }
 
   console.log("\nhearing");
   const recordings = jsonOf<{ id: string; tracks: string[] }[]>(await call("list_recordings"));

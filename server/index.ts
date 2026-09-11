@@ -116,7 +116,7 @@ api.get(
   "/bridge",
   upgradeWebSocket(() => ({
     onMessage: (event, ws) => bridge.message(ws, String(event.data)),
-    onClose: (_event, ws) => bridge.close(ws),
+    onClose: (event, ws) => bridge.close(ws, event.code),
   })),
 );
 

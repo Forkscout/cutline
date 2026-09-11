@@ -471,14 +471,24 @@ export type BridgeContent =
 
 /** Server to tab, over the /api/bridge WebSocket. */
 export type ToTab =
-  | { type: "call"; id: string; tool: string; args: unknown }
+  /**
+   * `turn` is the instruction of the project's current turn, as the server last
+   * relayed start_turn: a page that was reloaded has lost it, and an editor the
+   * hold moved to never saw it. Absent after a server restart, when the tab's
+   * own copy stands.
+   */
+  | { type: "call"; id: string; tool: string; args: unknown; turn?: string }
   /** Whether this editor holds its project — the one that saves — and how many have it open. */
   | { type: "lock"; holder: boolean; editors: number };
 
 /** Tab to server. */
 export type FromTab =
   /** pageId is one per page load, so the server can drop a stale second socket from it. */
-  | { type: "hello"; pageId: string; projectId: string; name: string; where?: string; wasHolder?: boolean }
+  /**
+   * touchedAt is when the page was loaded or last focused, so a reconnect
+   * does not count as the user choosing this editor.
+   */
+  | { type: "hello"; pageId: string; projectId: string; name: string; where?: string; wasHolder?: boolean; touchedAt?: number }
   /** The user asked for this editor to be the one that saves. */
   | { type: "takeover" }
   | { type: "focus" }

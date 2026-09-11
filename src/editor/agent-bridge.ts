@@ -222,33 +222,6 @@ interface TurnState {
   lastAgentPresent: Project | null;
   lastAt: number;
 }
-const turns = new Map<string, TurnState>();
-function turnFor(projectId: string): TurnState {
-  let turn = turns.get(projectId);
-  if (!turn) {
-    turn = { label: null, lastAgentPresent: null, lastAt: 0 };
-    turns.set(projectId, turn);
-  }
-  return turn;
-}
-
-/** One per page load. */
-const PAGE_ID = crypto.randomUUID();
-
-/**
- * Whether this page held each project, remembered across reconnects: after a
- * server restart it is what lets the editor that was saving claim the project
- * back, instead of whichever editor reconnected first.
- */
-const holding = new Map<string, boolean>();
-
-/**
- * At most one live bridge per page. React may build the editor's effect more
- * than once (StrictMode mounts twice in development; a hot reload re-runs it),
- * and two bridges in one page meant two sockets to the server, which then
- * routed calls to whichever spoke last.
- */
-let live: AgentBridge | null = null;
 
 /**
  * Transcriptions in flight, by asset. A long one outlasts the call that
@@ -260,7 +233,79 @@ interface Transcribing {
   note: string;
   service: string;
 }
-const transcribing = new Map<string, Transcribing>();
+
+/**
+ * What belongs to the page rather than to one bridge, or to one evaluation of
+ * this module. A hot reload of this file, or of anything it imports, evaluates
+ * it afresh; when these were module variables that minted a new page id (so
+ * the server took the page for a stranger), forgot each project's turn (so the
+ * next edit was a nameless "Agent edit" step), and stranded the answers of
+ * calls still running. On globalThis they last as long as the page, and a
+ * reload is a new page. Fields are filled one by one so that an edit adding a
+ * field still finds it on a page that loaded before the edit.
+ */
+interface Page {
+  /** One per page load. */
+  id: string;
+  turns: Map<string, TurnState>;
+  /**
+   * Whether this page held each project, remembered across reconnects: after a
+   * server restart it is what lets the editor that was saving claim the project
+   * back, instead of whichever editor reconnected first.
+   */
+  holding: Map<string, boolean>;
+  transcribing: Map<string, Transcribing>;
+  /**
+   * At most one live bridge per page. React may build the editor's effect more
+   * than once (StrictMode mounts twice in development; a hot reload re-runs it),
+   * and two bridges in one page meant two sockets to the server, which then
+   * routed calls to whichever spoke last.
+   */
+  live: AgentBridge | null;
+  /** The live bridge's socket once it has said hello — where every answer goes. */
+  socket: WebSocket | null;
+  /** Answers that finished while the page had no socket, sent after the next hello. */
+  outbox: FromTab[];
+  /**
+   * When the page was loaded or last focused. Sent with hello, because the
+   * server routes calls to the editor the user touched last, and a reconnect
+   * — after a restart, every editor's — is not a touch.
+   */
+  touchedAt: number;
+}
+const shared = ((globalThis as { __cutlineAgentPage?: Partial<Page> }).__cutlineAgentPage ??= {});
+shared.id ??= crypto.randomUUID();
+shared.turns ??= new Map();
+shared.holding ??= new Map();
+shared.transcribing ??= new Map();
+shared.live ??= null;
+shared.socket ??= null;
+shared.outbox ??= [];
+// The page's load time, even when a hot reload evaluates this long after it.
+shared.touchedAt ??= Math.round(performance.timeOrigin);
+const page = shared as Page;
+
+function turnFor(projectId: string): TurnState {
+  let turn = page.turns.get(projectId);
+  if (!turn) {
+    turn = { label: null, lastAgentPresent: null, lastAt: 0 };
+    page.turns.set(projectId, turn);
+  }
+  return turn;
+}
+
+const turnName = (instruction: string) => instruction.slice(0, 80);
+
+/**
+ * Sends an answer on the socket the page has now, not the one its call came
+ * in on. A call can outlive its socket — the server restarted, the bridge was
+ * rebuilt — and the server keeps it pending for the page, so the answer is
+ * good on the next socket too.
+ */
+function deliver(message: FromTab): void {
+  if (page.socket?.readyState === WebSocket.OPEN) page.socket.send(JSON.stringify(message));
+  else page.outbox.push(message);
+}
 
 /** How long one transcribe call waits before answering "running". The server gives a relayed call 120 s. */
 const TRANSCRIBE_WAIT_MS = 90_000;
@@ -272,7 +317,7 @@ const round = (n: number) => Math.round(n * 1000) / 1000;
 export class AgentBridge {
   private ws: WebSocket | null = null;
   private stopped = false;
-  private retryMs = 1000;
+  private failures = 0;
   private lock = { holder: true, editors: 1 };
 
   constructor(
@@ -285,20 +330,36 @@ export class AgentBridge {
   }
 
   start(): void {
-    if (live && live !== this) live.stop();
-    live = this;
+    if (page.live && page.live !== this) page.live.stop();
+    page.live = this;
     this.connect();
     window.addEventListener("focus", this.onFocus);
   }
 
   stop(): void {
-    if (live === this) live = null;
+    if (page.live === this) page.live = null;
+    if (page.socket === this.ws) page.socket = null;
     this.stopped = true;
     window.removeEventListener("focus", this.onFocus);
     this.ws?.close();
   }
 
-  private onFocus = () => this.send({ type: "focus" });
+  /**
+   * The bridge serving this project now: this one, unless a call outlived it —
+   * the editor's effect re-ran, or a hot reload rebuilt the bridge, while an
+   * import or a transcription was under way. Its edit belongs in the editor as
+   * it is now; if no bridge serves this project, the editor has closed.
+   */
+  private current(): AgentBridge {
+    if (!this.stopped) return this;
+    if (page.live && page.live.project.id === this.project.id) return page.live;
+    throw new ToolError("The editor closed before the edit landed.");
+  }
+
+  private onFocus = () => {
+    page.touchedAt = Date.now();
+    this.send({ type: "focus" });
+  };
 
   private send(message: FromTab): void {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(message));
@@ -309,18 +370,22 @@ export class AgentBridge {
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/bridge`);
     this.ws = ws;
     ws.onopen = () => {
-      this.retryMs = 1000;
+      this.failures = 0;
       // Which browser, and whether anyone can see it: when two editors hold the
       // same project, this is what tells them apart in the server's log.
       const brand = navigator.userAgent.match(/(Edg|Electron|Chrome|Firefox|Safari)\/[\d.]+/)?.[0] ?? "browser";
       this.send({
         type: "hello",
-        pageId: PAGE_ID,
+        pageId: page.id,
         projectId: this.project.id,
         name: this.project.name,
         where: `${brand}, ${document.visibilityState}`,
-        wasHolder: holding.get(this.project.id) ?? false,
+        wasHolder: page.holding.get(this.project.id) ?? false,
+        touchedAt: page.touchedAt,
       });
+      // After hello, so the server knows the page they come from.
+      page.socket = ws;
+      for (const message of page.outbox.splice(0)) ws.send(JSON.stringify(message));
     };
     ws.onmessage = (event) => {
       if (this.ws === ws) void this.receive(JSON.parse(String(event.data)) as ToTab);
@@ -329,9 +394,13 @@ export class AgentBridge {
     // does. A close from a socket that is no longer the current one must not
     // start a second reconnect chain — that is how one page ended up with two.
     ws.onclose = () => {
+      if (page.socket === ws) page.socket = null;
       if (this.stopped || this.ws !== ws) return;
-      window.setTimeout(() => this.connect(), this.retryMs);
-      this.retryMs = Math.min(this.retryMs * 2, 10_000);
+      // Every second for the first few tries — a restart takes about one, and
+      // the server waits a few seconds for the editors before it routes a call
+      // — then backing off to every ten.
+      window.setTimeout(() => this.connect(), Math.min(1000 * 2 ** Math.max(0, this.failures - 2), 10_000));
+      this.failures += 1;
     };
   }
 
@@ -342,14 +411,15 @@ export class AgentBridge {
 
   private async receive(message: ToTab): Promise<void> {
     if (message.type === "lock") {
-      holding.set(this.project.id, message.holder);
+      page.holding.set(this.project.id, message.holder);
       this.lock = { holder: message.holder, editors: message.editors };
       this.host.onLock?.(message.holder, message.editors);
       return;
     }
+    if (message.turn !== undefined) this.adopt(message.turn);
     this.host.onActivity(message.tool);
     try {
-      this.send({ type: "result", id: message.id, ok: true, content: await this.execute(message.tool, message.args) });
+      deliver({ type: "result", id: message.id, ok: true, content: await this.execute(message.tool, message.args) });
     } catch (err) {
       const error =
         err instanceof z.ZodError
@@ -357,10 +427,23 @@ export class AgentBridge {
           : err instanceof Error
             ? err.message
             : String(err);
-      this.send({ type: "result", id: message.id, ok: false, error });
+      deliver({ type: "result", id: message.id, ok: false, error });
     } finally {
       this.host.onActivity(null);
     }
+  }
+
+  /**
+   * Takes the turn the server names with each call. It differs from this
+   * page's own only when the page lost it (a reload) or never saw start_turn
+   * (the hold moved here from another editor); either way the next edit opens
+   * a step under the turn's name rather than a nameless one.
+   */
+  private adopt(instruction: string): void {
+    const label = turnName(instruction);
+    if (label === this.turn.label) return;
+    this.turn.label = label;
+    this.turn.lastAgentPresent = null;
   }
 
   /** Runs one tool by its MCP name. Public so a harness can drive it directly. */
@@ -389,6 +472,8 @@ export class AgentBridge {
 
   /** Applies an action as the agent's edit, joining the turn's undo step. */
   private commit(action: Action): { label: string; change: ReturnType<typeof describeChange> } {
+    const bridge = this.current();
+    if (bridge !== this) return bridge.commit(action);
     const now = Date.now();
     const turn = this.turn;
     const idle = turn.label ? TURN_IDLE_MS : LOOSE_IDLE_MS;
@@ -417,13 +502,14 @@ export class AgentBridge {
    * which may be after the call that started it has answered "running".
    */
   private store(assetId: string, transcript: Transcript, withCaptions: boolean): void {
-    if (!this.lock.holder) return;
     try {
-      this.commit({ type: "patchAsset", assetId, patch: { transcript } });
+      const bridge = this.current();
+      if (!bridge.lock.holder) return;
+      bridge.commit({ type: "patchAsset", assetId, patch: { transcript } });
       if (withCaptions) {
-        const project = this.host.history().present;
-        this.commit({ type: "setCaptions", cues: captionsForAsset(project, assetId, transcript).cues });
-        if (!project.captionsEnabled) this.commit({ type: "setProject", patch: { captionsEnabled: true } });
+        const project = bridge.host.history().present;
+        bridge.commit({ type: "setCaptions", cues: captionsForAsset(project, assetId, transcript).cues });
+        if (!project.captionsEnabled) bridge.commit({ type: "setProject", patch: { captionsEnabled: true } });
       }
     } catch {
       // The project closed or the asset went away meanwhile. The transcript
@@ -530,7 +616,7 @@ export class AgentBridge {
         const asset = project.assets.find((a) => a.id === assetId);
         if (!asset) throw new ToolError(`No asset ${assetId} in this project. get_project lists them.`);
         if (!asset.hasAudio) throw new ToolError(`${asset.name} has no sound to transcribe.`);
-        let job = transcribing.get(asset.id);
+        let job = page.transcribing.get(asset.id);
         if (!job) {
           const route = (await capabilities().catch(() => ({ transcribe: null }))).transcribe;
           if (!route) {
@@ -558,11 +644,12 @@ export class AgentBridge {
             },
           )
             .then((t) => {
-              (live ?? this).store(asset.id, t, withCaptions);
+              // Lands through whichever bridge serves the project by then.
+              this.store(asset.id, t, withCaptions);
               return t;
             })
-            .finally(() => transcribing.delete(asset.id));
-          transcribing.set(asset.id, entry);
+            .finally(() => page.transcribing.delete(asset.id));
+          page.transcribing.set(asset.id, entry);
           job = entry;
         }
         const done = await Promise.race([
@@ -593,7 +680,7 @@ export class AgentBridge {
         ];
       }
       case "startTurn":
-        this.turn.label = String(raw.instruction).slice(0, 80);
+        this.turn.label = turnName(String(raw.instruction));
         // The next edit opens a fresh undo step rather than joining the last turn's.
         this.turn.lastAgentPresent = null;
         return [text(`Turn started. Edits until the next start_turn are one undo step: "Agent: ${this.turn.label}".`)];

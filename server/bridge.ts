@@ -16,16 +16,38 @@ interface Tab {
   connectedAt: number;
   projectId: string;
   name: string;
-  /** When the user last connected or focused this tab. The latest one is "the editor". */
+  /** When the user last opened or focused this tab. The latest one is "the editor". */
   seenAt: number;
 }
 
 interface Pending {
-  tab: object;
+  /**
+   * The page the call went to, not the socket. A page drops its socket and
+   * opens another for many reasons — a rebuilt bridge, a hot reload, a proxy
+   * that lost the old one — while the call runs on in it, and the answer
+   * arrives on whichever socket the page has by then.
+   */
+  pageId: string;
   resolve: (content: BridgeContent[]) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
+
+/** A page that lost its socket and may be on its way back. */
+interface Away {
+  /** Fails the page's calls when the grace is over. */
+  timer: ReturnType<typeof setTimeout>;
+  /** Whether new calls should wait for it: it held its project, and its socket dropped rather than being closed. */
+  expected: boolean;
+  seenAt: number;
+}
+
+/**
+ * Close codes a page sends when it closes its socket itself: the editor
+ * closed, the page unloaded, or a bridge is being rebuilt, which reconnects at
+ * once. A connection that dropped has no say in its code (1006).
+ */
+const CLOSED_ON_PURPOSE = new Set([1000, 1001, 1005]);
 
 export class NoEditorOpen extends Error {
   constructor() {
@@ -38,6 +60,21 @@ export class NoEditorOpen extends Error {
 /** Rendering a contact sheet of a long 4K take is the slowest call there is. */
 const CALL_TIMEOUT_MS = 120_000;
 
+/**
+ * How long a page that lost its socket has to come back before its calls
+ * fail, and how long new calls wait for it meanwhile. The tab retries every
+ * second at first, so this is several attempts.
+ */
+const RECONNECT_GRACE_MS = 10_000;
+
+/**
+ * After a start, how long the editors have to reconnect before a call picks
+ * one. They come back in no particular order — a hidden tab's timers run late
+ * — and the first call after a restart once went to the first editor back,
+ * which had another project open, instead of the one the user was using.
+ */
+const SETTLE_MS = 3000;
+
 export class TabBridge {
   // Keyed by the runtime socket: hono may hand each event a fresh WSContext.
   private tabs = new Map<object, Tab>();
@@ -49,6 +86,17 @@ export class TabBridge {
    * default, so the editor that held it before a restart can take it back.
    */
   private holders = new Map<string, { key: object; claimed: boolean }>();
+  /** By page id. */
+  private away = new Map<string, Away>();
+  /**
+   * The instruction of each project's current turn, sent with every call. The
+   * tab keeps its own copy, which outlives a server restart; this one outlives
+   * a reload of the page, and follows the hold from one editor to another.
+   */
+  private turns = new Map<string, string>();
+  private startedAt = Date.now();
+  /** Calls waiting for the editors to settle. */
+  private waiting = new Set<() => void>();
 
   message(ws: WSContext, data: string): void {
     const key = ws.raw as object;
@@ -61,25 +109,31 @@ export class TabBridge {
     if (message.type === "hello") {
       // A page holds one socket. If it already had another, that one is stale —
       // a reconnect whose predecessor never closed — and answering calls on it
-      // would split the agent's work across two editors' worth of state.
+      // would split the agent's work across two editors' worth of state. Its
+      // calls stay pending: they belong to the page, which answers them here.
       for (const [otherKey, other] of this.tabs) {
         if (otherKey !== key && other.pageId === message.pageId) {
           this.tabs.delete(otherKey);
           other.ws.close(4000, "Replaced by a newer connection from the same page");
         }
       }
+      clearTimeout(this.away.get(message.pageId)?.timer);
+      this.away.delete(message.pageId);
+      const now = Date.now();
       this.tabs.set(key, {
         ws,
         pageId: message.pageId,
-        connectedAt: Date.now(),
+        connectedAt: now,
         projectId: message.projectId,
         name: message.name,
-        seenAt: Date.now(),
+        // A reconnect is not the user choosing this editor; when they last did is the page's to say.
+        seenAt: Math.min(now, message.touchedAt ?? now),
       });
       console.log(
         `bridge          editor connected: ${message.name} [page ${String(message.pageId).slice(0, 8)}, ${message.where ?? "?"}] (${this.tabs.size} open)`,
       );
       this.claim(key, message.projectId, message.wasHolder === true);
+      this.wake();
     } else if (message.type === "takeover") {
       const tab = this.tabs.get(key);
       if (tab) {
@@ -91,7 +145,7 @@ export class TabBridge {
       if (tab) tab.seenAt = Date.now();
     } else if (message.type === "result") {
       const waiting = this.pending.get(message.id);
-      if (!waiting) return;
+      if (!waiting || this.tabs.get(key)?.pageId !== waiting.pageId) return;
       this.pending.delete(message.id);
       clearTimeout(waiting.timer);
       if (message.ok) waiting.resolve(message.content);
@@ -99,20 +153,38 @@ export class TabBridge {
     }
   }
 
-  close(ws: WSContext): void {
+  close(ws: WSContext, code?: number): void {
     const key = ws.raw as object;
     const tab = this.tabs.get(key);
+    // A socket that hello already replaced is gone from the map, and its page is still here.
+    if (!tab) return;
+    const expected = this.holders.get(tab.projectId)?.key === key && !CLOSED_ON_PURPOSE.has(code ?? 1006);
     this.tabs.delete(key);
-    if (tab) {
-      console.log(`bridge          editor disconnected: ${tab.name} [page ${String(tab.pageId).slice(0, 8)}] (${this.tabs.size} open)`);
-      this.release(key, tab.projectId);
-    }
-    for (const [id, waiting] of this.pending) {
-      if (waiting.tab !== key) continue;
-      this.pending.delete(id);
-      clearTimeout(waiting.timer);
-      waiting.reject(new Error("The editor closed before it answered."));
-    }
+    console.log(`bridge          editor disconnected: ${tab.name} [page ${String(tab.pageId).slice(0, 8)}] (${this.tabs.size} open)`);
+    this.release(key, tab.projectId);
+    if (![...this.tabs.values()].some((t) => t.pageId === tab.pageId)) this.awaitReturn(tab.pageId, expected, tab.seenAt);
+  }
+
+  /**
+   * Gives a page that lost its socket a moment to reconnect before failing the
+   * calls it was running. It is usually the same page coming straight back,
+   * with the work still going on in it; an agent told "the editor closed" would
+   * start the work again, or give up on a transcription that was about to land.
+   */
+  private awaitReturn(pageId: string, expected: boolean, seenAt: number): void {
+    clearTimeout(this.away.get(pageId)?.timer);
+    const timer = setTimeout(() => {
+      this.away.delete(pageId);
+      for (const [id, waiting] of this.pending) {
+        if (waiting.pageId !== pageId) continue;
+        this.pending.delete(id);
+        clearTimeout(waiting.timer);
+        waiting.reject(new Error("The editor closed before it answered."));
+      }
+      // A call that was waiting for this page chooses among the others now.
+      this.wake();
+    }, RECONNECT_GRACE_MS);
+    this.away.set(pageId, { timer, expected, seenAt });
   }
 
   /** Decides whether a newly connected editor holds its project. */
@@ -163,18 +235,57 @@ export class TabBridge {
     return best;
   }
 
-  call(tool: string, args: unknown): Promise<BridgeContent[]> {
-    const tab = this.active();
-    if (!tab) return Promise.reject(new NoEditorOpen());
-    const key = tab.ws.raw as object;
+  /**
+   * The editor to relay to — but not while the one the user touched last may
+   * be on its way back. Right after a start every editor is reconnecting; after
+   * a dropped connection, that page may be about to return. Choosing from
+   * whoever happens to be connected then puts the agent's edit in another
+   * project, so the call waits: for the start to settle, for that page to come
+   * back or its grace to run out, or, with no editor at all, for one to connect.
+   */
+  private async editor(): Promise<Tab | undefined> {
+    for (;;) {
+      const tab = this.active();
+      const now = Date.now();
+      const settled = this.startedAt + SETTLE_MS;
+      const returning = [...this.away.values()].some((a) => a.expected && a.seenAt > (tab?.seenAt ?? 0));
+      const wait =
+        now < settled ? settled - now
+        : returning ? RECONNECT_GRACE_MS
+        : tab ? 0
+        : this.startedAt + RECONNECT_GRACE_MS - now;
+      if (wait <= 0) return tab;
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          this.waiting.delete(done);
+          resolve();
+        };
+        const timer = setTimeout(done, wait);
+        this.waiting.add(done);
+      });
+    }
+  }
+
+  /** Lets waiting calls look again: an editor connected, or a page's grace ran out. */
+  private wake(): void {
+    for (const done of [...this.waiting]) done();
+  }
+
+  async call(tool: string, args: unknown): Promise<BridgeContent[]> {
+    const tab = await this.editor();
+    if (!tab) throw new NoEditorOpen();
+    const instruction = (args as { instruction?: unknown } | null)?.instruction;
+    if (tool === "start_turn" && typeof instruction === "string") this.turns.set(tab.projectId, instruction);
+    const turn = this.turns.get(tab.projectId);
     const id = crypto.randomUUID();
     return new Promise<BridgeContent[]>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`The editor did not answer ${tool} within ${CALL_TIMEOUT_MS / 1000} s.`));
       }, CALL_TIMEOUT_MS);
-      this.pending.set(id, { tab: key, resolve, reject, timer });
-      tab.ws.send(JSON.stringify({ type: "call", id, tool, args } satisfies ToTab));
+      this.pending.set(id, { pageId: tab.pageId, resolve, reject, timer });
+      tab.ws.send(JSON.stringify({ type: "call", id, tool, args, ...(turn !== undefined ? { turn } : {}) } satisfies ToTab));
     });
   }
 }
