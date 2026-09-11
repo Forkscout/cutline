@@ -305,6 +305,11 @@ export interface Clip {
   text?: TextStyle;
   textAnimation?: TextAnimation;
   shape?: ShapeStyle;
+  /**
+   * What a clip made from theme tokens is for — title, chip, card. Set by the
+   * agent's macros; a theme change restyles every clip that has one.
+   */
+  role?: ClipRole;
 
   /**
    * Clips captured in one take share a link id and are edited as a unit —
@@ -410,7 +415,150 @@ export interface Project {
   /** Playback range, when the user has set one. */
   inPoint: number | null;
   outPoint: number | null;
+
+  /** What the video is for, as the client said it — read first by every agent. */
+  brief: Brief;
+  /** The design tokens graphics are made from; null until one is chosen. */
+  theme: Theme | null;
 }
+
+/* -------------------------------------------------------------- direction */
+
+/** How the speaker and the graphics share the frame. */
+export type LayoutStyle = "side-panel" | "b-roll" | "pip" | "lower-thirds" | "graphics-only";
+
+export interface BriefReference {
+  id: string;
+  /** A reference imported into the project, to look at with contact_sheet. */
+  assetId: string | null;
+  url: string | null;
+  /** What to take from it: "the pacing", "the lower thirds". */
+  note: string;
+}
+
+export interface BriefDecision {
+  at: number;
+  text: string;
+}
+
+/**
+ * What the video is for and how it should feel, written down once and kept
+ * with the project — so the second agent to open it does not re-ask the client
+ * what the first one already learned.
+ */
+export interface Brief {
+  goal: string;
+  audience: string;
+  /** Where it will be watched: YouTube, Reels, a landing page. */
+  platform: string;
+  tone: string;
+  layout: LayoutStyle | null;
+  /** Language of the words on screen. */
+  language: string;
+  captions: "yes" | "no" | null;
+  brand: { name: string; logoAssetId: string | null; colors: string[]; fonts: string[]; notes: string };
+  references: BriefReference[];
+  /** Standing instructions: "numbers on screen are checked by the client first". */
+  rules: string[];
+  /** What was decided and why, oldest first. */
+  decisions: BriefDecision[];
+  updatedAt: number;
+}
+
+export interface ThemePalette {
+  background: string;
+  /** A second stop makes the background a gradient. */
+  backgroundTo: string | null;
+  surface: string;
+  line: string;
+  text: string;
+  muted: string;
+  dim: string;
+  accent: string;
+  accentSoft: string;
+  accentMuted: string;
+  positive: string;
+  positiveSoft: string;
+  negative: string;
+  neutralSoft: string;
+}
+
+/**
+ * The look of everything an agent adds — tokens, not styles. Sizes are pixels
+ * at 1080p. `themes.ts` has the built-in themes and the rules that turn a
+ * clip's role into its style.
+ */
+export interface Theme {
+  id: string;
+  name: string;
+  description: string;
+  palette: ThemePalette;
+  /** Font stacks, web font first. */
+  fonts: { display: string; body: string };
+  weights: { display: number; body: number; kicker: number; stat: number };
+  type: {
+    kicker: number;
+    title: number;
+    subtitle: number;
+    body: number;
+    small: number;
+    stat: number;
+    kickerSpacing: number;
+    kickerUppercase: boolean;
+    lineHeight: number;
+  };
+  shape: { radius: number; stroke: number };
+  motion: {
+    enter: TextAnimation;
+    /** Seconds a layout move takes. */
+    move: number;
+    /** Seconds between items that arrive together. */
+    stagger: number;
+    /** Seconds an element takes to leave. */
+    exit: number;
+  };
+  layout: {
+    /** Left and right margin of the graphics, px. */
+    margin: number;
+    /** The speaker's panel, as a fraction of the frame's width. */
+    panelWidth: number;
+    /** Gap between the panel and the frame's edge, px. */
+    panelInset: number;
+    panelRadius: number;
+  };
+}
+
+export type ClipRole =
+  | "speaker"
+  | "kicker"
+  | "title"
+  | "subtitle"
+  | "body"
+  | "muted"
+  | "footer"
+  | "chip"
+  | "chip-positive"
+  | "chip-neutral"
+  | "stat"
+  | "label"
+  | "label-accent"
+  | "number"
+  | "icon-positive"
+  | "icon-negative"
+  | "lower-third-name"
+  | "lower-third-role"
+  | "card"
+  | "card-accent"
+  | "connector"
+  | "connector-accent"
+  | "arrow"
+  | "node"
+  | "node-accent"
+  | "node-positive"
+  | "bar"
+  | "bar-accent"
+  | "scrim"
+  | "lower-third-plate";
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -509,6 +657,21 @@ export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
   strokeWidth: 0,
   y: 0.86,
   align: "center",
+};
+
+export const EMPTY_BRIEF: Brief = {
+  goal: "",
+  audience: "",
+  platform: "",
+  tone: "",
+  layout: null,
+  language: "",
+  captions: null,
+  brand: { name: "", logoAssetId: null, colors: [], fonts: [], notes: "" },
+  references: [],
+  rules: [],
+  decisions: [],
+  updatedAt: 0,
 };
 
 export const DEFAULT_GUIDES: Guides = {

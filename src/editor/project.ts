@@ -16,7 +16,9 @@ import {
   DEFAULT_SHAPE,
   DEFAULT_TEXT,
   DEFAULT_TRANSFORM,
+  EMPTY_BRIEF,
   NO_TRANSITION,
+  type Brief,
   type CaptionCue,
   type CaptionStyle,
   type Clip,
@@ -31,11 +33,13 @@ import {
   type Project,
   type ShapeStyle,
   type TextStyle,
+  type Theme,
   type Track,
   type TrackKind,
   type Transform,
   type Transition,
 } from "./types";
+import { restyleClip, themeBackground, themeCaptionStyle } from "./themes";
 
 const id = () => crypto.randomUUID();
 
@@ -138,6 +142,8 @@ export function createProject(name = "Untitled project"): Project {
     guides: structuredClone(DEFAULT_GUIDES),
     inPoint: null,
     outPoint: null,
+    brief: structuredClone(EMPTY_BRIEF),
+    theme: null,
   };
 }
 
@@ -356,7 +362,15 @@ export type Action =
         >
       >;
     }
-  | { type: "setGuides"; patch: Partial<Guides> };
+  | { type: "setGuides"; patch: Partial<Guides> }
+  // direction
+  | {
+      type: "setBrief";
+      patch: Partial<Omit<Brief, "brand" | "decisions" | "updatedAt">> & { brand?: Partial<Brief["brand"]> };
+      /** One line for the decisions log. */
+      decision?: string;
+    }
+  | { type: "setTheme"; theme: Theme; restyle: boolean };
 
 /** Applies `fn` to every clip named in `refs`, wherever those clips live. */
 function mapClips(
@@ -826,6 +840,33 @@ export function reduce(project: Project, action: Action): Project {
       return touched({ ...project, ...action.patch });
     case "setGuides":
       return touched({ ...project, guides: { ...project.guides, ...action.patch } });
+
+    /* -------------------------------------------------------- direction */
+    case "setBrief": {
+      const brief = project.brief ?? EMPTY_BRIEF;
+      const { brand, ...rest } = action.patch;
+      return touched({
+        ...project,
+        brief: {
+          ...brief,
+          ...rest,
+          brand: { ...brief.brand, ...brand },
+          decisions: action.decision ? [...brief.decisions, { at: Date.now(), text: action.decision }] : brief.decisions,
+          updatedAt: Date.now(),
+        },
+      });
+    }
+    case "setTheme": {
+      const theme = action.theme;
+      if (!action.restyle) return touched({ ...project, theme });
+      return touched({
+        ...project,
+        theme,
+        background: themeBackground(theme),
+        captionStyle: { ...project.captionStyle, ...themeCaptionStyle(theme) },
+        tracks: project.tracks.map((t) => ({ ...t, clips: t.clips.map((c) => restyleClip(c, theme)) })),
+      });
+    }
   }
 }
 

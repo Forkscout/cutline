@@ -10,6 +10,7 @@
  */
 
 import { z } from "zod";
+import { THEME_IDS } from "./themes";
 
 export const seconds = (what: string) => z.number().min(0).describe(`${what}, in seconds`);
 export const unit = (what: string) => z.number().describe(`${what}, 0..1 of the frame`);
@@ -130,6 +131,13 @@ export const transitionPatch = z
 
 export const textAnimation = z.enum(["none", "fade", "slideUp", "slideLeft", "typewriter", "pop", "scale"]);
 
+export const clipRole = z.enum([
+  "speaker", "kicker", "title", "subtitle", "body", "muted", "footer", "chip", "chip-positive", "chip-neutral",
+  "stat", "label", "label-accent", "number", "icon-positive", "icon-negative", "lower-third-name", "lower-third-role",
+  "card", "card-accent", "connector", "connector-accent", "arrow", "node", "node-accent", "node-positive", "bar",
+  "bar-accent", "scrim", "lower-third-plate",
+]);
+
 export const clipPatch = z
   .object({
     name: z.string(),
@@ -144,6 +152,7 @@ export const clipPatch = z
     enabled: z.boolean(),
     label: z.string().nullable(),
     textAnimation,
+    role: clipRole.describe("What the clip is for, so set_theme can restyle it"),
   })
   .partial();
 
@@ -211,6 +220,67 @@ export const projectPatch = z
     captionsEnabled: z.boolean(),
     inPoint: z.number().min(0).nullable(),
     outPoint: z.number().min(0).nullable(),
+  })
+  .partial();
+
+export const layoutStyle = z.enum(["side-panel", "b-roll", "pip", "lower-thirds", "graphics-only"]);
+
+export const briefPatch = z
+  .object({
+    goal: z.string().describe("What the video should achieve"),
+    audience: z.string(),
+    platform: z.string().describe("Where it will be watched: YouTube, Reels, a landing page"),
+    tone: z.string(),
+    layout: layoutStyle.nullable().describe("side-panel: speaker in a panel, graphics beside; b-roll: full-frame cutaways; pip: speaker in a corner; lower-thirds: names and points only; graphics-only: no speaker"),
+    language: z.string().describe("Language of on-screen text"),
+    captions: z.enum(["yes", "no"]).nullable(),
+    brand: z
+      .object({
+        name: z.string(),
+        logoAssetId: z.string().nullable(),
+        colors: z.array(color),
+        fonts: z.array(z.string()),
+        notes: z.string(),
+      })
+      .partial(),
+    references: z
+      .array(z.object({ assetId: z.string().nullable().optional(), url: z.string().nullable().optional(), note: z.string() }))
+      .describe("Replaces the list"),
+    rules: z.array(z.string()).describe("Standing instructions; replaces the list"),
+  })
+  .partial();
+
+const weight = z.number().int().min(100).max(900);
+
+export const themeId = z.enum(THEME_IDS);
+
+export const themePatch = z
+  .object({
+    name: z.string().min(1),
+    description: z.string(),
+    palette: z
+      .object({
+        background: color, backgroundTo: color.nullable(), surface: color, line: color, text: color, muted: color, dim: color,
+        accent: color, accentSoft: color, accentMuted: color, positive: color, positiveSoft: color, negative: color, neutralSoft: color,
+      })
+      .partial(),
+    fonts: z.object({ display: z.string().min(1), body: z.string().min(1) }).partial().describe("Font stacks, web font first, e.g. 'Inter, Helvetica Neue, sans-serif'"),
+    weights: z.object({ display: weight, body: weight, kicker: weight, stat: weight }).partial(),
+    type: z
+      .object({
+        kicker: z.number().min(8), title: z.number().min(8), subtitle: z.number().min(8), body: z.number().min(8),
+        small: z.number().min(8), stat: z.number().min(8), kickerSpacing: z.number(), kickerUppercase: z.boolean(),
+        lineHeight: z.number().min(0.8).max(2),
+      })
+      .partial()
+      .describe("Pixels at 1080p"),
+    shape: z.object({ radius: z.number().min(0), stroke: z.number().min(0) }).partial(),
+    motion: z
+      .object({ enter: textAnimation, move: z.number().min(0.1).max(3), stagger: z.number().min(0).max(2), exit: z.number().min(0).max(2) })
+      .partial(),
+    layout: z
+      .object({ margin: z.number().min(0), panelWidth: z.number().min(0.15).max(0.5), panelInset: z.number().min(0), panelRadius: z.number().min(0) })
+      .partial(),
   })
   .partial();
 

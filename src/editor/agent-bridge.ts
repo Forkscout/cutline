@@ -28,6 +28,7 @@ import { exportProject } from "./export";
 import { audioEnvelope, describeChange, leanProject } from "./inspect";
 import { captionsForAsset, wordsOnTimeline, type Transcript } from "./transcript";
 import { readProperty } from "./keyframes";
+import { mergeTheme, themeById, themeOf } from "./themes";
 import { importSession } from "./media";
 import {
   apply,
@@ -189,6 +190,24 @@ const EXECUTORS: Executors = {
   setCaptionStyle: (a) => ({ type: "setCaptionStyle", patch: a.patch }),
   setProject: (a) => ({ type: "setProject", patch: a.patch }),
   setGuides: (a) => ({ type: "setGuides", patch: a.patch }),
+  setBrief: (a) => {
+    if (!a.patch && !a.decision) throw new ToolError("Pass a patch, a decision, or both.");
+    const { references, ...patch } = a.patch ?? {};
+    return {
+      type: "setBrief",
+      patch: {
+        ...patch,
+        ...(references
+          ? { references: references.map((r) => ({ id: crypto.randomUUID(), assetId: r.assetId ?? null, url: r.url ?? null, note: r.note })) }
+          : {}),
+      },
+      ...(a.decision ? { decision: a.decision } : {}),
+    };
+  },
+  setTheme: (a, project) => {
+    const base = a.themeId ? themeById(a.themeId) : themeOf(project);
+    return { type: "setTheme", theme: mergeTheme(base, a.overrides ?? {}), restyle: a.restyle ?? true };
+  },
 };
 
 /* ---------------------------------------------------------------- bridge */
@@ -608,6 +627,31 @@ export class AgentBridge {
           json({
             text: words.map((w) => w.text).join(" "),
             words: words.map((w) => ({ start: round(w.start), end: round(w.end), text: w.text })),
+          }),
+        ];
+      }
+      case "getBrief": {
+        const b = project.brief;
+        const unanswered = [
+          !b.goal && "goal — what should the video achieve, for whom?",
+          !b.audience && "audience",
+          !b.platform && "platform — where will it be watched (sets aspect ratio and pace)?",
+          !b.layout && "layout — speaker in a side panel, full-frame B-roll cutaways, picture-in-picture, or lower-thirds only?",
+          !b.tone && "tone",
+          !b.brand.name && !b.brand.logoAssetId && b.brand.colors.length === 0 && "brand — a logo, colours or fonts to follow?",
+          b.references.length === 0 && "references — a video or design whose look they like?",
+          !b.language && "language of the words on screen",
+          b.captions === null && "captions — wanted, and in which language?",
+          !project.theme && "theme — show preview_themes and let them choose",
+        ].filter(Boolean);
+        return [
+          json({
+            brief: b,
+            theme: project.theme,
+            unanswered,
+            next: unanswered.length
+              ? "Ask the client about these before building; guide('brief') has the questions and sensible defaults. Record answers with set_brief."
+              : "The brief is complete. Build to it, and log decisions with set_brief({ decision }).",
           }),
         ];
       }

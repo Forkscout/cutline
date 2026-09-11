@@ -14,7 +14,7 @@
 import { listProjectFiles, readProjectFile } from "@/recorder/storage";
 import { api, apiJson } from "@/lib/server";
 import { assetExists } from "./media";
-import type { Project } from "./types";
+import { EMPTY_BRIEF, type Project } from "./types";
 
 const RECOVERY_KEY = "cutline.recovery";
 const MIGRATED_KEY = "cutline.migrated-to-server.v1";
@@ -134,6 +134,9 @@ function migrate(project: Project): Project {
     markers: project.markers ?? [],
     bins: project.bins ?? [],
     captions: project.captions ?? [],
+    // Projects from before briefs and themes: an empty brief, no theme chosen.
+    brief: { ...EMPTY_BRIEF, ...project.brief, brand: { ...EMPTY_BRIEF.brand, ...project.brief?.brand } },
+    theme: project.theme ?? null,
     assets: (project.assets ?? []).map((asset) => ({ ...asset, tags: asset.tags ?? [] })),
     tracks: (project.tracks ?? []).map((track) => ({
       ...track,

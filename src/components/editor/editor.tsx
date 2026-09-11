@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner";
 import { AgentBridge } from "@/editor/agent-bridge";
 import { runAutoCaptions, type AutoCaptionOptions } from "@/components/editor/auto-captions";
+import { BriefPanel } from "@/components/editor/brief-panel";
 import { AssetUrls } from "@/editor/media";
 import {
   apply,
@@ -689,11 +690,12 @@ export function Editor({
           <ResizablePanelGroup orientation="horizontal">
             <ResizablePanel defaultSize="19" minSize="12" className="border-r">
               <Tabs value={leftTab} onValueChange={setLeftTab} className="flex h-full flex-col gap-0">
-                <TabsList className="mx-2 mt-2 grid h-7 grid-cols-2">
+                <TabsList className="mx-2 mt-2 grid h-7 grid-cols-3">
                   <TabsTrigger value="media" className="text-[10px]">Media</TabsTrigger>
                   <TabsTrigger value="captions" className="text-[10px]">
                     <Captions className="size-3" />Captions
                   </TabsTrigger>
+                  <TabsTrigger value="brief" className="text-[10px]">Brief</TabsTrigger>
                 </TabsList>
                 <TabsContent value="media" className="mt-2 min-h-0 flex-1">
                   <MediaPool
@@ -713,6 +715,9 @@ export function Editor({
                     onSeek={(t) => engineRef.current?.seek(t)}
                     onAutoCaption={autoCaption}
                   />
+                </TabsContent>
+                <TabsContent value="brief" className="mt-2 min-h-0 flex-1">
+                  <BriefPanel project={project} dispatch={dispatch} />
                 </TabsContent>
               </Tabs>
             </ResizablePanel>

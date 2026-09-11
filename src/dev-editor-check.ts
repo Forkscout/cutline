@@ -33,7 +33,8 @@ import { createEffect } from "./editor/effects";
 import { clipAt, valueAt } from "./editor/keyframes";
 import { parseSubtitles, toSrt } from "./editor/captions";
 import { captionsForAsset, captionsFromWords, dropLoops, wordsFromVerboseJson, wordsOnTimeline } from "./editor/transcript";
-import { createProject as newProject, mediaClip as newMediaClip } from "./editor/project";
+import { createProject as newProject, mediaClip as newMediaClip, reduce, shapeClip } from "./editor/project";
+import { contrast, mergeTheme, themeById } from "./editor/themes";
 import { exportProject } from "./editor/export";
 import type { ClipRef, MediaAsset, Project } from "./editor/types";
 
@@ -421,6 +422,42 @@ async function run() {
       looped.map((w) => w.text).join(" ").slice(0, 80));
     check("a phrase said twice on purpose is kept",
       dropLoops(timed(["cash,", "park,", "cash,", "park"])).length === 4);
+  }
+
+  /* --- brief and theme ---------------------------------------------- */
+  log("\nbrief and theme", "dim");
+  {
+    let p = newProject("brief check");
+    p = reduce(p, { type: "setBrief", patch: { goal: "Explain the protocol", brand: { name: "TreeFlux" } } });
+    p = reduce(p, { type: "setBrief", patch: { brand: { colors: ["#0E7C5A"] } }, decision: "Side panel: she is the draw" });
+    check("a brief patch keeps what it did not name, and logs the decision",
+      p.brief.goal === "Explain the protocol" && p.brief.brand.name === "TreeFlux" && p.brief.brand.colors[0] === "#0E7C5A"
+        && p.brief.decisions.length === 1 && p.brief.decisions[0]!.text.startsWith("Side panel"),
+      JSON.stringify({ goal: p.brief.goal, brand: p.brief.brand, decisions: p.brief.decisions.length }));
+
+    const video = p.tracks.find((t) => t.kind === "video")!;
+    const tagged = textClip(0, 3);
+    tagged.role = "title";
+    const card = shapeClip(0, 3);
+    card.role = "card";
+    const plain = textClip(0, 3);
+    plain.text!.color = "#123456";
+    video.clips = [tagged, card, plain];
+    const light = themeById("clean-light");
+    p = reduce(p, { type: "setTheme", theme: light, restyle: true });
+    const [t2, c2, p2] = p.tracks.find((t) => t.kind === "video")!.clips;
+    check("a theme restyles the clips a macro made, and only those",
+      t2?.text?.color === light.palette.text && t2?.text?.fontFamily === light.fonts.display
+        && c2?.shape?.fill === light.palette.surface && p2?.text?.color === "#123456",
+      `title ${t2?.text?.color}, card ${c2?.shape?.fill}, untagged ${p2?.text?.color}`);
+    check("and sets the background from its palette",
+      p.background.type === "gradient" && p.background.from === light.palette.background, JSON.stringify(p.background));
+
+    const tuned = mergeTheme(themeById("studio-dark"), { palette: { accent: "#22C55E" } });
+    check("an override changes one token and keeps the rest",
+      tuned.palette.accent === "#22C55E" && tuned.palette.text === themeById("studio-dark").palette.text && tuned.id === "studio-dark-custom",
+      `${tuned.id} accent ${tuned.palette.accent}`);
+    check("contrast is measured the WCAG way", Math.abs(contrast("#000000", "#ffffff") - 21) < 0.01 && contrast("#777", "#777") === 1);
   }
 
   /* --- record a real take ------------------------------------------ */

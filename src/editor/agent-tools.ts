@@ -14,6 +14,7 @@
 import { z } from "zod";
 import * as s from "./agent-schemas";
 import { EFFECTS } from "./effects";
+import { THEME_IDS } from "./themes";
 
 export type Shape = Record<string, z.ZodType>;
 
@@ -341,6 +342,19 @@ export const ACTION_TOOLS = {
     description: "Preview guides and snapping. Never affects the export.",
     input: { patch: s.guidesPatch },
   }),
+  setBrief: tool({
+    name: "set_brief",
+    title: "Set brief",
+    description:
+      "Records what the video is for and how it should feel — goal, audience, platform, tone, layout, on-screen language, captions, brand, references, standing rules — in the project, where every later agent reads it with get_brief. Pass only what changed. decision appends one line to the decisions log: what was decided, and why.",
+    input: { patch: s.briefPatch.optional(), decision: z.string().min(1).max(400).optional() },
+  }),
+  setTheme: tool({
+    name: "set_theme",
+    title: "Set theme",
+    description: `Chooses the design theme — palette, fonts, type scale, shapes, motion, how the speaker's panel sits — that every add_* macro styles itself from. themeId picks a built-in theme (${THEME_IDS.join(", ")}; list_themes describes them, preview_themes shows them on a frame); overrides adjusts tokens on top of it, or on top of the current theme when themeId is omitted. restyle (default true) also restyles every clip a macro made, the background and the captions — so a finished edit changes its look in one call.`,
+    input: { themeId: s.themeId.optional(), overrides: s.themePatch.optional(), restyle: z.boolean().optional() },
+  }),
 } as const;
 
 export type ActionToolKey = keyof typeof ACTION_TOOLS;
@@ -353,6 +367,14 @@ export const EDITOR_TOOLS = {
     title: "Editor state",
     readOnly: true,
     description: "Which project is open, its length, where the playhead is and what is selected. When the user says 'here' or 'this', they mean the playhead and the selection — call this first.",
+    input: {},
+  }),
+  getBrief: tool({
+    name: "get_brief",
+    title: "Get brief",
+    readOnly: true,
+    description:
+      "The project's brief — goal, audience, platform, tone, layout, language, captions, brand, references, rules, decisions log — and its design theme, with the questions still unanswered. Read it at the start of every session: it is what the client and earlier agents already settled. If questions remain, ask the client before building (guide('brief')).",
     input: {},
   }),
   getProject: tool({

@@ -390,6 +390,27 @@ causes by writing `server/index.ts` back unchanged. It checks that a planted two
 that the tab's JSON equals what autosave writes, byte for byte.
 `cleanup <id>` removes the project.
 
+## Directing: the brief and the theme
+
+**Every project carries a brief and a theme, and every agent reads them
+first.** The brief (`project.brief`) is what the client said: goal, audience,
+platform, tone, layout (side panel, B-roll, picture-in-picture, lower thirds,
+graphics only), on-screen language, captions, brand, references, standing
+rules, and a log of decisions. `get_brief` returns it with the questions still
+unanswered; `set_brief` records answers and appends to the log. The editor's
+Brief tab is the same document, so the client sees what the agent was told and
+can change it — and the second agent to open a project does not re-ask what
+the first one learned.
+
+**A theme is tokens, not styles** (`editor/themes.ts`): a palette, a display and
+a body font stack, a type scale, radius and stroke, motion (how things enter,
+how long a layout move takes, the stagger between items, how they leave) and
+where the speaker's panel sits. Six are built in. A clip made from tokens
+carries a `role` — title, chip, card — and `setTheme` restyles every clip that
+has one, with the background and the captions, so a finished edit changes its
+look in one step. Colours and faces change; sizes and positions do not, so a
+face with different widths can crowd a row of chips: look after a restyle.
+
 ## Transcription and AI services
 
 **Not tied to one engine or one machine.** Transcription goes through a
