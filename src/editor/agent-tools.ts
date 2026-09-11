@@ -446,12 +446,17 @@ export type BridgeContent =
   | { type: "image"; data: string; mimeType: string };
 
 /** Server to tab, over the /api/bridge WebSocket. */
-export type ToTab = { type: "call"; id: string; tool: string; args: unknown };
+export type ToTab =
+  | { type: "call"; id: string; tool: string; args: unknown }
+  /** Whether this editor holds its project — the one that saves — and how many have it open. */
+  | { type: "lock"; holder: boolean; editors: number };
 
 /** Tab to server. */
 export type FromTab =
   /** pageId is one per page load, so the server can drop a stale second socket from it. */
-  | { type: "hello"; pageId: string; projectId: string; name: string; where?: string }
+  | { type: "hello"; pageId: string; projectId: string; name: string; where?: string; wasHolder?: boolean }
+  /** The user asked for this editor to be the one that saves. */
+  | { type: "takeover" }
   | { type: "focus" }
   | { type: "result"; id: string; ok: true; content: BridgeContent[] }
   | { type: "result"; id: string; ok: false; error: string };

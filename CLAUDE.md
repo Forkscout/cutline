@@ -284,11 +284,19 @@ carries a `pageId` so the server drops a stale second socket from the same
 page. The server logs every editor that connects, with its browser and whether
 it is visible — that log is how the next item was found.
 
-**Two browsers, one project, is not handled yet.** The project lock is a
-`BroadcastChannel`, which only sees tabs of one browser. With a project open in
-the Claude app's browser and in Chrome at once, both editors save, and the agent
-talks to whichever one the server heard from last. The fix is a server-side
-lock; until then, keep one editor per project.
+**Two locks, because a `BroadcastChannel` stops at the browser.** The page's
+own lock covers tabs of one browser. The server covers the rest: every editor
+that holds its browser's lock opens the bridge, and the server names one holder
+per project — the first to connect — and tells every editor of that project
+whether it holds it. An editor saves only when both agree (`canWrite` in
+`editor.tsx`); the other shows "Open elsewhere · not saving", whose button
+claims through both locks. When the holder closes, the longest-open editor is
+promoted. After a restart editors reconnect in any order, so each `hello`
+carries `wasHolder`, and an editor that held the project before takes it back
+from one that was only given it by default. Agent calls go only to holders, and
+a non-holder refuses edits itself in case one is in flight. With the server
+down, only the browser's lock is in force. `bun scripts/lock-check.ts` checks
+all of it with two stand-in editors.
 
 **Stateless, with its own token.** A fresh MCP server per request, so a restart
 under `bun --watch` strands no client session. The bearer token lives in

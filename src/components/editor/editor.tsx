@@ -111,6 +111,11 @@ export function Editor({
   const urls = useMemo(() => new AssetUrls(), []);
   const project = history.present;
   const { isPrimary, takeOver } = useProjectLock(initial.id);
+  // Two locks, two reaches: the BroadcastChannel covers this browser's tabs,
+  // the server covers every other browser. Both must agree before this saves.
+  const [serverHold, setServerHold] = useState({ holder: true, editors: 1 });
+  const canWrite = isPrimary && serverHold.holder;
+  const bridgeRef = useRef<AgentBridge | null>(null);
   // The boundary needs the live project at the instant of a crash, and a ref is
   // the only thing that survives a render that threw.
   const projectRef = useRef(project);
@@ -174,13 +179,17 @@ export function Editor({
           if (tool) setAgentTool(tool);
           else fade = window.setTimeout(() => setAgentTool(null), 2500);
         },
+        onLock: (holder, editors) => setServerHold({ holder, editors }),
       },
       { id: initial.id, name: initial.name },
     );
     bridge.start();
+    bridgeRef.current = bridge;
     return () => {
       window.clearTimeout(fade);
       bridge.stop();
+      bridgeRef.current = null;
+      setServerHold({ holder: true, editors: 1 });
     };
   }, [isPrimary, initial.id, initial.name, update]);
 
@@ -192,7 +201,7 @@ export function Editor({
     // A second tab on the same project does not write. Letting it autosave
     // would mean both tabs overwriting each other on every keystroke, with the
     // loser never finding out.
-    if (!isPrimary) return;
+    if (!canWrite) return;
     setSaving("idle");
     const timer = window.setTimeout(() => {
       setSaving("saving");
@@ -208,13 +217,13 @@ export function Editor({
         });
     }, AUTOSAVE_IDLE_MS);
     return () => window.clearTimeout(timer);
-  }, [project, isPrimary]);
+  }, [project, canWrite]);
 
   useEffect(() => {
-    if (!isPrimary) return;
+    if (!canWrite) return;
     const timer = window.setInterval(() => writeRecovery(project), RECOVERY_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [project, isPrimary]);
+  }, [project, canWrite]);
 
   // Scopes cannot observe canvas writes, so they are nudged on a slow interval
   // rather than every frame — reading pixels back is the expensive half.
@@ -608,15 +617,22 @@ export function Editor({
           className="ml-2 h-8 w-56 rounded-lg text-xs font-medium"
         />
 
-        {isPrimary ? (
+        {canWrite ? (
           <span className="ml-1 flex items-center gap-1 text-[11px] text-muted-foreground">
             <Save className={cn("size-3", saving === "saving" && "animate-pulse text-primary")} />
             {saving === "saved" ? "Saved" : saving === "saving" ? "Saving…" : "Unsaved"}
           </span>
         ) : (
           <button
-            onClick={takeOver}
-            title="Another tab has this project open. Click to make this tab the one that saves."
+            onClick={() => {
+              if (!isPrimary) takeOver();
+              if (!serverHold.holder) bridgeRef.current?.takeover();
+            }}
+            title={
+              isPrimary
+                ? "Another browser has this project open and is saving it. Click to make this one the editor that saves."
+                : "Another tab has this project open. Click to make this tab the one that saves."
+            }
             className="ml-1 flex items-center gap-1 rounded-full bg-amber-400/15 px-2.5 py-1 text-[11px] font-medium text-amber-500 hover:bg-amber-400/25"
           >
             <Lock className="size-3" />

@@ -200,6 +200,8 @@ export interface BridgeHost {
   selection(): ClipRef | null;
   /** The tool running now, or null when the agent is idle. */
   onActivity(tool: string | null): void;
+  /** Whether this editor is the one that saves the project, and how many have it open. */
+  onLock?(holder: boolean, editors: number): void;
 }
 
 /** Edits more than this far apart start a new undo step even within a turn. */
@@ -232,6 +234,13 @@ function turnFor(projectId: string): TurnState {
 const PAGE_ID = crypto.randomUUID();
 
 /**
+ * Whether this page held each project, remembered across reconnects: after a
+ * server restart it is what lets the editor that was saving claim the project
+ * back, instead of whichever editor reconnected first.
+ */
+const holding = new Map<string, boolean>();
+
+/**
  * At most one live bridge per page. React may build the editor's effect more
  * than once (StrictMode mounts twice in development; a hot reload re-runs it),
  * and two bridges in one page meant two sockets to the server, which then
@@ -247,6 +256,7 @@ export class AgentBridge {
   private ws: WebSocket | null = null;
   private stopped = false;
   private retryMs = 1000;
+  private lock = { holder: true, editors: 1 };
 
   constructor(
     private host: BridgeHost,
@@ -292,6 +302,7 @@ export class AgentBridge {
         projectId: this.project.id,
         name: this.project.name,
         where: `${brand}, ${document.visibilityState}`,
+        wasHolder: holding.get(this.project.id) ?? false,
       });
     };
     ws.onmessage = (event) => {
@@ -307,8 +318,18 @@ export class AgentBridge {
     };
   }
 
+  /** Asks the server to make this editor the one that saves. */
+  takeover(): void {
+    this.send({ type: "takeover" });
+  }
+
   private async receive(message: ToTab): Promise<void> {
-    if (message.type !== "call") return;
+    if (message.type === "lock") {
+      holding.set(this.project.id, message.holder);
+      this.lock = { holder: message.holder, editors: message.editors };
+      this.host.onLock?.(message.holder, message.editors);
+      return;
+    }
     this.host.onActivity(message.tool);
     try {
       this.send({ type: "result", id: message.id, ok: true, content: await this.execute(message.tool, message.args) });
@@ -332,6 +353,11 @@ export class AgentBridge {
     // Validated again here, not only on the server: nothing reaches the
     // reducer that the schema did not accept.
     const args = z.object(entry.spec.input).parse(rawArgs ?? {});
+    // The server routes only to the holder; this is the second line, for a
+    // call already in flight when the hold moved.
+    if ((entry.kind === "action" || entry.key === "undo") && !this.lock.holder) {
+      throw new ToolError("This editor is read-only: the project is open in another editor that is saving it.");
+    }
     return entry.kind === "action"
       ? this.runAction(entry.key as Action["type"], args)
       : this.runEditorTool(entry.key as EditorToolKey, args);
@@ -380,6 +406,7 @@ export class AgentBridge {
             playhead: round(this.host.playhead()),
             selection: sel && clip ? { ...sel, name: clip.name, kind: clip.kind, start: clip.start, duration: clip.duration } : null,
             tracks: project.tracks.map((t) => ({ id: t.id, kind: t.kind, name: t.name, clips: t.clips.length })),
+            editorsOpen: this.lock.editors,
             lastUndoStep: this.host.history().label,
           }),
         ];
