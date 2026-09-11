@@ -113,6 +113,27 @@ listens on 127.0.0.1 only, and every request needs a per-run token.
 
 `bun run start` builds the app and serves everything from the one process.
 
+### With Docker
+
+Needs [Docker](https://docs.docker.com/get-docker/), and works the same on
+macOS, Windows and Linux:
+
+```bash
+git clone https://github.com/Forkscout/cutline && cd cutline
+docker compose up -d
+```
+
+Then open http://localhost:5311 in Chrome or Edge. Projects and recordings
+still live in `~/Cutline`, as ordinary files. Two things need the native
+install instead: the cursor track, which reads your system's cursor, and GPU
+speed for a local whisper.cpp server. Run whisper.cpp on your machine as usual
+and connect it in the Captions panel — the container reaches it for you.
+Hosted transcription services work the same either way.
+
+On Linux, Docker cannot reach a service bound to 127.0.0.1 on the host: start
+whisper-server with `--host 172.17.0.1` (Docker's bridge address). Docker
+Desktop on macOS and Windows needs nothing extra.
+
 ### Auto-captions
 
 Right-click anything with sound — a clip on the timeline or an item in the

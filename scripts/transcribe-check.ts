@@ -11,7 +11,8 @@
  * Speaks a known script with macOS `say`, stores it as a take's microphone
  * track, transcribes it through Cutline's server, and checks the words and
  * their times. Leaves any provider the user had already connected alone.
- * Needs `bun run dev`.
+ * Needs `bun run dev` — or, for another instance such as the Docker one,
+ * CUTLINE_WEB_URL and CUTLINE_API_URL (both http://localhost:5311 there).
  */
 
 import { mkdtemp, rm } from "node:fs/promises";
@@ -24,14 +25,16 @@ const SCRIPT =
   "Cutline records your screen, your camera and your voice as separate files. " +
   "Then you edit them together in the browser, and export without uploading anything.";
 
-const html = await (await fetch("http://localhost:5310")).text();
+const WEB = process.env.CUTLINE_WEB_URL ?? "http://localhost:5310";
+const API = process.env.CUTLINE_API_URL ?? "http://127.0.0.1:5311";
+const html = await (await fetch(WEB)).text();
 const token = /name="cutline-token" content="([a-f0-9]+)"/.exec(html)?.[1];
 if (!token) throw new Error("No token in the page — is `bun run dev` running?");
 
 async function api<T>(route: string, init: RequestInit = {}): Promise<{ status: number; body: T }> {
   const headers = new Headers(init.headers);
   headers.set("x-cutline-token", token!);
-  const response = await fetch(`http://127.0.0.1:5311/api${route}`, { ...init, headers });
+  const response = await fetch(`${API}/api${route}`, { ...init, headers });
   const text = await response.text();
   return { status: response.status, body: (text ? JSON.parse(text) : null) as T };
 }

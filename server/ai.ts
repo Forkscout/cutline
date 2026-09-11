@@ -69,8 +69,22 @@ export function authHeaders(provider: Provider): Record<string, string> {
 /** The model a kind of service is asked for when the user names none. */
 export const DEFAULT_MODEL: Record<ProviderKind, string> = { openai: "whisper-1", elevenlabs: "scribe_v2" };
 
+/**
+ * The URL a request actually goes to. Inside a container "localhost" is the
+ * container itself, so a service the user runs on their own machine — a
+ * whisper.cpp server at 127.0.0.1:8178 — is reached through the alias Docker
+ * gives the host instead. The provider keeps the address the user typed, and
+ * still counts as on this machine.
+ */
 export function endpoint(provider: Provider, route: string): string {
-  return `${provider.baseUrl.replace(/\/+$/, "")}/${route.replace(/^\/+/, "")}`;
+  let base = provider.baseUrl.replace(/\/+$/, "");
+  const alias = process.env.CUTLINE_LOCALHOST_ALIAS;
+  if (alias && isLocal(base)) {
+    const url = new URL(base);
+    url.hostname = alias;
+    base = url.toString().replace(/\/+$/, "");
+  }
+  return `${base}/${route.replace(/^\/+/, "")}`;
 }
 
 /** A quarter-second of 16 kHz mono silence as a WAV: the cheapest honest probe. */

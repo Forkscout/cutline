@@ -69,6 +69,18 @@ bun run dev      # web app on :5310, local server on :5311
 Ports 3900/3901 belong to an unrelated app on this machine (OmniVoice Studio),
 which is why the dev server sits on 5310.
 
+**In Docker** (`docker compose up -d`, then http://localhost:5311) the same
+server serves the built app, with `~/Cutline` mounted at `/data`. It listens on
+0.0.0.0 inside the container (`CUTLINE_HOST`) and the publish rule
+`127.0.0.1:5311:5311` keeps it off the network; a different host port needs
+`CUTLINE_PUBLIC_PORT`, or the Host and Origin checks refuse the browser. A
+provider at 127.0.0.1 — whisper.cpp on the host — is reached through
+`CUTLINE_LOCALHOST_ALIAS=host.docker.internal`, and still counts as local. Two
+things do not survive the container: the cursor track (the macOS sampler cannot
+see out of a Linux container) and GPU transcription (no Metal inside Docker on
+a Mac, so whisper.cpp runs on the host). `transcribe-check` runs against it with
+`CUTLINE_WEB_URL` and `CUTLINE_API_URL` pointing at port 5311.
+
 `bun run typecheck` before committing. The `tsconfig` is strict, including
 `noUncheckedIndexedAccess`. `exactOptionalPropertyTypes` was dropped when
 shadcn arrived: its generated components spread Radix props typed without

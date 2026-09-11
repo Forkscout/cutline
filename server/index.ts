@@ -37,6 +37,14 @@ import { SESSION_COOKIE, guard, hostGuard, localhostPairs } from "./security";
 
 const PORT = Number(process.env.CUTLINE_PORT ?? 5311);
 const WEB_PORT = Number(process.env.CUTLINE_WEB_PORT ?? 5310);
+/**
+ * Where to listen. 127.0.0.1 outside a container. Inside one it must be
+ * 0.0.0.0 to be reachable at all, and the publish rule (127.0.0.1:5311:5311 in
+ * compose.yaml) is then what keeps it off the network.
+ */
+const LISTEN = process.env.CUTLINE_HOST ?? "127.0.0.1";
+/** The port the browser uses, when a container maps the server to another one. */
+const PUBLIC_PORT = Number(process.env.CUTLINE_PUBLIC_PORT ?? PORT);
 const TOKEN = process.env.CUTLINE_TOKEN ?? randomBytes(24).toString("hex");
 /** Always "local" for now. It is in every path so tenancy never needs a migration. */
 const WORKSPACE = "local";
@@ -53,8 +61,9 @@ const ai = new AiSettings(cutlineHome());
 const jobs = new Jobs();
 const MCP_TOKEN = await loadMcpToken(cutlineHome());
 
-const hosts = localhostPairs(PORT, WEB_PORT);
-const origins = [WEB_PORT, PORT].flatMap((p) => [`http://localhost:${p}`, `http://127.0.0.1:${p}`]);
+const ports = [...new Set([PORT, WEB_PORT, PUBLIC_PORT])];
+const hosts = localhostPairs(...ports);
+const origins = ports.flatMap((p) => [`http://localhost:${p}`, `http://127.0.0.1:${p}`]);
 
 /**
  * Streams an upload to disk, holding the declared length to account. With
@@ -412,7 +421,7 @@ const server = Bun.serve({
   fetch: app.fetch,
   websocket,
   port: PORT,
-  hostname: "127.0.0.1",
+  hostname: LISTEN,
   // Bun refuses bodies over 128 MB by default, which is a few minutes of screen
   // capture. Recordings are uploaded whole, so the ceiling has to be the disk.
   maxRequestBodySize: 1024 ** 4,
@@ -420,9 +429,13 @@ const server = Bun.serve({
   // multi-gigabyte upload should not look like a dead client.
   idleTimeout: 255,
 });
-console.log(`cutline server  ${server.url}`);
+// In a container the server's own URL and home are not the ones the user
+// types: it listens on 0.0.0.0 and its home is a mount of ~/Cutline.
+const shownUrl = LISTEN === "0.0.0.0" || LISTEN === "::" ? `http://127.0.0.1:${PUBLIC_PORT}/` : server.url.href;
+const shownHome = process.env.CUTLINE_HOME_DISPLAY ?? cutlineHome();
+console.log(`cutline server  ${shownUrl}`);
 console.log(`workspace       ${media.workspaceDir}`);
 // The token is read from its file rather than printed, so it stays out of logs.
 console.log(
-  `mcp             claude mcp add --transport http cutline ${server.url}mcp --header "Authorization: Bearer $(cat ${path.join(cutlineHome(), "mcp-token")})"`,
+  `mcp             claude mcp add --transport http cutline ${shownUrl}mcp --header "Authorization: Bearer $(cat ${path.join(shownHome, "mcp-token")})"`,
 );

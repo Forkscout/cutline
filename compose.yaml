@@ -1,0 +1,20 @@
+# docker compose up -d   ->   http://localhost:5311
+services:
+  cutline:
+    build: .
+    image: cutline:local
+    ports:
+      # Only this machine can reach it: the server can write files, and its
+      # page carries the session token.
+      - "127.0.0.1:${CUTLINE_PUBLIC_PORT:-5311}:5311"
+    volumes:
+      - "${CUTLINE_DATA:-${HOME}/Cutline}:/data"
+    environment:
+      CUTLINE_PUBLIC_PORT: "${CUTLINE_PUBLIC_PORT:-5311}"
+      # A provider at 127.0.0.1 (whisper.cpp on this machine) is reached on the host.
+      CUTLINE_LOCALHOST_ALIAS: host.docker.internal
+      # Shown in the printed `claude mcp add` line, instead of /data.
+      CUTLINE_HOME_DISPLAY: "${CUTLINE_DATA:-${HOME}/Cutline}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
