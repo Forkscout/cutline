@@ -38,9 +38,21 @@ export function Projects({ onOpen }: { onOpen: (project: Project) => void }) {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [recovery, setRecovery] = useState(() => readRecovery());
+  const [serverError, setServerError] = useState<string | null>(null);
 
   const reload = useCallback(() => {
-    void listProjects().then(setProjects);
+    // A server that is not running must say so. Left unhandled, the rejection
+    // leaves the list as a loading skeleton forever, which reads as "slow"
+    // rather than "start the server".
+    listProjects()
+      .then((list) => {
+        setServerError(null);
+        setProjects(list);
+      })
+      .catch((err: unknown) => {
+        setServerError(err instanceof Error ? err.message : "Could not reach the Cutline server.");
+        setProjects([]);
+      });
     void listSessions().then(setSessions);
   }, []);
 
@@ -62,6 +74,8 @@ export function Projects({ onOpen }: { onOpen: (project: Project) => void }) {
         toast.warning(`${missing.length} source file${missing.length > 1 ? "s are" : " is"} missing`);
       }
       onOpen(checked);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not open the project.");
     } finally {
       setBusy(null);
     }
@@ -88,8 +102,12 @@ export function Projects({ onOpen }: { onOpen: (project: Project) => void }) {
 
   const blank = async () => {
     const project = createProject();
-    await saveProject(project);
-    onOpen(project);
+    try {
+      await saveProject(project);
+      onOpen(project);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not create the project.");
+    }
   };
 
   if (busy) {
@@ -139,6 +157,16 @@ export function Projects({ onOpen }: { onOpen: (project: Project) => void }) {
           New project
         </Button>
       </div>
+
+      {serverError && (
+        <Alert variant="destructive">
+          <AlertTitle>Projects are unavailable</AlertTitle>
+          <AlertDescription className="text-xs">
+            {serverError} Projects are saved by the local server, so nothing can be
+            opened or saved until it is running. Recording still works.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {projects === null ? (
         <Card className="h-28 animate-pulse" />

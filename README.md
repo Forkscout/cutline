@@ -97,12 +97,19 @@ reachable from a browser at all. See [`CLAUDE.md`](CLAUDE.md).
 
 ## Running it
 
+Needs [Bun](https://bun.sh).
+
 ```bash
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
-Then open http://localhost:5310.
+Then open http://localhost:5310. That starts two things together: the web app,
+and a small local server that keeps your projects as ordinary files in
+`~/Cutline` — visible, backed up by whatever backs up your home folder, and not
+one "clear browsing data" away from gone. The server listens on 127.0.0.1 only.
+
+`bun run start` builds the app and serves everything from the one process.
 
 **Chrome or Edge.** The recorder streams to disk through `createSyncAccessHandle`,
 which only exists in a worker, and the exporter encodes with WebCodecs. Neither
@@ -115,7 +122,7 @@ Built with React 19, TypeScript, Vite, Tailwind v4, shadcn/ui and
 ## Checking your work
 
 ```bash
-npm run typecheck
+bun run typecheck
 ```
 
 Two harnesses run in the browser and need no permissions — a canvas stream and
@@ -147,7 +154,7 @@ length in [`CLAUDE.md`](CLAUDE.md):
    through the group. Split the picture without the sound and lip sync drifts
    silently.
 
-Run `npm run typecheck` and both harnesses before opening a PR.
+Run `bun run typecheck` and both harnesses before opening a PR.
 
 ## Licence
 

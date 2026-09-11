@@ -145,9 +145,13 @@ export function Editor({
       setSaving("saving");
       void saveProject(project)
         .then(() => setSaving("saved"))
-        .catch(() => {
+        .catch((err: unknown) => {
           setSaving("idle");
-          toast.error("Could not save the project.");
+          // One toast id, so a server that is down produces one message that
+          // updates rather than a new one every autosave.
+          toast.error(err instanceof Error ? err.message : "Could not save the project.", {
+            id: "autosave",
+          });
         });
     }, AUTOSAVE_IDLE_MS);
     return () => window.clearTimeout(timer);
@@ -323,7 +327,13 @@ export function Editor({
             return;
           case "s":
             e.preventDefault();
-            void saveProject(project).then(() => toast.success("Project saved"));
+            void saveProject(project).then(
+              () => toast.success("Project saved"),
+              (err: unknown) =>
+                toast.error(err instanceof Error ? err.message : "Could not save the project.", {
+                  id: "save",
+                }),
+            );
             return;
           case "d":
             e.preventDefault();
@@ -467,7 +477,13 @@ export function Editor({
             <Button variant="ghost" size="sm" className="h-7 px-2 text-xs">File</Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56">
-            <DropdownMenuItem onClick={() => void saveProject(project).then(() => toast.success("Project saved"))}>
+            <DropdownMenuItem onClick={() => void saveProject(project).then(
+              () => toast.success("Project saved"),
+              (err: unknown) =>
+                toast.error(err instanceof Error ? err.message : "Could not save the project.", {
+                  id: "save",
+                }),
+            )}>
               Save<DropdownMenuShortcut>⌘S</DropdownMenuShortcut>
             </DropdownMenuItem>
             <DropdownMenuSeparator />

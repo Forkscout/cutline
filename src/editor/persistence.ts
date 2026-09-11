@@ -1,23 +1,23 @@
 /**
  * Saving and loading projects.
  *
- * A project is plain JSON by construction, so persistence is `stringify` plus a
- * file write. What needs care is everything around that: autosave that does not
- * fight the user's typing, a recovery copy that survives a crash mid-write, and
- * detecting media that has gone missing between sessions.
+ * Projects live on the local server now, as files under `~/Cutline`, rather
+ * than in the browser's private file system. That matters more than it looks:
+ * OPFS is invisible to the user and one "clear browsing data" away from gone,
+ * and it cannot be reached by anything outside the tab — not a backup, not an
+ * agent. The server is also where a hosted version would put the same calls.
+ *
+ * What stays in the browser is the crash-recovery copy, because it has to be
+ * written synchronously at the moment things go wrong.
  */
 
-import {
-  deleteProjectFile,
-  listProjectFiles,
-  readProjectFile,
-  writeProjectFile,
-} from "@/recorder/storage";
+import { listProjectFiles, readProjectFile } from "@/recorder/storage";
+import { api, apiJson } from "@/lib/server";
 import { assetFile } from "./media";
 import type { Project } from "./types";
 
-const INDEX_KEY = "cutline.projects";
 const RECOVERY_KEY = "cutline.recovery";
+const MIGRATED_KEY = "cutline.migrated-to-server.v1";
 const SCHEMA_VERSION = 1;
 
 export interface ProjectSummary {
@@ -35,84 +35,73 @@ interface Envelope {
   project: Project;
 }
 
-/* ------------------------------------------------------------------- index */
+/* --------------------------------------------------------------- migration */
+
+let migration: Promise<void> | null = null;
 
 /**
- * The list of projects lives in localStorage, the projects themselves in OPFS.
+ * Moves projects saved before the server existed from OPFS onto disk, once.
  *
- * Reading a directory of JSON files just to render a list means parsing every
- * project to show its name; a small synchronous index avoids that, and is
- * rebuilt from OPFS if it is ever lost.
+ * Without this, the first run after upgrading would show an empty project
+ * list and the user would reasonably conclude their work had been deleted. The
+ * OPFS copies are left in place — deleting them is not this function's job, and
+ * a copy that is never read costs nothing.
  */
-function readIndex(): ProjectSummary[] {
-  try {
-    const raw = localStorage.getItem(INDEX_KEY);
-    return raw ? (JSON.parse(raw) as ProjectSummary[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeIndex(summaries: ProjectSummary[]): void {
-  try {
-    localStorage.setItem(INDEX_KEY, JSON.stringify(summaries));
-  } catch {
-    // A full or disabled localStorage must not stop a save; the index is a
-    // cache and rebuildIndex can recover it.
-  }
-}
-
-export function summarise(project: Project): ProjectSummary {
-  let duration = 0;
-  for (const track of project.tracks) {
-    for (const clip of track.clips) duration = Math.max(duration, clip.start + clip.duration);
-  }
-  return {
-    id: project.id,
-    name: project.name,
-    createdAt: project.createdAt,
-    updatedAt: project.updatedAt,
-    durationSec: duration,
-    trackCount: project.tracks.length,
-    assetCount: project.assets.length,
-  };
-}
-
-export async function listProjects(): Promise<ProjectSummary[]> {
-  const index = readIndex();
-  if (index.length > 0) return [...index].sort((a, b) => b.updatedAt - a.updatedAt);
-  return rebuildIndex();
-}
-
-/** Reads every project off disk to rebuild a lost or empty index. */
-export async function rebuildIndex(): Promise<ProjectSummary[]> {
-  const ids = await listProjectFiles();
-  const summaries: ProjectSummary[] = [];
-  for (const id of ids) {
-    const project = await loadProject(id);
-    if (project) summaries.push(summarise(project));
-  }
-  writeIndex(summaries);
-  return summaries.sort((a, b) => b.updatedAt - a.updatedAt);
+function migrateLocalProjects(): Promise<void> {
+  if (migration) return migration;
+  migration = (async () => {
+    try {
+      if (localStorage.getItem(MIGRATED_KEY)) return;
+    } catch {
+      // No localStorage: try the migration anyway; it is idempotent.
+    }
+    const existing = new Set((await apiJson<ProjectSummary[]>("/api/projects")).map((p) => p.id));
+    for (const id of await listProjectFiles()) {
+      if (existing.has(id)) continue;
+      const raw = await readProjectFile(id);
+      if (!raw) continue;
+      await api(`/api/projects/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: raw,
+      });
+    }
+    try {
+      localStorage.setItem(MIGRATED_KEY, String(Date.now()));
+    } catch {
+      // It will simply run again next time, and find nothing to do.
+    }
+  })();
+  // A failed attempt must not be cached, or it would never be retried.
+  migration.catch(() => {
+    migration = null;
+  });
+  return migration;
 }
 
 /* ------------------------------------------------------------ save / load */
 
+export async function listProjects(): Promise<ProjectSummary[]> {
+  await migrateLocalProjects();
+  return apiJson<ProjectSummary[]>("/api/projects");
+}
+
 export async function saveProject(project: Project): Promise<void> {
   const envelope: Envelope = { version: SCHEMA_VERSION, project };
-  await writeProjectFile(project.id, JSON.stringify(envelope));
-
-  const summary = summarise(project);
-  const index = readIndex().filter((s) => s.id !== project.id);
-  writeIndex([summary, ...index]);
+  await apiJson(`/api/projects/${encodeURIComponent(project.id)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(envelope),
+  });
   clearRecovery();
 }
 
 export async function loadProject(projectId: string): Promise<Project | null> {
-  const raw = await readProjectFile(projectId);
-  if (!raw) return null;
+  const response = await api(`/api/projects/${encodeURIComponent(projectId)}`);
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Could not open the project (${response.status}).`);
   try {
-    const parsed = JSON.parse(raw) as Envelope | Project;
+    const parsed = (await response.json()) as Envelope | Project;
     // Projects written before the envelope existed are bare documents.
     const project = "version" in parsed ? parsed.project : parsed;
     return migrate(project);
@@ -122,8 +111,7 @@ export async function loadProject(projectId: string): Promise<Project | null> {
 }
 
 export async function deleteProject(projectId: string): Promise<void> {
-  await deleteProjectFile(projectId);
-  writeIndex(readIndex().filter((s) => s.id !== projectId));
+  await apiJson(`/api/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" });
 }
 
 export async function duplicateProject(project: Project): Promise<Project> {
@@ -169,9 +157,9 @@ function migrate(project: Project): Project {
 /**
  * A crash-recovery copy, written to localStorage on a short interval.
  *
- * Deliberately not OPFS: an OPFS write is async and can be interrupted halfway,
- * which is exactly the moment a crash copy is needed. localStorage writes
- * atomically, and a project's JSON is small enough to fit.
+ * Deliberately not the server: a network write is async and can be cut off
+ * halfway, which is exactly the moment a crash copy is needed. localStorage
+ * writes synchronously and atomically, and a project's JSON is small enough.
  */
 export function writeRecovery(project: Project): void {
   try {

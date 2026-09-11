@@ -39,17 +39,33 @@ enough (the page only sees its own window), so this needs the
 `CaptureController`/`getDisplayMedia` metadata where available, and otherwise a
 documented limitation. Worth investigating properly before building on it.
 
-### 2. Decide whether there will ever be a server
+### 2. A local server — decided
 
-Right now nothing leaves the machine, and the README says so. That is a real
-promise and part of the appeal.
+There is one now: a Hono server on Bun, bound to 127.0.0.1, that owns projects
+on disk in `~/Cutline`. It sits between the two options this item used to
+weigh — the architecture of a server, without a cloud.
 
-Sharing, comments, collaboration and cloud rendering all require breaking it.
-That is not a task, it is a different product, and the answer changes what is
-worth building in the meantime. Loom's entire business is the share link.
+It is the right step even if Cutline becomes a hosted product in the mould of
+Veed, because it is the same shape — client, API, storage — with localhost as
+the host. Staying browser-only would have been the dead end: a hosted version
+would have needed the data layer rewritten from scratch. What keeps that
+promise cheap is four rules, recorded in `CLAUDE.md` and worth keeping true:
+storage behind an interface, a workspace id in every path, no project state
+held in server memory, and one authentication seam.
 
-Deciding "no" is a perfectly good answer — it just needs to be a decision
-rather than a drift.
+What a hosted version would still have to add, honestly: accounts and billing,
+object storage and a database behind `ProjectStore`, share links with hosted
+playback and the transcoding and egress that implies, collaboration, and a
+render queue for machines that cannot export in the browser. The README's
+"Chrome or Edge only" line would also need re-testing against current Safari
+and Firefox before competing on reach.
+
+One thing to keep even then: client-side export and in-browser models as the
+default. The user's machine doing the rendering and transcription is a cost
+advantage a server-rendering competitor does not have.
+
+Next in this direction: move recordings and imported media onto the server, then
+put the MCP endpoint at `/mcp` in the same process.
 
 ---
 

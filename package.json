@@ -4,15 +4,18 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "bun scripts/dev.ts",
+    "dev:web": "vite",
+    "server": "bun server/index.ts",
     "build": "tsc -b && vite build",
-    "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "start": "vite build && bun server/index.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p server"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "hono": "^4.13.7",
     "lucide-react": "^1.44.0",
     "mediabunny": "^1.56.1",
     "radix-ui": "^1.6.7",
@@ -25,6 +28,7 @@
     "tw-animate-css": "^1.4.0"
   },
   "devDependencies": {
+    "@types/bun": "^1.4.2",
     "@types/node": "^22.20.2",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
