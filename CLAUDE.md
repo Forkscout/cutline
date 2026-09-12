@@ -143,6 +143,15 @@ mousedown — so a right-click on a clip on the bottom track, where the menu has
 to shift up to fit and opens under the pointer, ran Duplicate or Delete the
 moment the button came up.
 
+**A timeline row is as tall as its clips, not as its buttons.** Rows were 64 px
+because the track header needed two lines for five controls; a project with
+twenty-five tracks showed five of them, and the clips looked lost in the space.
+The header is one line now — name, hide, mute, lock, and a menu for solo, order
+and delete — rows default to 44, and the toolbar's Rows control sets Compact
+(32), Normal (44) or Tall (72) across every track in one undo step. Opening a
+project whose tracks are all still 64 lifts them to the new default; one where
+someone set their own heights is left exactly as it is.
+
 The app is dark-only: `<html class="dark">` is fixed in `index.html`, and
 `sonner.tsx` was edited to drop its `next-themes` dependency.
 

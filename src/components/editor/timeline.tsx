@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
+  EllipsisVertical,
   Link2,
   Link2Off,
   Eye,
@@ -24,7 +25,7 @@ import {
 } from "lucide-react";
 import type { Action } from "@/editor/project";
 import type { AutoCaptionOptions } from "@/components/editor/auto-captions";
-import { assetOf, linkSize, snapPoints } from "@/editor/project";
+import { TRACK_HEIGHTS, assetOf, linkSize, snapPoints } from "@/editor/project";
 import type { Clip, ClipRef, Marker, Project, Track } from "@/editor/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,6 +35,13 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 
@@ -273,6 +281,10 @@ export function Timeline({
   const step = tickStep(pxPerSec);
   const ticks = Math.ceil(contentWidth / pxPerSec / step) + 1;
   const totalHeight = project.tracks.reduce((n, t) => n + t.height, 0);
+  const rowHeight = project.tracks[0]?.height ?? TRACK_HEIGHTS.normal;
+  /** Every row together, in one undo step: a height is a view, not an edit worth twenty-five of them. */
+  const setRowHeight = (height: number) =>
+    project.tracks.forEach((track, i) => dispatch({ type: "patchTrack", trackId: track.id, patch: { height } }, i > 0));
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -328,6 +340,22 @@ export function Timeline({
         >
           <MapPin className="size-3.5" />
         </Button>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" className="h-7 px-2 text-[11px] text-muted-foreground" title="How tall the rows are">
+              Rows
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="text-xs">
+            {(Object.entries(TRACK_HEIGHTS) as [string, number][]).map(([name, height]) => (
+              <DropdownMenuItem key={name} onClick={() => setRowHeight(height)}>
+                <span className="w-3">{rowHeight === height ? "✓" : ""}</span>
+                {name[0]!.toUpperCase() + name.slice(1)}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         <div className="mx-1 h-4 w-px bg-border" />
 
@@ -678,94 +706,76 @@ function TrackHeader({
   const patch = (p: Partial<Track>) => dispatch({ type: "patchTrack", trackId: track.id, patch: p });
 
   return (
-    <div
-      className="flex flex-col justify-center gap-0.5 border-b px-1.5 last:border-b-0"
-      style={{ height: track.height }}
-    >
-      <div className="flex items-center gap-1">
-        {track.kind === "video" ? (
-          <Video className="size-3 shrink-0 text-muted-foreground" />
-        ) : (
-          <Music className="size-3 shrink-0 text-muted-foreground" />
-        )}
-        <input
-          value={track.name}
-          onChange={(e) => patch({ name: e.target.value })}
-          className="min-w-0 flex-1 bg-transparent text-[11px] font-medium outline-none focus:bg-accent focus:px-1 focus:rounded"
-        />
-        <div className="flex shrink-0">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-5"
-            title={index === 0 ? "Already at the bottom" : "Move down a layer"}
-            disabled={index === 0}
-            onClick={() => dispatch({ type: "moveTrack", trackId: track.id, delta: -1 })}
-          >
-            <ChevronDown className="size-3" />
+    <div className="flex items-center gap-0.5 border-b px-1.5 last:border-b-0" style={{ height: track.height }}>
+      {track.kind === "video" ? (
+        <Video className="size-3 shrink-0 text-muted-foreground" />
+      ) : (
+        <Music className="size-3 shrink-0 text-muted-foreground" />
+      )}
+      <input
+        value={track.name}
+        onChange={(e) => patch({ name: e.target.value })}
+        className="min-w-0 flex-1 bg-transparent text-[11px] font-medium outline-none focus:rounded focus:bg-accent focus:px-1"
+      />
+      {track.solo && <Headphones className="size-3 shrink-0 text-primary" />}
+      {track.kind === "video" && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-5 shrink-0"
+          title={track.hidden ? "Show track" : "Hide track"}
+          onClick={() => patch({ hidden: !track.hidden })}
+        >
+          {track.hidden ? <EyeOff className="size-3 text-muted-foreground" /> : <Eye className="size-3" />}
+        </Button>
+      )}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-5 shrink-0"
+        title={track.muted ? "Unmute" : "Mute"}
+        onClick={() => patch({ muted: !track.muted })}
+      >
+        {track.muted ? <VolumeX className="size-3 text-muted-foreground" /> : <Volume2 className="size-3" />}
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-5 shrink-0"
+        title={track.locked ? "Unlock track" : "Lock track"}
+        onClick={() => patch({ locked: !track.locked })}
+      >
+        {track.locked ? <Lock className="size-3 text-amber-400" /> : <Unlock className="size-3" />}
+      </Button>
+      {/* Solo, order and delete sit one click away: they are the rare ones, and
+          five buttons in a row is what made every track two lines tall. */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon" className="size-5 shrink-0" title="Solo, order, delete">
+            <EllipsisVertical className="size-3" />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-5"
-            title={index === total - 1 ? "Already on top" : "Move up a layer"}
-            disabled={index === total - 1}
-            onClick={() => dispatch({ type: "moveTrack", trackId: track.id, delta: 1 })}
-          >
-            <ChevronUp className="size-3" />
-          </Button>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-0.5">
-        {track.kind === "video" && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-5"
-            title={track.hidden ? "Show track" : "Hide track"}
-            onClick={() => patch({ hidden: !track.hidden })}
-          >
-            {track.hidden ? <EyeOff className="size-3 text-muted-foreground" /> : <Eye className="size-3" />}
-          </Button>
-        )}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-5"
-          title={track.muted ? "Unmute" : "Mute"}
-          onClick={() => patch({ muted: !track.muted })}
-        >
-          {track.muted ? <VolumeX className="size-3 text-muted-foreground" /> : <Volume2 className="size-3" />}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className={cn("size-5", track.solo && "text-primary")}
-          title="Solo"
-          onClick={() => patch({ solo: !track.solo })}
-        >
-          <Headphones className="size-3" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-5"
-          title={track.locked ? "Unlock track" : "Lock track"}
-          onClick={() => patch({ locked: !track.locked })}
-        >
-          {track.locked ? <Lock className="size-3 text-amber-400" /> : <Unlock className="size-3" />}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="ml-auto size-5"
-          title="Delete track"
-          onClick={() => dispatch({ type: "deleteTrack", trackId: track.id })}
-        >
-          <Trash2 className="size-3 text-muted-foreground" />
-        </Button>
-      </div>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="text-xs">
+          <DropdownMenuItem onClick={() => patch({ solo: !track.solo })}>
+            <Headphones className="size-3.5" />
+            {track.solo ? "Stop soloing" : "Solo"}
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={index === total - 1} onClick={() => dispatch({ type: "moveTrack", trackId: track.id, delta: 1 })}>
+            <ChevronUp className="size-3.5" />
+            Move up a layer
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={index === 0} onClick={() => dispatch({ type: "moveTrack", trackId: track.id, delta: -1 })}>
+            <ChevronDown className="size-3.5" />
+            Move down a layer
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => dispatch({ type: "deleteTrack", trackId: track.id })}>
+            <Trash2 className="size-3.5" />
+            Delete track
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }
+

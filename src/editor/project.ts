@@ -49,7 +49,16 @@ const id = () => crypto.randomUUID();
 /** The shortest edit worth making, and the tolerance used when comparing edges. */
 export const MIN_CLIP_SEC = 0.04;
 
-const TRACK_HEIGHT = 64;
+/**
+ * How tall a row is. 64 was one row of buttons too many: the track header
+ * needed two lines for its controls, and a project with twenty-five tracks
+ * showed five of them. The controls fit one line now, so a row can be the
+ * height of its clips.
+ */
+export const TRACK_HEIGHTS = { compact: 32, normal: 44, tall: 72 } as const;
+/** What every track was before that. */
+export const LEGACY_TRACK_HEIGHT = 64;
+const TRACK_HEIGHT: number = TRACK_HEIGHTS.normal;
 
 /* --------------------------------------------------------------- building */
 
