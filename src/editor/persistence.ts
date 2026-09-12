@@ -168,6 +168,7 @@ export function migrate(project: Project): Project {
     theme: project.theme ?? null,
     storyboard: project.storyboard ?? null,
     facts: project.facts ?? [],
+    services: project.services ?? {},
     assets: (project.assets ?? []).map((asset) => ({ ...asset, tags: asset.tags ?? [] })),
     tracks: (project.tracks ?? []).map((track) => ({
       ...track,

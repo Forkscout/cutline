@@ -387,6 +387,19 @@ export const ACTION_TOOLS = {
       "Puts the project back to a saved version (list_versions). What it replaces stays in History, so one undo brings it back — save_version first if it deserves a name.",
     input: { versionId: z.string().min(1) },
   }),
+  setServices: tool({
+    name: "set_services",
+    title: "Set services",
+    description:
+      "Chooses which connected service this project uses for a role: transcribe (captions and the transcript), chat (the Director's model), voice, image, video. null puts a role back to the workspace's default — the service connected last that can do it. list_services shows what is connected.",
+    input: {
+      transcribe: z.string().nullable().optional(),
+      chat: z.string().nullable().optional(),
+      voice: z.string().nullable().optional(),
+      image: z.string().nullable().optional(),
+      video: z.string().nullable().optional(),
+    },
+  }),
   setTheme: tool({
     name: "set_theme",
     title: "Set theme",
@@ -822,6 +835,14 @@ export const EDITOR_TOOLS = {
     title: "Attach reference",
     description: "Attaches a Studio reference to this brief. Its file, if it has one, is copied into the media's References bin, for contact_sheet to look at — not to be placed on the timeline.",
     input: { id: z.string(), note: z.string().max(300).optional() },
+  }),
+  listServices: tool({
+    name: "list_services",
+    title: "List services",
+    readOnly: true,
+    description:
+      "The AI services connected on this machine — what each can do, and with which model — and which one this project uses for each role. Keys never appear here. set_services chooses one for this project; voice, image and video are written down for later, as nothing in Cutline generates them yet.",
+    input: {},
   }),
   startTurn: tool({
     name: "start_turn",

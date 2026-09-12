@@ -548,9 +548,21 @@ hosted services stand beside the local one as equals. `server/stt.ts` has one
 adapter per kind of API: OpenAI-compatible (OpenAI, Groq, OpenRouter,
 whisper.cpp, speaches, LocalAI) and ElevenLabs. Each says how long a part it
 takes and how big an upload; `transcribe.ts` does the rest the same for all.
-Adding a service is an adapter and a preset. The one connected last is the
-one used; the Captions panel names it, says whether audio leaves the machine,
-and switches between connected services. The server makes every call and
+Adding a service is an adapter and a preset.
+
+**A service holds a model per role, and a project chooses which service fills
+each.** The roles are speech to text, the Director's model, and voice, images
+and video — the last three are written down for when something here generates
+them; nothing does yet, and the interface says so rather than implying
+otherwise. `project.services` names a service per role; unset means the
+workspace's, which is the one connected last that can do the job. The page and
+the server resolve a role by the same rule (`serviceFor` in `lib/ai.ts`,
+`AiSettings.resolve`), so the interface never names one service while another
+does the work, and the transcribe and chat routes take the project's choice
+with the request. Connecting, editing and choosing all happen in one place —
+`components/services-manager.tsx`, shown in Settings and as the editor's
+Services dialog — rather than a form inside each panel; the Captions panel and
+the Director tab name what they use and link to it. The server makes every call and
 keeps keys in `~/Cutline/ai.json` (0600); the page never sees one. Adding a
 provider probes it with a quarter-second of silence, so the answer is
 *transcription ✗, and why*, not "connected". LM Studio, as of September 2026,
@@ -621,8 +633,9 @@ most panels and left the cue list no height, so generated captions looked
 missing.
 
 **Settings is a place to manage, not a gate.** Services are still connected
-where a feature first needs them; Settings lists them, says which one captions
-and the Director use, and can switch or re-probe one. Agents shows the
+where a feature first needs them; Settings lists them with what each can do and
+which model, and the same manager is the editor's Services dialog, where a
+project picks its own. Agents shows the
 registration line with the token's last four characters (never the token), can
 rotate it — every agent registered with the old one then stops, which is the
 point — and lists who has called since the server started, with the editors

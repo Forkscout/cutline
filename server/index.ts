@@ -26,7 +26,7 @@ import type { ToCursor } from "../src/lib/cursor-protocol";
 import { TabBridge } from "./bridge";
 import { CursorService, type CursorRecording } from "./cursor";
 import { Remuxer } from "./remux";
-import { AiSettings, isLocal, type Provider, type ProviderKind } from "./ai";
+import { AiSettings, SERVICE_ROLES, isLocal, modelFor, type Provider, type ProviderKind, type ServiceRole } from "./ai";
 import { probeAll, recordUsage, runChat } from "./chat";
 import type { ChatRequest } from "../src/lib/chat-protocol";
 import { PROVIDER_KINDS } from "./stt";
@@ -387,6 +387,9 @@ api.put("/ai/providers/:id", async (c) => {
     baseUrl?: string;
     transcribeModel?: string;
     chatModel?: string;
+    voiceModel?: string;
+    imageModel?: string;
+    videoModel?: string;
     apiKey?: string;
   }>();
   if (body.kind !== undefined && !PROVIDER_KINDS.includes(body.kind)) {
@@ -405,6 +408,9 @@ api.put("/ai/providers/:id", async (c) => {
     baseUrl: url.toString(),
     ...(body.transcribeModel ? { transcribeModel: body.transcribeModel } : {}),
     ...(body.chatModel !== undefined ? { chatModel: body.chatModel } : {}),
+    ...(body.voiceModel !== undefined ? { voiceModel: body.voiceModel } : {}),
+    ...(body.imageModel !== undefined ? { imageModel: body.imageModel } : {}),
+    ...(body.videoModel !== undefined ? { videoModel: body.videoModel } : {}),
     ...(body.apiKey !== undefined ? { apiKey: body.apiKey } : {}),
   });
   return c.json(await ai.setCapabilities(id, await probeAll(provider)));
@@ -422,13 +428,17 @@ api.delete("/ai/providers/:id", async (c) => {
 });
 
 /** Which service each capability resolves to right now, and whether it stays on this machine. */
+/** What each role falls back to when a project names nothing of its own. */
 api.get("/ai/capabilities", async (c) => {
-  const [transcriber, director] = await Promise.all([ai.resolveTranscribe(), ai.resolveChat()]);
-  const view = (p: Provider, model: string) => ({ providerId: p.id, kind: p.kind, name: p.name, model, local: isLocal(p.baseUrl) });
-  return c.json({
-    transcribe: transcriber ? view(transcriber, transcriber.transcribeModel) : null,
-    chat: director?.chatModel ? view(director, director.chatModel) : null,
+  const view = (p: Provider, role: ServiceRole) => ({
+    providerId: p.id,
+    kind: p.kind,
+    name: p.name,
+    model: modelFor(p, role) ?? "",
+    local: isLocal(p.baseUrl),
   });
+  const roles = await Promise.all(SERVICE_ROLES.map(async (role) => [role, await ai.resolve(role)] as const));
+  return c.json(Object.fromEntries(roles.map(([role, provider]) => [role, provider ? view(provider, role) : null])));
 });
 
 /* --- the Director's model calls --- */
@@ -446,7 +456,7 @@ api.post("/ai/chat", async (c) => {
   if (typeof body.system !== "string" || !Array.isArray(body.messages) || !Array.isArray(body.tools)) {
     return c.json({ error: "system, messages and tools are required" }, 400);
   }
-  const provider = await ai.resolveChat();
+  const provider = await ai.resolve("chat", body.providerId);
   if (!provider) return c.json({ error: "No model is connected for the Director." }, 409);
   const controller = new AbortController();
   let id = "";
@@ -493,6 +503,8 @@ api.post("/transcribe", async (c) => {
     sessionId?: string;
     fileName?: string;
     mediaId?: string;
+    /** The service this project uses, when it names one. */
+    providerId?: string;
     language?: string;
     force?: boolean;
     chunkSeconds?: number;
@@ -504,7 +516,7 @@ api.post("/transcribe", async (c) => {
     ? media.mediaFile(`${body.mediaId}.transcript.json`)
     : media.recordingFile(body.sessionId ?? "", `${body.fileName}.transcript.json`);
   if ((await media.size(source)) === null) return c.json({ error: "No such file" }, 404);
-  let provider = await ai.resolveTranscribe();
+  let provider = await ai.resolve("transcribe", body.providerId);
   if (!provider) return c.json({ error: "No transcription service is connected." }, 409);
   // A local service connected before whisper.cpp was told apart carries no
   // flavor, and would get none of its handling. Probing it again is free.

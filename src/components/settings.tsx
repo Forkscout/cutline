@@ -5,9 +5,9 @@
  */
 
 import { useEffect, useState } from "react";
-import { Check, Copy, LoaderCircle, RefreshCw, Trash2, X } from "lucide-react";
+import { Copy } from "lucide-react";
 import { toast } from "sonner";
-import { capabilities, listProviders, probeProvider, removeProvider, saveProvider, type Capabilities, type ProviderReport } from "@/lib/ai";
+import { ServicesManager } from "@/components/services-manager";
 import { getAgents, getUsage, rotateAgentToken, setPermissions, type AgentsView, type UsageSummary } from "@/lib/agents";
 import {
   AlertDialog,
@@ -23,7 +23,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { cn } from "@/lib/utils";
 
 const ago = (at: number) => {
   const seconds = Math.max(0, Math.round((Date.now() - at) / 1000));
@@ -34,128 +33,6 @@ const ago = (at: number) => {
 };
 const tokens = (n: number) => (n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(1)}k` : `${(n / 1_000_000).toFixed(2)}M`);
 const minutes = (s: number) => (s < 60 ? `${Math.round(s)}s` : `${Math.round(s / 60)} min`);
-
-function Services() {
-  const [providers, setProviders] = useState<ProviderReport[] | null>(null);
-  const [caps, setCaps] = useState<Capabilities | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const refresh = () =>
-    Promise.all([
-      listProviders().then(setProviders).catch(() => setProviders([])),
-      capabilities().then(setCaps).catch(() => setCaps({ transcribe: null, chat: null })),
-    ]);
-  useEffect(() => {
-    void refresh();
-  }, []);
-
-  const use = async (p: ProviderReport, what: "captions" | "director") => {
-    setBusy(p.id);
-    try {
-      // Saving a service again moves it to the front, which is what "use this one" means.
-      await saveProvider(p.id, {
-        kind: p.kind,
-        name: p.name,
-        baseUrl: p.baseUrl,
-        transcribeModel: p.transcribeModel,
-        ...(p.chatModel ? { chatModel: p.chatModel } : {}),
-      });
-      toast.success(`${p.name} is now the one for ${what === "captions" ? "captions" : "the Director"}`);
-      await refresh();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not switch.");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  if (!providers) return <p className="text-sm text-muted-foreground">Loading…</p>;
-  return (
-    <div className="space-y-3">
-      <p className="text-xs text-muted-foreground">
-        Keys stay in <code className="font-mono">~/Cutline/ai.json</code> on this machine and are sent only to the service they belong to. Add one where
-        you need it: the Captions panel for speech-to-text, the Director tab for a model.
-      </p>
-      {providers.length === 0 && <p className="text-sm text-muted-foreground">Nothing connected yet.</p>}
-      <ul className="space-y-2">
-        {providers.map((p) => {
-          const forCaptions = caps?.transcribe?.providerId === p.id;
-          const forDirector = caps?.chat?.providerId === p.id;
-          return (
-            <li key={p.id} className="rounded-xl border p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-semibold">{p.name}</span>
-                <span className={cn("rounded-full px-2 py-0.5 text-[10px]", p.local ? "bg-muted text-muted-foreground" : "bg-muted text-muted-foreground")}>
-                  {p.local ? "on this machine" : "hosted"}
-                </span>
-                {forCaptions && <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">captions</span>}
-                {forDirector && <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">director</span>}
-                <span className="ml-auto font-mono text-[10px] text-muted-foreground">{p.baseUrl}</span>
-              </div>
-              <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
-                <span className="flex items-center gap-1">
-                  {p.capabilities?.transcribe ? <Check className="size-3 text-primary" /> : <X className="size-3" />}
-                  speech-to-text{p.capabilities?.transcribe ? ` · ${p.transcribeModel}` : ""}
-                </span>
-                <span className="flex items-center gap-1">
-                  {p.capabilities?.chat ? <Check className="size-3 text-primary" /> : <X className="size-3" />}
-                  model{p.capabilities?.chat && p.chatModel ? ` · ${p.chatModel}` : ""}
-                </span>
-                <span>{p.hasKey ? "key saved" : "no key"}</span>
-                {p.capabilities?.message && !p.capabilities.transcribe && <span className="truncate">{p.capabilities.message}</span>}
-              </div>
-              <div className="mt-2 flex flex-wrap gap-1">
-                {p.capabilities?.transcribe && !forCaptions && (
-                  <Button size="sm" variant="secondary" className="h-7 text-xs" disabled={busy === p.id} onClick={() => void use(p, "captions")}>
-                    Use for captions
-                  </Button>
-                )}
-                {p.capabilities?.chat && !forDirector && (
-                  <Button size="sm" variant="secondary" className="h-7 text-xs" disabled={busy === p.id} onClick={() => void use(p, "director")}>
-                    Use for the Director
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 text-xs"
-                  disabled={busy === p.id}
-                  onClick={async () => {
-                    setBusy(p.id);
-                    try {
-                      const report = await probeProvider(p.id);
-                      toast.success(`${report.name}: ${report.capabilities?.transcribe ? "transcribes" : "no speech-to-text"}, ${report.capabilities?.chat ? "answers" : "no model"}`);
-                      await refresh();
-                    } catch (err) {
-                      toast.error(err instanceof Error ? err.message : "Could not reach it.");
-                    } finally {
-                      setBusy(null);
-                    }
-                  }}
-                >
-                  {busy === p.id ? <LoaderCircle className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
-                  Check again
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="ml-auto h-7 text-xs"
-                  onClick={async () => {
-                    await removeProvider(p.id).catch(() => toast.error("Could not remove it."));
-                    toast.success(`${p.name} removed`);
-                    await refresh();
-                  }}
-                >
-                  <Trash2 className="size-3" />
-                  Remove
-                </Button>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-}
 
 function Agents() {
   const [view, setView] = useState<AgentsView | null>(null);
@@ -375,7 +252,7 @@ export function Settings() {
           <TabsTrigger value="usage" className="text-xs">Usage</TabsTrigger>
         </TabsList>
         <TabsContent value="services" className="mt-4">
-          <Services />
+          <ServicesManager />
         </TabsContent>
         <TabsContent value="agents" className="mt-4">
           <Agents />

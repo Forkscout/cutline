@@ -7,9 +7,7 @@ import type { MediaAsset, Project } from "@/editor/types";
 import {
   capabilities,
   listProviders,
-  saveProvider,
   type Capabilities,
-  type ProviderKind,
   type ProviderReport,
 } from "@/lib/ai";
 import type { AutoCaptionOptions } from "@/components/editor/auto-captions";
@@ -39,140 +37,22 @@ const LANGUAGES = [
   ["hi", "Hindi"],
 ] as const;
 
-const WHISPER_SERVER =
-  "whisper-server -m ~/.cache/whisper-cpp/ggml-large-v3-turbo.bin --inference-path /v1/audio/transcriptions --convert -l auto --port 8178";
-
-interface Preset {
-  label: string;
-  kind: ProviderKind;
-  baseUrl: string;
-  model: string;
-  needsKey: boolean;
-  note: string;
-}
-
-/**
- * Where transcription can run. Not everyone has a machine that can run a large
- * model, so the hosted services sit beside the local one as equals. Every field
- * stays editable: any OpenAI-compatible endpoint works, not only these.
- */
-const PRESETS: Preset[] = [
-  { label: "This Mac", kind: "openai", baseUrl: "http://127.0.0.1:8178/v1", model: "whisper-1", needsKey: false,
-    note: "A whisper.cpp server on this machine: free, and nothing leaves it. Long videos want a fast machine." },
-  { label: "OpenAI", kind: "openai", baseUrl: "https://api.openai.com/v1", model: "whisper-1", needsKey: true,
-    note: "Whisper, hosted. Billed per minute of audio." },
-  { label: "Groq", kind: "openai", baseUrl: "https://api.groq.com/openai/v1", model: "whisper-large-v3-turbo", needsKey: true,
-    note: "Whisper large-v3, fast and cheap." },
-  { label: "OpenRouter", kind: "openai", baseUrl: "https://openrouter.ai/api/v1", model: "openai/whisper-large-v3", needsKey: true,
-    note: "One key for many speech-to-text models." },
-  { label: "ElevenLabs", kind: "elevenlabs", baseUrl: "https://api.elevenlabs.io/v1", model: "scribe_v2", needsKey: true,
-    note: "Scribe: strong on Hindi and mixed-language speech." },
-];
-
-/**
- * Connecting a transcription service, in the place it is first needed —
- * never a settings page to visit before recording.
- */
-function ConnectTranscription({ onConnected, onCancel }: { onConnected: () => void; onCancel?: () => void }) {
-  const [preset, setPreset] = useState<Preset>(PRESETS[0]!);
-  const [baseUrl, setBaseUrl] = useState(PRESETS[0]!.baseUrl);
-  const [model, setModel] = useState(PRESETS[0]!.model);
-  const [apiKey, setApiKey] = useState("");
-  const choose = (next: Preset) => {
-    setPreset(next);
-    setBaseUrl(next.baseUrl);
-    setModel(next.model);
-  };
-  const [checking, setChecking] = useState(false);
-  const [report, setReport] = useState<ProviderReport | null>(null);
-
-  const connect = async () => {
-    setChecking(true);
-    try {
-      const host = new URL(baseUrl).host.replace(/[^A-Za-z0-9_-]+/g, "-");
-      const result = await saveProvider(`transcribe-${host}`, {
-        kind: preset.kind,
-        name: baseUrl === preset.baseUrl ? preset.label : new URL(baseUrl).host,
-        baseUrl,
-        transcribeModel: model,
-        ...(apiKey ? { apiKey } : {}),
-      });
-      setReport(result);
-      if (result.capabilities?.transcribe) {
-        toast.success(`Connected: ${result.name} can transcribe`);
-        onConnected();
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not connect.");
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center">
-        <p className="text-[10px] text-muted-foreground">
-          {onCancel ? "Add a speech-to-text service." : "Auto-captions needs a speech-to-text service. Where should it run?"}
-        </p>
-        {onCancel && (
-          <button className="ml-auto text-[10px] text-muted-foreground underline-offset-2 hover:underline" onClick={onCancel}>
-            Cancel
-          </button>
-        )}
-      </div>
-      <div className="flex flex-wrap gap-1">
-        {PRESETS.map((p) => (
-          <Button key={p.label} size="sm" className="h-5 px-1.5 text-[10px]"
-            variant={preset.label === p.label ? "secondary" : "ghost"} onClick={() => choose(p)}>
-            {p.label}
-          </Button>
-        ))}
-      </div>
-      <p className="text-[10px] leading-snug text-muted-foreground">{preset.note}</p>
-      <Input className="h-6 text-[10px]" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="Base URL" />
-      <div className="grid grid-cols-2 gap-1">
-        <Input className="h-6 text-[10px]" value={model} onChange={(e) => setModel(e.target.value)} placeholder="Model" />
-        <Input className="h-6 text-[10px]" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
-          placeholder={preset.needsKey ? "API key" : "API key (optional)"} />
-      </div>
-      <p className="text-[10px] leading-snug text-muted-foreground">
-        A key stays in ~/Cutline on this machine and is sent only to this URL.
-      </p>
-      <Button size="sm" className="h-6 w-full text-[10px]" disabled={checking || !baseUrl} onClick={() => void connect()}>
-        {checking ? "Checking…" : `Connect ${preset.label === "This Mac" ? "" : preset.label}`.trim()}
-      </Button>
-      {report && !report.capabilities?.transcribe && (
-        <div className="space-y-1 rounded-md border border-destructive/40 p-1.5 text-[10px] leading-snug">
-          <p>
-            {report.capabilities?.reachable ? "Reachable, but it cannot transcribe." : "Could not reach it."}{" "}
-            {report.capabilities?.message}
-          </p>
-          {preset.label === "This Mac" && (
-            <>
-              <p className="text-muted-foreground">
-                LM Studio has no transcription endpoint yet. A whisper.cpp server on this machine does — or pick a
-                hosted service above if this machine is not fast enough:
-              </p>
-              <code className="block break-all rounded bg-muted p-1 font-mono text-[9px]">{WHISPER_SERVER}</code>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+const providerLabel2 = (name: string) => name;
 
 function AutoCaptions({
   project,
+  dispatch,
   onAutoCaption,
+  onOpenServices,
 }: {
   project: Project;
+  dispatch: (action: Action, coalesce?: boolean) => void;
   onAutoCaption: (assetId: string, options?: AutoCaptionOptions) => Promise<boolean>;
+  /** Opens the Services dialog: connecting and choosing happen in one place. */
+  onOpenServices: () => void;
 }) {
   const [caps, setCaps] = useState<Capabilities | null>(null);
   const [providers, setProviders] = useState<ProviderReport[]>([]);
-  const [editing, setEditing] = useState(false);
   const [language, setLanguage] = useState<string>("auto");
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -182,21 +62,6 @@ function AutoCaptions({
       listProviders().then(setProviders).catch(() => setProviders([])),
     ]);
 
-  // Saving a provider again makes it the one in use, keeping its stored key.
-  const use = async (id: string) => {
-    const p = providers.find((x) => x.id === id);
-    if (!p) return;
-    setBusy("Switching…");
-    try {
-      const report = await saveProvider(p.id, { kind: p.kind, name: p.name, baseUrl: p.baseUrl, transcribeModel: p.transcribeModel });
-      if (!report.capabilities?.transcribe) toast.error(`${p.name} cannot transcribe right now`, { description: report.capabilities?.message });
-      await refresh();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not switch.");
-    } finally {
-      setBusy(null);
-    }
-  };
   useEffect(() => {
     void refresh();
   }, []);
@@ -223,19 +88,22 @@ function AutoCaptions({
 
   if (caps === null) return null;
 
-  if (!caps.transcribe || editing) {
+  // The project's own service when it named one, and the workspace's otherwise.
+  const own = project.services.transcribe ? providers.find((p) => p.id === project.services.transcribe && p.capabilities?.transcribe) : undefined;
+  const active = own ? { name: own.name, model: own.transcribeModel, local: own.local } : caps.transcribe;
+
+  if (!active) {
     return (
-      <ConnectTranscription
-        onConnected={() => {
-          setEditing(false);
-          void refresh();
-        }}
-        {...(caps.transcribe ? { onCancel: () => setEditing(false) } : {})}
-      />
+      <div className="space-y-1.5 rounded-md border p-2">
+        <p className="text-[10px] leading-snug text-muted-foreground">
+          Captions need a speech-to-text service: a whisper.cpp server on this machine, or OpenAI, Groq, OpenRouter or ElevenLabs with a key.
+        </p>
+        <Button size="sm" className="h-6 w-full text-[10px]" onClick={onOpenServices}>
+          Set one up
+        </Button>
+      </div>
     );
   }
-
-  const active = caps.transcribe;
   const usable = providers.filter((p) => p.capabilities?.transcribe);
   const service = (
     <div className="space-y-1 rounded-md border p-1.5">
@@ -246,16 +114,23 @@ function AutoCaptions({
           {active.local ? "on this machine" : "hosted"}
         </span>
       </div>
-      <select className="h-6 w-full rounded-md border bg-background px-1 text-[10px]" value={active.providerId}
-        disabled={busy !== null} onChange={(e) => void use(e.target.value)}>
+      <select
+        className="h-6 w-full rounded-md border bg-background px-1 text-[10px]"
+        value={project.services.transcribe ?? ""}
+        disabled={busy !== null}
+        onChange={(e) => dispatch({ type: "setServices", patch: { transcribe: e.target.value || undefined } })}
+      >
+        <option value="">Workspace default{caps.transcribe ? ` — ${providerLabel2(caps.transcribe.name)}` : " — none"}</option>
         {usable.map((p) => (
-          <option key={p.id} value={p.id}>{providerLabel(p)} · {p.transcribeModel}</option>
+          <option key={p.id} value={p.id}>
+            {providerLabel(p)} · {p.transcribeModel}
+          </option>
         ))}
       </select>
       <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
         <span className="truncate">{active.local ? "Nothing leaves this machine." : `Audio is sent to ${active.name}.`}</span>
-        <button className="ml-auto shrink-0 underline-offset-2 hover:underline" onClick={() => setEditing(true)}>
-          + Add service
+        <button className="ml-auto shrink-0 underline-offset-2 hover:underline" onClick={onOpenServices}>
+          Manage
         </button>
       </div>
     </div>
@@ -308,12 +183,14 @@ export function CaptionsPanel({
   dispatch,
   onSeek,
   onAutoCaption,
-}: {
+ onOpenServices,}: {
   project: Project;
   time: number;
   dispatch: (action: Action, coalesce?: boolean) => void;
   onSeek: (time: number) => void;
   onAutoCaption: (assetId: string, options?: AutoCaptionOptions) => Promise<boolean>;
+  /** Opens the Services dialog, where a service is connected and chosen. */
+  onOpenServices: () => void;
 }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const style = project.captionStyle;
@@ -365,7 +242,7 @@ export function CaptionsPanel({
         <Label className="mb-1.5 flex items-center gap-1 text-[11px] font-medium">
           <Sparkles className="size-3" /> Auto-captions
         </Label>
-        <AutoCaptions project={project} onAutoCaption={onAutoCaption} />
+        <AutoCaptions project={project} dispatch={dispatch} onAutoCaption={onAutoCaption} onOpenServices={onOpenServices} />
       </div>
 
       <div className="min-h-24 flex-1 overflow-y-auto p-2">

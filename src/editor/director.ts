@@ -49,6 +49,8 @@ export interface DirectorHost {
   execute(name: string, args: unknown): Promise<BridgeContent[]>;
   /** The tool running now, or null: the same badge an MCP agent's calls light. */
   onActivity(tool: string | null): void;
+  /** The service this project uses for its model, when it names one. */
+  chatProvider?(): string | undefined;
 }
 
 /** Model calls per request before the Director stops and asks to go on. */
@@ -230,7 +232,11 @@ export class Director {
           break;
         }
         this.trim();
-        const response = await chat({ system: SYSTEM, messages: this.request(), tools: tools(), projectId: this.projectId }, abort.signal);
+        const providerId = host.chatProvider?.();
+        const response = await chat(
+          { system: SYSTEM, messages: this.request(), tools: tools(), projectId: this.projectId, ...(providerId ? { providerId } : {}) },
+          abort.signal,
+        );
         const u = this.state.usage;
         this.set({
           usage: {

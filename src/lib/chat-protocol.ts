@@ -57,6 +57,8 @@ export interface ChatRequest {
   maxTokens?: number;
   /** For the usage log: what the tokens were spent on. */
   projectId?: string;
+  /** The service the project uses for its model; the workspace's default otherwise. */
+  providerId?: string;
 }
 
 export interface ChatUsage {

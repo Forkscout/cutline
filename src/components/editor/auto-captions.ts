@@ -13,7 +13,7 @@ import { toast } from "sonner";
 import type { Action } from "@/editor/project";
 import { captionsForAsset } from "@/editor/transcript";
 import type { Project } from "@/editor/types";
-import { capabilities, transcribe } from "@/lib/ai";
+import { serviceFor, transcribe } from "@/lib/ai";
 
 export interface AutoCaptionOptions {
   /** Transcribe again even if a transcript is cached. */
@@ -34,7 +34,7 @@ export async function runAutoCaptions(params: {
   const asset = params.getProject().assets.find((a) => a.id === params.assetId);
   if (!asset?.hasAudio) return false;
 
-  const route = (await capabilities().catch(() => ({ transcribe: null }))).transcribe;
+  const route = await serviceFor("transcribe", params.getProject().services.transcribe);
   if (!route) {
     params.onNeedsSetup();
     toast.info("Connect a speech-to-text service first", {
@@ -53,7 +53,7 @@ export async function runAutoCaptions(params: {
     const { force, language } = params.options ?? {};
     const transcript = await transcribe(
       target,
-      { ...(language ? { language } : {}), ...(force ? { force } : {}) },
+      { ...(language ? { language } : {}), ...(force ? { force } : {}), providerId: route.providerId },
       (fraction, note) =>
         toast.loading(`Transcribing ${asset.name} · ${Math.round(fraction * 100)}%`, { id, description: `${note} · ${where}` }),
     );

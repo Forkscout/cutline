@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Clapperboard,
+import { SlidersHorizontal, Clapperboard,
   Captions,
   Bot,
   Film,
@@ -21,6 +21,7 @@ import { runAutoCaptions, type AutoCaptionOptions } from "@/components/editor/au
 import { BriefPanel } from "@/components/editor/brief-panel";
 import { DirectorCommand, DirectorPanel } from "@/components/editor/director-panel";
 import { StyleframeCompare } from "@/components/editor/styleframe-compare";
+import { ServicesDialog } from "@/components/services-manager";
 import type { ApplyContext } from "@/editor/workspace-apply";
 import { VersionsMenu } from "@/components/editor/versions-menu";
 import { Director } from "@/editor/director";
@@ -246,6 +247,7 @@ export function Editor({
   const [commandOpen, setCommandOpen] = useState(false);
   const [noting, setNoting] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
+  const [servicesOpen, setServicesOpen] = useState(false);
   // The Director runs in this tab on the bridge's executors, and lights the
   // same badge an MCP agent's calls do, held the same way.
   const directorFade = useRef<number | undefined>(undefined);
@@ -256,6 +258,7 @@ export function Editor({
         if (!bridge) return null;
         return {
           execute: (name, args) => bridge.execute(name, args),
+          chatProvider: () => historyRef.current.present.services.chat,
           onActivity: (tool) => {
             window.clearTimeout(directorFade.current);
             if (tool) setAgentTool(tool);
@@ -768,6 +771,17 @@ export function Editor({
 
         <VersionsMenu project={project} dispatch={dispatch} />
 
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1 px-2 text-[11px] text-muted-foreground"
+          title="Services: which model this project uses for captions, the Director and the rest"
+          onClick={() => setServicesOpen(true)}
+        >
+          <SlidersHorizontal className="size-3" />
+          Services
+        </Button>
+
         {agentTool && (
           <span
             title="An agent is editing this project through MCP. Every change is in History and can be undone."
@@ -790,6 +804,7 @@ export function Editor({
           </Button>
           <ExportDialog project={project} />
           <ClientQuestionsDialog />
+          <ServicesDialog open={servicesOpen} onOpenChange={setServicesOpen} project={project} dispatch={dispatch} />
           <StyleframeCompare open={compareOpen} onOpenChange={setCompareOpen} project={project} time={time} dispatch={dispatch} />
           <DirectorCommand
             open={commandOpen}
@@ -830,6 +845,7 @@ export function Editor({
                 </TabsContent>
                 <TabsContent value="captions" className="mt-2 min-h-0 flex-1">
                   <CaptionsPanel
+                    onOpenServices={() => setServicesOpen(true)}
                     project={project}
                     time={time}
                     dispatch={dispatch}
@@ -881,7 +897,13 @@ export function Editor({
                 </TabsList>
 
                 <TabsContent value="director" className="mt-2 min-h-0 flex-1">
-                  <DirectorPanel director={director} project={project} dispatch={dispatch} onSeek={(t) => engineRef.current?.seek(t)} />
+                  <DirectorPanel
+                    director={director}
+                    project={project}
+                    dispatch={dispatch}
+                    onSeek={(t) => engineRef.current?.seek(t)}
+                    onOpenServices={() => setServicesOpen(true)}
+                  />
                 </TabsContent>
 
                 <TabsContent value="inspector" className="mt-2 min-h-0 flex-1">

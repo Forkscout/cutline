@@ -459,6 +459,21 @@ export interface Project {
   storyboard: Storyboard | null;
   /** Numbers and names on screen to confirm before the video ships. */
   facts: Fact[];
+  /** Which connected service fills each role here; unset means the workspace's. */
+  services: ProjectServices;
+}
+
+/**
+ * The services this project uses, by role, as ids of what is connected. What
+ * is connected lives in ~/Cutline/ai.json, not in the project: a project says
+ * which one it wants, never how to reach it, and never a key.
+ */
+export interface ProjectServices {
+  transcribe?: string;
+  chat?: string;
+  voice?: string;
+  image?: string;
+  video?: string;
 }
 
 /* ------------------------------------------------------------- storyboard */

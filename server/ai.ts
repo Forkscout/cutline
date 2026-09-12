@@ -40,6 +40,15 @@ export interface Capabilities {
 /** Which API the provider speaks; `stt.ts` has an adapter for each. */
 export type ProviderKind = "openai" | "elevenlabs" | "anthropic";
 
+/**
+ * What a service is used for. Speech-to-text and the Director's model are
+ * probed and used; voice, image and video are written down for when something
+ * here generates them — nothing does yet, and the interface says so.
+ */
+export type ServiceRole = "transcribe" | "chat" | "voice" | "image" | "video";
+
+export const SERVICE_ROLES: ServiceRole[] = ["transcribe", "chat", "voice", "image", "video"];
+
 export interface Provider {
   id: string;
   kind: ProviderKind;
@@ -50,6 +59,10 @@ export interface Provider {
   transcribeModel: string;
   /** The model the Director runs on: claude-sonnet-5, anthropic/claude-sonnet-5, gpt-5. None: not used for chat. */
   chatModel?: string;
+  /** Text to speech. */
+  voiceModel?: string;
+  imageModel?: string;
+  videoModel?: string;
   capabilities?: Capabilities;
 }
 
@@ -64,6 +77,29 @@ export function isLocal(baseUrl: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function modelFor(provider: Provider, role: ServiceRole): string | undefined {
+  switch (role) {
+    case "transcribe":
+      return provider.transcribeModel || undefined;
+    case "chat":
+      return provider.chatModel;
+    case "voice":
+      return provider.voiceModel;
+    case "image":
+      return provider.imageModel;
+    case "video":
+      return provider.videoModel;
+  }
+}
+
+/** Whether a service can fill a role: what the probe found, or — for the roles nothing calls yet — that a model is written down. */
+export function canDo(provider: Provider, role: ServiceRole): boolean {
+  if (!modelFor(provider, role)) return false;
+  if (role === "transcribe") return Boolean(provider.capabilities?.transcribe);
+  if (role === "chat") return Boolean(provider.capabilities?.chat);
+  return true;
 }
 
 export function authHeaders(provider: Provider): Record<string, string> {
@@ -171,7 +207,17 @@ export class AiSettings {
    */
   async upsert(
     id: string,
-    patch: { kind?: ProviderKind; name: string; baseUrl: string; transcribeModel?: string; chatModel?: string; apiKey?: string },
+    patch: {
+      kind?: ProviderKind;
+      name: string;
+      baseUrl: string;
+      transcribeModel?: string;
+      chatModel?: string;
+      voiceModel?: string;
+      imageModel?: string;
+      videoModel?: string;
+      apiKey?: string;
+    },
   ): Promise<Provider> {
     const data = await this.read();
     const existing = data.providers.find((p) => p.id === id);
@@ -185,8 +231,16 @@ export class AiSettings {
     };
     const key = patch.apiKey === undefined ? existing?.apiKey : patch.apiKey;
     if (key) next.apiKey = key;
-    const chatModel = patch.chatModel === undefined ? existing?.chatModel : patch.chatModel.trim();
-    if (chatModel) next.chatModel = chatModel;
+    // A model left out keeps what was stored; an empty one clears the role.
+    for (const [key, given] of [
+      ["chatModel", patch.chatModel],
+      ["voiceModel", patch.voiceModel],
+      ["imageModel", patch.imageModel],
+      ["videoModel", patch.videoModel],
+    ] as const) {
+      const model = given === undefined ? existing?.[key] : given.trim();
+      if (model) next[key] = model;
+    }
     // The service connected last is the one used: connecting OpenRouter after a
     // local server means "use OpenRouter now". It used to mean nothing at all —
     // the first one added kept answering.
@@ -210,13 +264,25 @@ export class AiSettings {
     await this.write(data);
   }
 
+  /**
+   * The service a role uses: the one asked for when it can do the job, and
+   * otherwise the most recently connected one that can. A project names its
+   * own; the workspace's answer is what it falls back to.
+   */
+  async resolve(role: ServiceRole, preferred?: string | null): Promise<Provider | null> {
+    const { providers } = await this.read();
+    const asked = preferred ? providers.find((p) => p.id === preferred) : undefined;
+    if (asked && canDo(asked, role)) return asked;
+    return providers.find((p) => canDo(p, role)) ?? null;
+  }
+
   /** The most recently connected provider whose chat model answered. */
   async resolveChat(): Promise<Provider | null> {
-    return (await this.read()).providers.find((p) => p.chatModel && p.capabilities?.chat) ?? null;
+    return this.resolve("chat");
   }
 
   /** The most recently connected provider that can transcribe. */
   async resolveTranscribe(): Promise<Provider | null> {
-    return (await this.read()).providers.find((p) => p.capabilities?.transcribe) ?? null;
+    return this.resolve("transcribe");
   }
 }

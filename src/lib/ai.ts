@@ -10,6 +10,20 @@ import { apiJson } from "./server";
 /** Which API a provider speaks: OpenAI's (OpenAI, Groq, OpenRouter, whisper.cpp…), ElevenLabs' or Anthropic's. */
 export type ProviderKind = "openai" | "elevenlabs" | "anthropic";
 
+/** What a service is used for. */
+export type ServiceRole = "transcribe" | "chat" | "voice" | "image" | "video";
+
+export const SERVICE_ROLES: ServiceRole[] = ["transcribe", "chat", "voice", "image", "video"];
+
+/** What each role is, and whether anything here uses it yet. */
+export const ROLES: Record<ServiceRole, { title: string; blurb: string; used: boolean }> = {
+  transcribe: { title: "Speech to text", blurb: "Captions, and the transcript every graphic is timed to.", used: true },
+  chat: { title: "Language model", blurb: "The Director: it reads the project, plans the edit and makes it.", used: true },
+  voice: { title: "Voice", blurb: "Text to speech. Saved for when Cutline speaks; nothing uses it yet.", used: false },
+  image: { title: "Images", blurb: "Generated stills. Saved for when Cutline makes them; nothing uses it yet.", used: false },
+  video: { title: "Video", blurb: "Generated shots. Saved for when Cutline makes them; nothing uses it yet.", used: false },
+};
+
 export interface ProviderReport {
   id: string;
   kind: ProviderKind;
@@ -18,6 +32,9 @@ export interface ProviderReport {
   transcribeModel: string;
   /** The model the Director runs on, when it is used for that. */
   chatModel?: string;
+  voiceModel?: string;
+  imageModel?: string;
+  videoModel?: string;
   hasKey: boolean;
   /** On this machine, so nothing leaves it. */
   local: boolean;
@@ -41,13 +58,19 @@ export interface ServiceInUse {
   local: boolean;
 }
 
-export interface Capabilities {
-  transcribe: ServiceInUse | null;
-  /** The model the Director runs on. */
-  chat?: ServiceInUse | null;
-}
+/** What each role falls back to when a project names nothing of its own. */
+export type Capabilities = { [K in ServiceRole]?: ServiceInUse | null } & { transcribe: ServiceInUse | null };
 
 export const listProviders = () => apiJson<ProviderReport[]>("/api/ai/providers");
+
+/** The model a service would use for a role, whatever the record calls it. */
+export const modelOf = (p: ProviderReport, role: ServiceRole): string | undefined =>
+  role === "transcribe" ? p.transcribeModel : role === "chat" ? p.chatModel : role === "voice" ? p.voiceModel : role === "image" ? p.imageModel : p.videoModel;
+
+/** Whether a service can fill a role: what the probe found, or — for what nothing calls yet — that a model is written down. */
+export const canDo = (p: ProviderReport, role: ServiceRole): boolean =>
+  Boolean(modelOf(p, role)) &&
+  (role === "transcribe" ? Boolean(p.capabilities?.transcribe) : role === "chat" ? Boolean(p.capabilities?.chat) : true);
 export const capabilities = () => apiJson<Capabilities>("/api/ai/capabilities");
 
 /**
@@ -56,7 +79,17 @@ export const capabilities = () => apiJson<Capabilities>("/api/ai/capabilities");
  */
 export function saveProvider(
   id: string,
-  provider: { kind?: ProviderKind; name: string; baseUrl: string; transcribeModel?: string; chatModel?: string; apiKey?: string },
+  provider: {
+    kind?: ProviderKind;
+    name: string;
+    baseUrl: string;
+    transcribeModel?: string;
+    chatModel?: string;
+    voiceModel?: string;
+    imageModel?: string;
+    videoModel?: string;
+    apiKey?: string;
+  },
 ): Promise<ProviderReport> {
   return apiJson<ProviderReport>(`/api/ai/providers/${encodeURIComponent(id)}`, {
     method: "PUT",
@@ -73,12 +106,29 @@ export async function removeProvider(id: string): Promise<void> {
   await apiJson(`/api/ai/providers/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
+/**
+ * The service a role uses here: the project's own choice when it can do the
+ * job, and the workspace's otherwise — the same rule the server follows, so
+ * the interface never names one service while another does the work.
+ */
+export async function serviceFor(role: ServiceRole, preferred?: string): Promise<ServiceInUse | null> {
+  if (preferred) {
+    const chosen = (await listProviders().catch(() => [])).find((p) => p.id === preferred);
+    const model = chosen ? modelOf(chosen, role) : undefined;
+    if (chosen && model && canDo(chosen, role)) {
+      return { providerId: chosen.id, kind: chosen.kind, name: chosen.name, model, local: chosen.local };
+    }
+  }
+  const fallback = await capabilities().catch(() => ({ transcribe: null }) as Capabilities);
+  return fallback[role] ?? null;
+}
+
 export type TranscribeTarget = { sessionId: string; fileName: string } | { mediaId: string };
 
 /** Transcribes one file, reporting progress while the server works. */
 export async function transcribe(
   target: TranscribeTarget,
-  options: { language?: string; force?: boolean } = {},
+  options: { language?: string; force?: boolean; providerId?: string } = {},
   onProgress?: (fraction: number, note: string) => void,
 ): Promise<Transcript> {
   const { jobId } = await apiJson<{ jobId: string }>("/api/transcribe", {

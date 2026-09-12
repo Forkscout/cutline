@@ -28,6 +28,7 @@ import {
   type EffectInstance,
   type Fact,
   type Guides,
+  type ProjectServices,
   type Keyframe,
   type Marker,
   type MediaAsset,
@@ -148,6 +149,7 @@ export function createProject(name = "Untitled project"): Project {
     theme: null,
     storyboard: null,
     facts: [],
+    services: {},
   };
 }
 
@@ -381,7 +383,9 @@ export type Action =
   /** Replaces a value everywhere it is shown — every text clip and the storyboard — and records the fact as corrected. */
   | { type: "correctFact"; id: string; from: string; to: string; note?: string }
   /** Puts the project back to a saved version; the id stays, and History keeps what it replaced. */
-  | { type: "restoreVersion"; project: Project; label: string };
+  | { type: "restoreVersion"; project: Project; label: string }
+  /** Which connected service each role uses here; a role set to undefined goes back to the workspace's. */
+  | { type: "setServices"; patch: ProjectServices };
 
 /** Applies `fn` to every clip named in `refs`, wherever those clips live. */
 function mapClips(
@@ -891,6 +895,14 @@ export function reduce(project: Project, action: Action): Project {
       return touched({ ...project, storyboard: action.storyboard });
     case "restoreVersion":
       return touched({ ...action.project, id: project.id });
+    case "setServices": {
+      const services = { ...project.services };
+      for (const [role, id] of Object.entries(action.patch)) {
+        if (id) services[role as keyof ProjectServices] = id;
+        else delete services[role as keyof ProjectServices];
+      }
+      return touched({ ...project, services });
+    }
     case "setFact": {
       const exists = project.facts.some((f) => f.id === action.fact.id);
       return touched({

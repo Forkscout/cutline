@@ -10,7 +10,7 @@
 
 import { z } from "zod";
 import { listSessions } from "@/lib/media-store";
-import { capabilities, transcribe } from "@/lib/ai";
+import { capabilities, listProviders, serviceFor, transcribe } from "@/lib/ai";
 import { api, apiJson } from "@/lib/server";
 import {
   ACTION_TOOLS,
@@ -270,6 +270,10 @@ const EXECUTORS: Executors = {
     }
     return { type: "restoreVersion", project: doc, label: a.versionId };
   },
+  setServices: (a) => ({
+    type: "setServices",
+    patch: Object.fromEntries(Object.entries(a).map(([role, id]) => [role, id ?? undefined])),
+  }),
   setTheme: async (a, project) => {
     const look = a.lookId ? await getItem("looks", a.lookId).catch(() => null) : null;
     if (a.lookId && !look) throw new ToolError(`There is no look ${a.lookId}; list_themes shows them.`);
@@ -820,6 +824,28 @@ export class AgentBridge {
         return [json(await this.macro((ctx) => macros.addSplit(ctx, raw as unknown as macros.SplitArgs)))];
       case "addTree":
         return [json(await this.macro((ctx) => macros.addTree(ctx, raw as unknown as macros.TreeArgs)))];
+      case "listServices": {
+        const [connected, fallback] = await Promise.all([listProviders(), capabilities().catch(() => ({ transcribe: null }))]);
+        return [
+          json({
+            connected: connected.map((p) => ({
+              id: p.id,
+              name: p.name,
+              kind: p.kind,
+              onThisMachine: p.local,
+              hasKey: p.hasKey,
+              transcribe: p.capabilities?.transcribe ? p.transcribeModel : null,
+              chat: p.capabilities?.chat ? (p.chatModel ?? null) : null,
+              voice: p.voiceModel ?? null,
+              image: p.imageModel ?? null,
+              video: p.videoModel ?? null,
+            })),
+            thisProject: project.services,
+            workspaceDefault: fallback,
+            note: "Voice, image and video are written down for later: nothing in Cutline generates them yet.",
+          }),
+        ];
+      }
       case "listBrandKits":
         return [
           json(
@@ -1100,10 +1126,10 @@ export class AgentBridge {
         if (!asset.hasAudio) throw new ToolError(`${asset.name} has no sound to transcribe.`);
         let job = page.transcribing.get(asset.id);
         if (!job) {
-          const route = (await capabilities().catch(() => ({ transcribe: null }))).transcribe;
+          const route = await serviceFor("transcribe", project.services.transcribe);
           if (!route) {
             throw new ToolError(
-              "No speech-to-text service is connected. Ask the user to connect one in the Captions panel: a whisper.cpp server on this machine, or OpenAI, Groq, OpenRouter or ElevenLabs with a key.",
+              "No speech-to-text service is connected. Ask the user to add one — the Services button in the editor, or Settings › AI services: a whisper.cpp server on this machine, or OpenAI, Groq, OpenRouter or ElevenLabs with a key.",
             );
           }
           const target =
@@ -1119,7 +1145,7 @@ export class AgentBridge {
           };
           entry.promise = transcribe(
             target,
-            { ...(raw.language ? { language: String(raw.language) } : {}), ...(raw.force ? { force: true } : {}) },
+            { ...(raw.language ? { language: String(raw.language) } : {}), ...(raw.force ? { force: true } : {}), providerId: route.providerId },
             (fraction, note) => {
               entry.progress = fraction;
               entry.note = note;
