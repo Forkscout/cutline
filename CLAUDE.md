@@ -729,6 +729,16 @@ has its own `originalFile` so the flag cannot be passed by accident. A file
 delivered from a 720p proxy would be exactly the right length, exactly the right
 codec, and visibly soft.
 
+**An SVG is rasterised on import.** `createImageBitmap` cannot decode SVG in
+Chrome, so an SVG failed at probing — and had the probe been bypassed, the
+preview's `<img>` would have drawn a logo the export worker could not.
+`importFiles` draws it through an `<img>` onto a canvas at 2048 px on its long
+side and stores the PNG as the asset, keeping the original beside it
+(`vectorSource`), so every path decodes the same pixels. An agent imports with
+`import_media`: base64, or a file it put in `~/Cutline/inbox/`, the only folder
+`/api/local-file` reads — and only pictures, video and sound — because the
+Cutline home also holds `ai.json` and `mcp-token`.
+
 **A hidden tab invalidates any measurement.** Timers clamp to one second and
 `requestAnimationFrame` stops, so a capture driven from a canvas runs at about
 1 fps. `/dev-stress-check.html` refuses to run rather than print numbers that

@@ -16,6 +16,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { realpath, stat, mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Context } from "hono";
 import { Hono } from "hono";
@@ -174,6 +175,36 @@ api.post("/projects/:id/versions", async (c) => {
   const parsed = JSON.parse(body) as { label?: string; version?: number; project?: { id?: string } };
   if (parsed.project?.id !== id) return c.json({ error: "Project id does not match the URL" }, 400);
   return c.json(await projects.putVersion(id, parsed.label ?? "", JSON.stringify({ version: parsed.version, project: parsed.project })));
+});
+
+/* --- the inbox: files an agent put down to import --- */
+
+/** What an agent may import from the inbox: pictures, video and sound, nothing else. */
+const INBOX_TYPES = /\.(svg|png|jpe?g|webp|gif|avif|mp4|webm|mov|m4v|mp3|wav|m4a|aac|flac|ogg)$/i;
+
+/**
+ * An agent's import reads a file it put in ~/Cutline/inbox — never elsewhere.
+ * Not the Cutline home as a whole: that holds ai.json and mcp-token, and a
+ * key must never reach the page. The path is resolved first, so ../ and a
+ * symlink pointing out of the inbox are refused like any other outside path.
+ */
+api.on(["GET", "HEAD"], "/local-file", async (c) => {
+  const inbox = path.join(cutlineHome(), "inbox");
+  await mkdir(inbox, { recursive: true });
+  const real = await realpath(inbox);
+  const asked = (c.req.query("path") ?? "").replace(/^~\/Cutline\/inbox\/?/, "").replace(/^inbox\//, "");
+  let resolved: string;
+  try {
+    resolved = await realpath(path.resolve(real, asked));
+  } catch {
+    return c.json({ error: "No such file in ~/Cutline/inbox." }, 404);
+  }
+  if (!resolved.startsWith(real + path.sep)) {
+    return c.json({ error: "Only files in ~/Cutline/inbox can be imported this way. Copy it there first." }, 403);
+  }
+  if (!INBOX_TYPES.test(resolved)) return c.json({ error: "Only pictures, video and sound can be imported." }, 415);
+  if (!(await stat(resolved)).isFile()) return c.json({ error: "That is not a file." }, 400);
+  return fileResponse(resolved, c.req.method, c.req.header("range"));
 });
 
 /* --- agents: what they may do, who has connected, and what it all cost --- */

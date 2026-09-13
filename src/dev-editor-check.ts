@@ -17,7 +17,7 @@ import { listLocalSessionIds } from "./recorder/storage";
 import { deleteSession, listSessions as listServerSessions } from "./lib/media-store";
 import { startSession } from "./lib/server";
 import { syncLocalRecordings } from "./lib/sync";
-import { importSession } from "./editor/media";
+import { importFiles, importSession } from "./editor/media";
 import {
   apply,
   emptyTrack,
@@ -823,6 +823,36 @@ async function run() {
   check("timeline length matches the take",
     Math.abs(duration - meta.durationMs / 1000) < 0.8,
     `${duration.toFixed(2)}s vs ${(meta.durationMs / 1000).toFixed(2)}s`);
+
+  /* --- an SVG, through import and export ----------------------------------- */
+  log("\nan SVG logo", "dim");
+  {
+    // No width or height, only a viewBox: the case that failed at probing.
+    const svg = new File(
+      ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><rect width="200" height="100" fill="#ff2020"/></svg>'],
+      "logo.svg",
+      { type: "image/svg+xml" },
+    );
+    const { assets: imported, failed } = await importFiles([svg]);
+    const logo = imported[0];
+    check("an SVG imports, rasterised at its own aspect",
+      Boolean(logo) && logo!.kind === "image" && logo!.width === 2048 && logo!.height === 1024 && logo!.mimeType === "image/png",
+      logo ? `${logo.width}×${logo.height} ${logo.mimeType}` : (failed[0]?.reason ?? "not imported"));
+    check("the original SVG is kept beside it, and it has a thumbnail", Boolean(logo?.vectorSource) && Boolean(logo?.thumbnail));
+    if (logo) {
+      const still = newProject("svg export");
+      still.width = 1280;
+      still.height = 720;
+      still.assets = [logo];
+      still.tracks.find((t) => t.kind === "video")!.clips = [newMediaClip(logo, 0)];
+      still.inPoint = 0;
+      still.outPoint = 1;
+      const exported = await exportProject(still, { container: "mp4", height: 360, frameRate: 30, quality: "high", bitrateMbps: null, useInOut: true });
+      const frame = await frameCanvas(exported, 0.5);
+      const [r = 0, g = 0, b = 0] = frame ? Array.from(frame.getImageData(frame.canvas.width / 2, frame.canvas.height / 2, 1, 1).data) : [];
+      check("the logo reaches the exported file", r > 180 && g < 90 && b < 90, `centre rgb ${r},${g},${b}`);
+    }
+  }
 
   /* --- add a text layer and captions -------------------------------- */
   const titleTrack = emptyTrack("video", "Title");

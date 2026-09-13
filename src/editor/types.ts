@@ -54,6 +54,13 @@ export interface MediaAsset {
    */
   proxyName?: string;
 
+  /**
+   * For an SVG: the original, kept beside the PNG it was rasterised to on
+   * import (a media-store id). The asset itself is the PNG, so the preview, a
+   * rendered frame and the export all decode the same pixels.
+   */
+  vectorSource?: string;
+
   /** A data URL, cached so the browser does not re-decode on every render. */
   thumbnail?: string;
   /** Normalised min/max pairs per bucket, for drawing waveforms. */

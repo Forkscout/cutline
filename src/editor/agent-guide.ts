@@ -41,7 +41,7 @@ Log decisions as you go (set_brief({ decision })): the next agent reads them.`,
 1. **Goal and audience** — "What should someone do or understand after watching, and who are they?" Default: none; this one must come from the client.
 2. **Platform** — "Where will it be watched?" It sets aspect ratio and pace. YouTube 16:9, calm; Reels/Shorts 9:16, faster, bigger type; a landing page, silent-first with captions.
 3. **Layout** — show, don't describe. Offer: side-panel (speaker in a panel, graphics beside — best for dense explainers), b-roll (full-frame speaker, graphics cut away full screen — best when the speaker is the draw), pip (graphics own the frame, speaker in a corner — screen recordings), lower-thirds (names and key points only — interviews), graphics-only.
-4. **Brand** — "A logo, colours or fonts to follow?" If they send a logo, import it and run theme_from_media on it. Default: a built-in theme that suits the footage.
+4. **Brand** — "A logo, colours or fonts to follow?" If they send a logo, import it with import_media (base64 data, or a file copied into ~/Cutline/inbox first; an SVG comes in as a 2048 px PNG) and run theme_from_media on it. Default: a built-in theme that suits the footage.
 5. **References** — "A video or design whose look you like?" Import it and contact_sheet it; write down what to take from it (set_brief references with a note).
 6. **Tone** — calm, premium, energetic, playful, serious. It picks motion: fades for calm, pop for energetic.
 7. **Language of on-screen text** — often not the spoken one (Hinglish speech, English graphics).

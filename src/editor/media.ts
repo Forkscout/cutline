@@ -184,6 +184,62 @@ async function probeImage(file: File): Promise<Probe> {
   return probe;
 }
 
+/* ------------------------------------------------------------------- SVG */
+
+const isSvg = (file: File) => file.type === "image/svg+xml" || /\.svg$/i.test(file.name);
+
+/** The longest side an SVG is rasterised to: a logo at full frame on 4K stays sharp. */
+const SVG_RASTER = 2048;
+
+/**
+ * An SVG, drawn once to a PNG. `createImageBitmap` cannot decode SVG in Chrome
+ * — "The source image could not be decoded", with or without a width — so the
+ * probe, the thumbnail and the export worker all failed on one, while an
+ * `<img>` in the preview drew it: the export would have lost a logo the
+ * preview showed. Drawing it through an `<img>` onto a canvas here, and
+ * storing the PNG, gives every path the same pixels.
+ */
+async function rasteriseSvg(file: File): Promise<File> {
+  const text = await file.text();
+  const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+  const root = doc.documentElement;
+  if (root.nodeName.toLowerCase() !== "svg") throw new Error("That file is not an SVG that can be read.");
+  const box = (root.getAttribute("viewBox") ?? "").split(/[\s,]+/).map(Number);
+  const length = (name: string) => {
+    const value = parseFloat(root.getAttribute(name) ?? "");
+    return Number.isFinite(value) && value > 0 && !/%$/.test(root.getAttribute(name) ?? "") ? value : null;
+  };
+  const w = length("width") ?? (box.length === 4 && box[2]! > 0 ? box[2]! : null);
+  const h = length("height") ?? (box.length === 4 && box[3]! > 0 ? box[3]! : null);
+  if (!w || !h) throw new Error("That SVG gives no size: it needs a viewBox, or a width and a height.");
+  const scale = SVG_RASTER / Math.max(w, h);
+  const width = Math.max(1, Math.round(w * scale));
+  const height = Math.max(1, Math.round(h * scale));
+  // Without a viewBox, a width and height of their own would crop instead of scaling.
+  if (box.length !== 4) root.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  root.setAttribute("width", String(width));
+  root.setAttribute("height", String(height));
+  const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(doc)], { type: "image/svg+xml" }));
+  try {
+    const img = new Image();
+    img.decoding = "async";
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error("That SVG could not be drawn — it may use something a browser will not render in an image."));
+      img.src = url;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    canvas.getContext("2d")!.drawImage(img, 0, 0, width, height);
+    const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!png) throw new Error("That SVG could not be turned into a picture.");
+    return new File([png], file.name, { type: "image/png", lastModified: file.lastModified });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 /* -------------------------------------------------------------- thumbnails */
 
 const THUMB_WIDTH = 240;
@@ -429,15 +485,19 @@ export async function importFiles(
   const assets: MediaAsset[] = [];
   const failed: { name: string; reason: string }[] = [];
 
-  for (const [index, file] of files.entries()) {
+  for (const [index, dropped] of files.entries()) {
     const total = files.length;
-    const kind = kindFor(file);
+    const kind = kindFor(dropped);
     try {
-      onProgress?.({ name: file.name, index, total, stage: "probing" });
+      onProgress?.({ name: dropped.name, index, total, stage: "probing" });
+      // An SVG becomes the PNG every other path reads; the original is kept beside it.
+      const file = kind === "image" && isSvg(dropped) ? await rasteriseSvg(dropped) : dropped;
       const info = kind === "image" ? await probeImage(file) : await probeMedia(file);
 
       const fileId = crypto.randomUUID();
       await writeMediaFile(fileId, file);
+      const vectorSource = file === dropped ? undefined : `${fileId}.source`;
+      if (vectorSource) await writeMediaFile(vectorSource, dropped);
 
       const asset: MediaAsset = {
         ...baseAsset(file.name, kind, file.type || "application/octet-stream", file.size),
@@ -452,6 +512,7 @@ export async function importFiles(
         createdAt: file.lastModified || Date.now(),
         ...(info.sampleRate ? { sampleRate: info.sampleRate } : {}),
         ...(info.channels ? { channels: info.channels } : {}),
+        ...(vectorSource ? { vectorSource } : {}),
       };
 
       if (info.hasVideo && info.height > PROXY_TRIGGER_HEIGHT) {
@@ -476,7 +537,7 @@ export async function importFiles(
     } catch (err) {
       // One unreadable file must not abandon the rest of a batch import.
       failed.push({
-        name: file.name,
+        name: dropped.name,
         reason: err instanceof Error ? err.message : "Unsupported or unreadable file.",
       });
     }

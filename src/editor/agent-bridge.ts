@@ -29,6 +29,7 @@ import { audioEnvelope, describeChange, leanProject } from "./inspect";
 import { captionsForAsset, wordsOnTimeline, type TimelineWord, type Transcript } from "./transcript";
 import { needsConfirming, scanNumbers } from "./facts";
 import { lintScene } from "./lint";
+import { importFiles } from "./media";
 import { lockedTracksIn, movesAt, rangeOfWords, snapToWords } from "./cut";
 import { listVersions, loadVersion, saveVersion } from "./persistence";
 import { RECIPES, recipeById } from "./recipes";
@@ -854,6 +855,53 @@ export class AgentBridge {
         return [json(await this.macro((ctx) => macros.addSplit(ctx, raw as unknown as macros.SplitArgs)))];
       case "addTree":
         return [json(await this.macro((ctx) => macros.addTree(ctx, raw as unknown as macros.TreeArgs)))];
+      case "importMedia": {
+        const fromPath = typeof raw.path === "string" && raw.path ? raw.path : null;
+        const name = (typeof raw.name === "string" && raw.name) || (fromPath ? fromPath.split(/[\\/]/).pop() ?? "" : "");
+        if (!name) throw new ToolError("Give the file a name with its extension, like logo.svg: the extension says what it is.");
+        const types: Record<string, string> = {
+          svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif",
+          mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime", mp3: "audio/mpeg", wav: "audio/wav", m4a: "audio/mp4",
+        };
+        const type = types[name.split(".").pop()?.toLowerCase() ?? ""] ?? "";
+        let file: File;
+        if (typeof raw.data === "string" && raw.data) {
+          let bytes: Uint8Array<ArrayBuffer>;
+          try {
+            bytes = Uint8Array.from(atob(raw.data), (ch) => ch.charCodeAt(0));
+          } catch {
+            throw new ToolError("data is not base64.");
+          }
+          file = new File([bytes], name, { type });
+        } else if (fromPath) {
+          const response = await api(`/api/local-file?path=${encodeURIComponent(fromPath)}`);
+          if (!response.ok) {
+            const reason = ((await response.json().catch(() => ({}))) as { error?: string }).error;
+            throw new ToolError(`Could not read ${fromPath}: ${reason ?? response.status}`);
+          }
+          const blob = await response.blob();
+          file = new File([blob], name, { type: type || blob.type });
+        } else {
+          throw new ToolError("Send the file as data (base64) with a name, or put it in ~/Cutline/inbox and give its path.");
+        }
+        const { assets, failed } = await importFiles([file]);
+        const asset = assets[0];
+        if (!asset) throw new ToolError(`${name} was not imported: ${failed[0]?.reason ?? "it could not be read"}`);
+        this.commit({ type: "addAssets", assets: [asset] });
+        return [
+          json({
+            ok: true,
+            assetId: asset.id,
+            name: asset.name,
+            kind: asset.kind,
+            width: asset.width,
+            height: asset.height,
+            durationSec: asset.durationSec,
+            ...(asset.vectorSource ? { note: "An SVG, rasterised to a PNG so the preview and the export draw the same pixels; the original is kept." } : {}),
+            next: "add_clip({ kind: \"media\", assetId, trackId, start }) places it.",
+          }),
+        ];
+      }
       case "cutRanges": {
         const words = raw.snap === "words" ? wordsOnTimeline(project) : [];
         const asked = (raw.ranges as { from: number; to: number }[]).map((r) =>

@@ -876,6 +876,17 @@ export const EDITOR_TOOLS = {
       after: z.number().min(0).optional(),
     },
   }),
+  importMedia: tool({
+    name: "import_media",
+    title: "Import media",
+    description:
+      "Adds a file — an image, a video or a sound — to the project's media, through the same import as a drop: probed, thumbnailed, a proxy for tall video, a waveform for sound. Send it as data (base64) with a name whose extension says what it is, or put the file in ~/Cutline/inbox/ and give its path. An SVG is rasterised to a 2048 px PNG, so the preview and the export draw the same pixels; the original is kept. Place it with add_clip and the asset id it answers with.",
+    input: {
+      name: z.string().min(1).max(200).optional().describe("File name with its extension, like logo.svg; needed with data"),
+      data: z.string().max(12_000_000).optional().describe("The file, base64; up to about 9 MB — use path for anything bigger"),
+      path: z.string().max(1000).optional().describe("A file in ~/Cutline/inbox, like ~/Cutline/inbox/logo.svg — the only folder it reads"),
+    },
+  }),
   startTurn: tool({
     name: "start_turn",
     title: "Start turn",

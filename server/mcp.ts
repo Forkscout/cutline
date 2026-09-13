@@ -74,7 +74,7 @@ function buildServer(bridge: TabBridge, media: DiskMediaStore, workspace: Worksp
           if (spec.name === "export_video" && !permissions.mayExport) {
             throw new Error("Exporting is turned off for agents in Settings › Agents. Ask the user to export, or to turn it on.");
           }
-          if (spec.name === "import_recording" && !permissions.mayImport) {
+          if ((spec.name === "import_recording" || spec.name === "import_media") && !permissions.mayImport) {
             throw new Error("Importing files is turned off for agents in Settings › Agents.");
           }
           return { content: await bridge.call(spec.name, args) };
