@@ -51,6 +51,9 @@ export interface LintReport {
 
 export class LintError extends Error {}
 
+/** Which problem an issue is, across versions of a project: its kind and the clips it names. */
+export const issueKey = (issue: LintIssue): string => `${issue.kind}:${issue.clips.map((c) => c.clipId).sort().join("+")}`;
+
 interface Rect {
   x0: number;
   y0: number;
@@ -227,7 +230,7 @@ export async function lintScene(
 
   const issues = new Map<string, LintIssue>();
   const add = (issue: LintIssue) => {
-    const key = `${issue.kind}:${issue.clips.map((c) => c.clipId).sort().join("+")}`;
+    const key = issueKey(issue);
     if (!issues.has(key)) issues.set(key, issue);
   };
   const notes: string[] = [];

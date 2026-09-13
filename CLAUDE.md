@@ -384,6 +384,15 @@ all of it with two stand-in editors — and, with one page on three sockets, tha
 a call outlives the socket it went out on, that every call names the turn, and
 that a page which does not come back fails its calls after the grace.
 
+**A restart gives the page a new token.** Every run of the server has its own
+page token, so after `bun run dev` restarts, an open editor's calls and its
+bridge are refused with a 401 — which a WebSocket shows only as a close, so the
+bridge used to retry in silence until someone reloaded. After three refused
+connects it asks `/api/health`: a 401 means the server is up with a new token,
+and the page reads it from its own HTML, the way it got the first, and trades
+it for a fresh cookie (`refreshSession`). If that fails the header says
+"Server restarted · reload".
+
 **Stateless, with its own token.** A fresh MCP server per request, so a restart
 under `bun --watch` strands no client session. The bearer token lives in
 `~/Cutline/mcp-token` (0600), because the per-run page token changes on every
@@ -540,6 +549,11 @@ replaces a whole value — the 7 in 17 and in 7,000 is left alone — in every
 text clip and in the storyboard, so a recompile keeps the fix. The Director tab
 shows both, with no model connected.
 
+**A lint baseline.** `lint_scene({ compareTo: versionId })` lints that version
+the same way and returns only what it did not have — issues are the same
+problem when their kind and clip ids match (`issueKey`) — with counts of those
+unchanged and fixed, instead of an agent counting warnings before and after.
+
 **Notes, versions and locks.** A note is a marker with a `pin`, 0..1 of the
 frame: the client drops one by clicking the picture in Note mode, and
 `list_notes` tells an agent what is under it at that moment — from `clipBox`
@@ -628,6 +642,15 @@ large-v3-turbo is the local model to run:
 whisper-server -m ~/.cache/whisper-cpp/ggml-large-v3-turbo.bin \
   --inference-path /v1/audio/transcriptions --convert -l auto --port 8178
 ```
+
+**Echoes and holes.** A service can time one word differently in two
+overlapping parts, and both survive the middle rule: `dropEchoes` drops a word
+lying mostly inside the one before it with the same text, when parts are merged
+and again when a cached transcript is read. What the second pass still misses,
+`transcript` reports rather than hides: words over 1.5 s are marked suspect,
+since one word stretched over seconds is audio nobody transcribed, and holes
+are gaps between words where the mix stays loud against the level under the
+words (`transcriptHoles`), so an agent does not cut there blind.
 
 **Transcripts live in the file's time, captions in the timeline's.**
 `server/transcribe.ts` cuts long audio into ten-minute parts by copying packets

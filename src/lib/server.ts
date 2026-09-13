@@ -78,3 +78,33 @@ export function startSession(): Promise<boolean> {
     });
   return session;
 }
+
+/** Whether the server is up but refuses this page's token: it restarted, with a new one, since the page loaded. */
+export async function tokenRefused(): Promise<boolean> {
+  try {
+    return (await fetch("/api/health", { headers: { "x-cutline-token": token() } })).status === 401;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Picks up the token of a server that restarted since the page loaded. Each run
+ * of the server has its own, so after a restart every call from an open page
+ * is refused and its bridge retried in silence. The page reads the new token
+ * from its own HTML — the way it got the first; another origin cannot read it —
+ * and trades it for a fresh session cookie. False when that did not work.
+ */
+export async function refreshSession(): Promise<boolean> {
+  if (typeof document === "undefined") return false;
+  try {
+    const html = await (await fetch("/", { cache: "no-store" })).text();
+    const fresh = new DOMParser().parseFromString(html, "text/html").querySelector('meta[name="cutline-token"]')?.getAttribute("content");
+    if (!fresh) return false;
+    document.querySelector('meta[name="cutline-token"]')?.setAttribute("content", fresh);
+    session = null;
+    return await startSession();
+  } catch {
+    return false;
+  }
+}

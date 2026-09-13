@@ -33,7 +33,7 @@ import {
   Output,
   WebMOutputFormat,
 } from "mediabunny";
-import { dropLoops, type Transcript, type TranscriptWord } from "../src/editor/transcript";
+import { dropEchoes, dropLoops, type Transcript, type TranscriptWord } from "../src/editor/transcript";
 import type { Provider } from "./ai";
 import { adapterFor, uploadName } from "./stt";
 
@@ -231,6 +231,9 @@ export async function transcribeFile(
     );
     words = [...words, ...filled.flat()].sort((x, y) => x.start - y.start);
   }
+
+  // Where parts overlapped, a word a service timed differently in each can be kept twice.
+  words = dropEchoes(words.sort((x, y) => x.start - y.start));
 
   const transcript: Transcript = {
     version: 1,

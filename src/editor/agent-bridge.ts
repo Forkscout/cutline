@@ -11,7 +11,7 @@
 import { z } from "zod";
 import { listSessions } from "@/lib/media-store";
 import { capabilities, listProviders, serviceFor, transcribe } from "@/lib/ai";
-import { api, apiJson } from "@/lib/server";
+import { api, apiJson, refreshSession, tokenRefused } from "@/lib/server";
 import {
   ACTION_TOOLS,
   TAB_TOOLS,
@@ -25,10 +25,10 @@ import {
 import { clipBox, hitTest, visibleClips } from "./compositor";
 import { createEffect } from "./effects";
 import { exportProject } from "./export";
-import { audioEnvelope, describeChange, leanProject } from "./inspect";
+import { audioEnvelope, describeChange, leanProject, transcriptHoles } from "./inspect";
 import { captionsForAsset, wordsOnTimeline, type TimelineWord, type Transcript } from "./transcript";
 import { needsConfirming, scanNumbers } from "./facts";
-import { lintScene } from "./lint";
+import { issueKey, lintScene, type LintIssue } from "./lint";
 import { importFiles } from "./media";
 import { lockedTracksIn, movesAt, rangeOfWords, snapToWords } from "./cut";
 import { listVersions, loadVersion, saveVersion } from "./persistence";
@@ -356,6 +356,8 @@ export interface BridgeHost {
   onActivity(tool: string | null): void;
   /** Whether this editor is the one that saves the project, and how many have it open. */
   onLock?(holder: boolean, editors: number): void;
+  /** The server restarted with a new token: "renewed" when this page picked it up, "stale" when it could not. */
+  onServer?(state: "renewed" | "stale"): void;
 }
 
 /** Edits more than this far apart start a new undo step even within a turn. */
@@ -528,6 +530,7 @@ export class AgentBridge {
   private ws: WebSocket | null = null;
   private stopped = false;
   private failures = 0;
+  private recovering = false;
   private lock = { holder: true, editors: 1 };
 
   constructor(
@@ -579,7 +582,9 @@ export class AgentBridge {
     if (this.stopped) return;
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/bridge`);
     this.ws = ws;
+    let opened = false;
     ws.onopen = () => {
+      opened = true;
       this.failures = 0;
       // Which browser, and whether anyone can see it: when two editors hold the
       // same project, this is what tells them apart in the server's log.
@@ -611,7 +616,24 @@ export class AgentBridge {
       // — then backing off to every ten.
       window.setTimeout(() => this.connect(), Math.min(1000 * 2 ** Math.max(0, this.failures - 2), 10_000));
       this.failures += 1;
+      // Refused before it opened, again, while the server may well be up: a
+      // restart gives it a new token, and a WebSocket shows a 401 only as a close.
+      if (!opened && this.failures >= 3) void this.recover();
     };
+  }
+
+  /** Picks up a restarted server's token, or tells the editor this page has to reload. */
+  private async recover(): Promise<void> {
+    if (this.recovering) return;
+    this.recovering = true;
+    try {
+      if (!(await tokenRefused())) return;
+      const renewed = await refreshSession();
+      if (renewed) this.failures = 0;
+      this.host.onServer?.(renewed ? "renewed" : "stale");
+    } finally {
+      this.recovering = false;
+    }
   }
 
   /** Asks the server to make this editor the one that saves. */
@@ -851,16 +873,22 @@ export class AgentBridge {
       }
       case "transcript": {
         const from = (raw.start as number | undefined) ?? 0;
-        const to = (raw.end as number | undefined) ?? Number.POSITIVE_INFINITY;
+        const to = Math.min((raw.end as number | undefined) ?? Number.POSITIVE_INFINITY, projectDuration(project));
+        if (!project.assets.some((a) => a.transcript)) return [text("No transcript yet. Call transcribe with the asset id of a clip with sound.")];
         const words = wordsOnTimeline(project).filter((w) => w.end > from && w.start < to);
-        if (words.length === 0) {
-          const any = project.assets.some((a) => a.transcript);
-          return [text(any ? "Nothing is said in that range." : "No transcript yet. Call transcribe with the asset id of a clip with sound.")];
-        }
+        const holes = transcriptHoles(project, from, to, words);
+        if (words.length === 0 && holes.length === 0) return [text("Nothing is said in that range.")];
+        const suspect = words.filter((w) => w.end - w.start > 1.5).length;
+        const notes = [
+          ...(suspect ? [`${suspect} word${suspect === 1 ? " lasts" : "s last"} over 1.5 s: probably audio the service did not transcribe, stretched over one word.`] : []),
+          ...(holes.length ? [`${holes.length} hole${holes.length === 1 ? "" : "s"}: loud audio with no words. Listen before cutting there, or transcribe again with another service.`] : []),
+        ];
         return [
           json({
             text: words.map((w) => w.text).join(" "),
-            words: words.map((w) => ({ start: round(w.start), end: round(w.end), text: w.text })),
+            words: words.map((w) => ({ start: round(w.start), end: round(w.end), text: w.text, ...(w.end - w.start > 1.5 ? { suspect: true } : {}) })),
+            ...(holes.length ? { holes } : {}),
+            ...(notes.length ? { notes } : {}),
           }),
         ];
       }
@@ -1138,24 +1166,42 @@ export class AgentBridge {
         return [json({ ok: true, id: marker.id })];
       }
       case "lintScene": {
+        const options = {
+          ...(typeof raw.scene === "string" ? { scene: raw.scene } : {}),
+          ...(typeof raw.from === "number" ? { from: raw.from } : {}),
+          ...(typeof raw.to === "number" ? { to: raw.to } : {}),
+          contrast: raw.contrast !== false,
+        };
         let report;
         try {
-          report = await lintScene(project, {
-            ...(typeof raw.scene === "string" ? { scene: raw.scene } : {}),
-            ...(typeof raw.from === "number" ? { from: raw.from } : {}),
-            ...(typeof raw.to === "number" ? { to: raw.to } : {}),
-            contrast: raw.contrast !== false,
-          });
+          report = await lintScene(project, options);
         } catch (err) {
           throw new ToolError(err instanceof Error ? err.message : String(err));
         }
-        const errors = report.issues.filter((i) => i.severity === "error").length;
+        // Against a version: only what that version did not already have.
+        let baseline: LintIssue[] | null = null;
+        if (typeof raw.compareTo === "string") {
+          let before: Project;
+          try {
+            before = await loadVersion(project.id, raw.compareTo);
+          } catch (err) {
+            throw new ToolError(`Could not open version ${raw.compareTo} (${err instanceof Error ? err.message : String(err)}); list_versions shows them.`);
+          }
+          // A scene that version did not have yet has nothing to compare with.
+          baseline = (await lintScene(before, options).catch(() => null))?.issues ?? [];
+        }
+        const had = new Set((baseline ?? []).map(issueKey));
+        const now = new Set(report.issues.map(issueKey));
+        const issues = baseline ? report.issues.filter((i) => !had.has(issueKey(i))) : report.issues;
+        const errors = issues.filter((i) => i.severity === "error").length;
+        const since = baseline ? " new since that version" : "";
         return [
           json({
             ...report,
-            issues: report.issues.slice(0, 60),
-            ...(report.issues.length > 60 ? { more: report.issues.length - 60 } : {}),
-            summary: report.issues.length ? `${errors} errors, ${report.issues.length - errors} warnings` : "clean",
+            issues: issues.slice(0, 60),
+            ...(issues.length > 60 ? { more: issues.length - 60 } : {}),
+            ...(baseline ? { compareTo: raw.compareTo, unchanged: report.issues.length - issues.length, fixed: baseline.filter((i) => !now.has(issueKey(i))).length } : {}),
+            summary: issues.length ? `${errors} errors, ${issues.length - errors} warnings${since}` : baseline ? "nothing new since that version" : "clean",
           }),
         ];
       }

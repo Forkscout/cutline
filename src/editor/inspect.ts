@@ -180,3 +180,37 @@ export function audioEnvelope(project: Project, start: number, end: number, buck
     unmeasured: [...unmeasured],
   };
 }
+
+/** A gap between words shorter than this is a pause, whatever is heard in it. */
+const HOLE_MIN_SEC = 1.5;
+
+/**
+ * Stretches between transcribed words where the mix stays loud: usually speech
+ * the service missed, which an agent must not cut blind. One real transcript
+ * had about seventeen seconds of clear audio with no words, the last seven at
+ * the very end. Loud is measured against the level under the words themselves.
+ */
+export function transcriptHoles(project: Project, from: number, to: number, words: { start: number; end: number }[]): { start: number; end: number; loud: number }[] {
+  const gaps: [number, number][] = [];
+  let cursor = from;
+  for (const word of words) {
+    if (word.start - cursor >= HOLE_MIN_SEC) gaps.push([cursor, word.start]);
+    cursor = Math.max(cursor, word.end);
+  }
+  if (to - cursor >= HOLE_MIN_SEC) gaps.push([cursor, to]);
+  if (gaps.length === 0) return [];
+  const every = Math.max(1, Math.floor(words.length / 200));
+  const speech = words
+    .filter((_, i) => i % every === 0)
+    .map((w) => audioEnvelope(project, w.start, Math.max(w.end, w.start + 0.05), 1).levels[0] ?? 0)
+    .sort((a, b) => a - b);
+  const typical = speech.length ? speech[Math.floor(speech.length / 2)]! : 0.33;
+  const threshold = Math.max(0.05, typical * 0.3);
+  const holes: { start: number; end: number; loud: number }[] = [];
+  for (const [a, b] of gaps) {
+    const { levels } = audioEnvelope(project, a, b, Math.max(4, Math.min(400, Math.round((b - a) / 0.1))));
+    const loud = levels.filter((level) => level >= threshold).length / levels.length;
+    if (loud >= 0.4) holes.push({ start: round(a), end: round(b), loud: round(loud) });
+  }
+  return holes;
+}

@@ -155,7 +155,7 @@ Look for:
 
 Then audio_envelope if you changed timing. Report what you checked and what you fixed, and anything still uncertain — numbers first.
 
-**Checks, then eyes.** lint_scene on every scene after building: overlapping text, off-frame and outside title-safe, contrast measured on the rendered frame against what is really behind the text, text over the speaker, text too brief to read. Fix what it finds and lint again until it is clean — then look, because a check cannot tell you a scene is dull.
+**Checks, then eyes.** lint_scene on every scene after building: overlapping text, off-frame and outside title-safe, contrast measured on the rendered frame against what is really behind the text, text over the speaker, text too brief to read. Fix what it finds and lint again until it is clean — save_version before a change and lint with compareTo: that version to see only what the change introduced — then look, because a check cannot tell you a scene is dull.
 
 **Facts before export.** list_facts compares every number on screen with what was said around it. Anything nobody said nearby, and anything you flagged with set_fact, goes to the client (ask_client) before export; record their answer with set_fact({ status: "confirmed" }), or correct_fact({ value, to }) to change it everywhere it is shown. Never ship a figure the transcript did not support without saying so.
 
@@ -182,7 +182,7 @@ Then audio_envelope if you changed timing. Report what you checked and what you 
   gotchas: {
     title: "Things that bite",
     summary: "Hard-won details about the editor and the bridge.",
-    body: `- **The tab is the source of truth.** Every tool edits the project open in the client's browser. If they switch projects in that tab, your calls go to the other project — check get_editor_state when in doubt. Never open the client's project in a second tab.
+    body: `- **The tab is the source of truth.** Every tool edits the project open in the client's browser. If they switch projects in that tab, your calls go to the other project — check get_editor_state when in doubt. Never open the client's project in a second tab: an editor you open yourself can take the project's hold from theirs, which then shows "Open elsewhere · not saving". If you did open one, close it when you are done — the hold goes back — and tell the client.
 - **One undo step per turn.** start_turn before editing, again for each new request.
 - **Long calls answer "running".** transcribe waits up to 90 s, then returns progress; call it again with the same assetId to keep waiting. ask_client does the same while the client fills the form.
 - **Tracks.** The macros find free overlay tracks and add more when needed; raw add_clip needs a track that has no clip overlapping in time, and later video tracks draw on top. Every clip on screen at once needs its own track — prefer add_table, add_stack and path shapes, which put many marks in one clip.
@@ -191,7 +191,7 @@ Then audio_envelope if you changed timing. Report what you checked and what you 
 - **Transcripts are cached** beside the file; transcribe({ force: true }) to redo one with another service.
 - **The server may restart** (development saves); calls wait for the editor to reconnect and turns keep their names.
 
-**Cutting time.** cut_words for speech — its boundaries fall in the middle of the pauses, so no word is clipped and the join keeps a natural pause. cut_ranges for a tightening pass (one undo step, applied last to first), and cut_range with snap: \"words\" for anything else near speech. A cut closes the gap on every track: graphics, markers, captions and storyboard time anchors move with it, and a locked track stops it. After each pass read transcript across every join and render_frame it; a cut inside a layout move is reported, because the move now happens in less time. Never rebuild a project document to cut — restore_version is for versions.`,
+**Cutting time.** cut_words for speech — its boundaries fall in the middle of the pauses, so no word is clipped and the join keeps a natural pause. cut_ranges for a tightening pass (one undo step, applied last to first), and cut_range with snap: \"words\" for anything else near speech. A cut closes the gap on every track: graphics, markers, captions and storyboard time anchors move with it, and a locked track stops it. transcript marks words over 1.5 s as suspect and lists holes — loud audio with no words, often speech the service missed; never cut inside one without listening. After each pass read transcript across every join and render_frame it; a cut inside a layout move is reported, because the move now happens in less time. Never rebuild a project document to cut — restore_version is for versions.`,
   },
 };
 

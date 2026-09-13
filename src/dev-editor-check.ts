@@ -32,7 +32,8 @@ import {
 import { createEffect } from "./editor/effects";
 import { clipAt, valueAt } from "./editor/keyframes";
 import { parseSubtitles, toSrt } from "./editor/captions";
-import { captionsForAsset, captionsFromWords, dropLoops, wordsFromVerboseJson, wordsOnTimeline } from "./editor/transcript";
+import { captionsForAsset, captionsFromWords, dropEchoes, dropLoops, wordsFromVerboseJson, wordsOnTimeline } from "./editor/transcript";
+import { transcriptHoles } from "./editor/inspect";
 import { createProject as newProject, mediaClip as newMediaClip, reduce, replaceValue, shapeClip } from "./editor/project";
 import { needsConfirming, numbersIn, scanNumbers } from "./editor/facts";
 import { lintScene } from "./editor/lint";
@@ -597,6 +598,15 @@ async function run() {
       looped.map((w) => w.text).join(" ").slice(0, 80));
     check("a phrase said twice on purpose is kept",
       dropLoops(timed(["cash,", "park,", "cash,", "park"])).length === 4);
+    const echoed = dropEchoes([
+      { start: 179.7, end: 180.1, text: "क्योंकि" },
+      { start: 180.0, end: 180.08, text: "क्योंकि" },
+      { start: 180.2, end: 180.5, text: "यह" },
+      { start: 181.0, end: 181.3, text: "no" },
+      { start: 181.35, end: 181.6, text: "no" },
+    ]);
+    check("a word heard twice where parts overlapped is kept once; one said twice is kept twice",
+      echoed.length === 4 && echoed.filter((w) => w.text === "no").length === 2, echoed.map((w) => w.text).join(" "));
   }
 
   /* --- brief and theme ---------------------------------------------- */
@@ -996,6 +1006,23 @@ async function run() {
 
   const base = projectFromSession(meta, assets);
   check("project has three tracks", base.tracks.length === 3);
+  {
+    // Loud audio with no words where the transcript skipped it: a hole an agent must not cut blind.
+    const mic = base.assets.find((a) => a.hasAudio && !a.hasVideo) ?? base.assets.find((a) => a.hasAudio)!;
+    const heard = (spans: [number, number][]): Project => ({
+      ...base,
+      assets: base.assets.map((a) =>
+        a.id === mic.id
+          ? { ...a, transcript: { version: 1, provider: "check", model: "check", language: null, durationSec: mic.durationSec, timing: "word" as const, words: spans.map(([start, end], i) => ({ start, end, text: `w${i}` })), createdAt: 0 } }
+          : a,
+      ),
+    });
+    const gappy = heard([[0, 0.4], [0.4, 0.6], [2.6, 2.8]]);
+    const holes = transcriptHoles(gappy, 0, 2.8, wordsOnTimeline(gappy));
+    check("loud audio with no words is reported as a hole", holes.length === 1 && holes[0]!.start >= 0.5 && holes[0]!.end <= 2.7, JSON.stringify(holes));
+    const covered = heard([[0, 0.9], [0.9, 1.8], [1.8, 2.8]]);
+    check("and audio with words over it is not", transcriptHoles(covered, 0, 2.8, wordsOnTimeline(covered)).length === 0);
+  }
   check(
     "screen is the base layer and camera sits on top",
     base.tracks[0]?.name === "Screen" && base.tracks[1]?.name === "Camera",

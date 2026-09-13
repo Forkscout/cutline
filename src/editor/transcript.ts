@@ -153,6 +153,40 @@ export interface TimelineWord extends TranscriptWord {
   trackId: string;
 }
 
+/**
+ * Drops a word heard twice where two parts of the audio overlapped: the same
+ * text, lying mostly inside the word before it. Each word is kept from the
+ * part its middle falls in, but a service can time one word differently in
+ * each part and leave both — a real transcript had "क्योंकि" at 179.70–180.10
+ * and again at 180.00–180.08, and an agent nearly cut it as a stutter. A
+ * word said twice in a row does not overlap itself, and is kept.
+ */
+export function dropEchoes(words: TranscriptWord[]): TranscriptWord[] {
+  const key = (w: TranscriptWord) => w.text.toLowerCase().replace(/[^\p{L}\p{N}\p{M}]/gu, "");
+  const out: TranscriptWord[] = [];
+  for (const word of words) {
+    const previous = out[out.length - 1];
+    if (previous && key(word) && key(previous) === key(word)) {
+      const shared = Math.min(previous.end, word.end) - Math.max(previous.start, word.start);
+      if (shared > 0.5 * Math.max(0.001, word.end - word.start)) continue;
+    }
+    out.push(word);
+  }
+  return out;
+}
+
+const withoutEchoes = new WeakMap<Transcript, TranscriptWord[]>();
+
+/** A transcript's words with echoes dropped, once per transcript: those cached before merging dropped them still have them. */
+function heard(transcript: Transcript): TranscriptWord[] {
+  let words = withoutEchoes.get(transcript);
+  if (!words) {
+    words = dropEchoes([...transcript.words].sort((a, b) => a.start - b.start));
+    withoutEchoes.set(transcript, words);
+  }
+  return words;
+}
+
 /** Where a moment of the source lands on the timeline through `clip`, if it does. */
 function toTimeline(clip: Clip, sourceTime: number): number | null {
   if (clip.reversed || clip.freeze) return null;
@@ -168,7 +202,7 @@ export function wordsOnTimeline(project: Project): TimelineWord[] {
       if (!clip.enabled || clip.kind !== "media") continue;
       const transcript = project.assets.find((a) => a.id === clip.assetId)?.transcript;
       if (!transcript) continue;
-      for (const word of transcript.words) {
+      for (const word of heard(transcript)) {
         // A word counts where its middle lands inside the clip: a trim through
         // a word keeps it if most of it is still heard.
         const middle = toTimeline(clip, (word.start + word.end) / 2);

@@ -517,7 +517,7 @@ export const EDITOR_TOOLS = {
     title: "Transcript",
     readOnly: true,
     description:
-      "What is said on the timeline, word by word, each with its timeline time — from the transcripts stored on the assets (made by transcribe, or by the user's Generate captions). Use it to find a moment by what was said, to cut on a word, to time a title or an animation to a word, or to check captions against speech.",
+      "What is said on the timeline, word by word, each with its timeline time — from the transcripts stored on the assets (made by transcribe, or by the user's Generate captions). Use it to find a moment by what was said, to cut on a word, to time a title or an animation to a word, or to check captions against speech. Words lasting over 1.5 s are marked suspect, and holes lists stretches where the audio is loud but no word was transcribed — usually speech the service missed. Listen before cutting inside either.",
     input: {
       start: z.number().min(0).optional().describe("Range start, seconds; default the beginning"),
       end: z.number().min(0).optional().describe("Range end, seconds; default the end"),
@@ -871,6 +871,7 @@ export const EDITOR_TOOLS = {
       from: z.number().min(0).optional(),
       to: z.number().min(0).optional(),
       contrast: z.boolean().optional().describe("Measure contrast on rendered frames (default true; slower)"),
+      compareTo: z.string().optional().describe("A version id from list_versions: report only issues that version did not have, and count the ones it had that are gone"),
     },
   }),
   listFacts: tool({

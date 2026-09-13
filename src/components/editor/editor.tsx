@@ -116,6 +116,8 @@ export function Editor({
     return next;
   }, []);
   const [selected, setSelected] = useState<ClipRef | null>(null);
+  // The server restarted with a new token and this page could not pick it up.
+  const [serverStale, setServerStale] = useState(false);
   const [selectedAsset, setSelectedAsset] = useState<string | null>(null);
   const [time, setTime] = useState(0);
   const [tool, setTool] = useState<Tool>("select");
@@ -303,6 +305,10 @@ export function Editor({
           else fade = window.setTimeout(() => setAgentTool(null), 2500);
         },
         onLock: (holder, editors) => setServerHold({ holder, editors }),
+        onServer: (state) => {
+          setServerStale(state === "stale");
+          if (state === "renewed") toast.success("The server restarted. Reconnected — nothing to reload.");
+        },
       },
       { id: initial.id, name: initial.name },
     );
@@ -746,6 +752,15 @@ export function Editor({
           className="ml-2 h-8 w-56 rounded-lg text-xs font-medium"
         />
 
+        {serverStale && (
+          <button
+            onClick={() => location.reload()}
+            title="The server restarted with a new key and this page could not pick it up. Reload to save and take agent edits again."
+            className="ml-1 rounded-full bg-destructive/15 px-2.5 py-1 text-[11px] font-medium text-destructive hover:bg-destructive/25"
+          >
+            Server restarted · reload
+          </button>
+        )}
         {canWrite ? (
           <span className="ml-1 flex items-center gap-1 text-[11px] text-muted-foreground">
             <Save className={cn("size-3", saving === "saving" && "animate-pulse text-primary")} />
