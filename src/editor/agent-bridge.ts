@@ -69,6 +69,13 @@ class ToolError extends Error {}
 type ActionOf<K extends Action["type"]> = Extract<Action, { type: K }>;
 type ToolArgs<K> = K extends ActionToolKey ? ArgsOf<(typeof ACTION_TOOLS)[K]> : never;
 /** What an action tool's executor wants said beside its result: warnings the action itself cannot carry. */
+/** A clip or a tree node, from a tool's arguments. */
+function targetOf(raw: Record<string, unknown>): macros.Target {
+  if (typeof raw.node === "string" && raw.node) return { node: raw.node, ...(typeof raw.component === "string" && raw.component ? { component: raw.component } : {}) };
+  if (typeof raw.trackId === "string" && typeof raw.clipId === "string") return { trackId: raw.trackId, clipId: raw.clipId };
+  throw new ToolError("Name a tree node (node), or a clip (trackId and clipId).");
+}
+
 const ACTION_NOTES = new WeakMap<object, string[]>();
 
 /** Refuses a cut that a locked track would be left behind by. */
@@ -663,16 +670,20 @@ export class AgentBridge {
 
   /** Applies an action as the agent's edit, joining the turn's undo step. */
   /** Runs a macro against the live project; every clip it makes is committed inside the agent's turn. */
-  private async macro<T>(run: (ctx: macros.MacroContext) => T): Promise<T> {
+  private async macro<T extends object>(run: (ctx: macros.MacroContext) => T, kind?: string): Promise<T & { component?: string }> {
     // Text is measured in the faces it will be drawn in, so they load first.
     await loadFonts(fontsInUse(this.host.history().present)).catch(() => []);
+    // Everything one call makes is one component, to move or delete as a whole.
+    const component = kind ? `${kind}-${crypto.randomUUID().slice(0, 4)}` : undefined;
     const ctx: macros.MacroContext = {
       project: () => this.host.history().present,
       commit: (action) => void this.commit(action),
       measure: macros.measureOnCanvas,
+      ...(component ? { tag: { component } } : {}),
     };
     try {
-      return run(ctx);
+      const result = run(ctx);
+      return component ? { component, ...result } : result;
     } catch (err) {
       if (err instanceof macros.MacroError) throw new ToolError(err.message);
       throw err;
@@ -832,29 +843,78 @@ export class AgentBridge {
       case "layoutMove":
         return [json(await this.macro((ctx) => macros.layoutMove(ctx, raw as unknown as macros.LayoutMoveArgs)))];
       case "addTitle":
-        return [json(await this.macro((ctx) => macros.addTitle(ctx, raw as unknown as macros.TitleArgs)))];
+        return [json(await this.macro((ctx) => macros.addTitle(ctx, raw as unknown as macros.TitleArgs), "title"))];
       case "addPoints":
-        return [json(await this.macro((ctx) => macros.addPoints(ctx, raw as unknown as macros.PointsArgs)))];
+        return [json(await this.macro((ctx) => macros.addPoints(ctx, raw as unknown as macros.PointsArgs), "points"))];
       case "addChips":
-        return [json(await this.macro((ctx) => macros.addChips(ctx, raw as unknown as macros.ChipsArgs)))];
+        return [json(await this.macro((ctx) => macros.addChips(ctx, raw as unknown as macros.ChipsArgs), "chips"))];
       case "addStat":
-        return [json(await this.macro((ctx) => macros.addStat(ctx, raw as unknown as macros.StatArgs)))];
+        return [json(await this.macro((ctx) => macros.addStat(ctx, raw as unknown as macros.StatArgs), "stat"))];
       case "addFlow":
-        return [json(await this.macro((ctx) => macros.addFlow(ctx, raw as unknown as macros.FlowArgs)))];
+        return [json(await this.macro((ctx) => macros.addFlow(ctx, raw as unknown as macros.FlowArgs), "flow"))];
       case "addBars":
-        return [json(await this.macro((ctx) => macros.addBars(ctx, raw as unknown as macros.BarsArgs)))];
+        return [json(await this.macro((ctx) => macros.addBars(ctx, raw as unknown as macros.BarsArgs), "bars"))];
       case "addLowerThird":
-        return [json(await this.macro((ctx) => macros.addLowerThird(ctx, raw as unknown as macros.LowerThirdArgs)))];
+        return [json(await this.macro((ctx) => macros.addLowerThird(ctx, raw as unknown as macros.LowerThirdArgs), "lower-third"))];
       case "addStatement":
-        return [json(await this.macro((ctx) => macros.addStatement(ctx, raw as unknown as macros.StatementArgs)))];
+        return [json(await this.macro((ctx) => macros.addStatement(ctx, raw as unknown as macros.StatementArgs), "statement"))];
       case "addTally":
-        return [json(await this.macro((ctx) => macros.addTally(ctx, raw as unknown as macros.TallyArgs)))];
+        return [json(await this.macro((ctx) => macros.addTally(ctx, raw as unknown as macros.TallyArgs), "tally"))];
       case "addCards":
-        return [json(await this.macro((ctx) => macros.addCards(ctx, raw as unknown as macros.CardsArgs)))];
+        return [json(await this.macro((ctx) => macros.addCards(ctx, raw as unknown as macros.CardsArgs), "cards"))];
       case "addSplit":
-        return [json(await this.macro((ctx) => macros.addSplit(ctx, raw as unknown as macros.SplitArgs)))];
+        return [json(await this.macro((ctx) => macros.addSplit(ctx, raw as unknown as macros.SplitArgs), "split"))];
       case "addTree":
-        return [json(await this.macro((ctx) => macros.addTree(ctx, raw as unknown as macros.TreeArgs)))];
+        return [json(await this.macro((ctx) => macros.addTree(ctx, raw as unknown as macros.TreeArgs), "tree"))];
+      case "addTable":
+        return [json(await this.macro((ctx) => macros.addTable(ctx, raw as unknown as macros.TableArgs), "table"))];
+      case "addStack":
+        return [json(await this.macro((ctx) => macros.addStack(ctx, raw as unknown as macros.StackArgs), "stack"))];
+      case "addFlash":
+        return [json(await this.macro((ctx) => macros.addFlash(ctx, { at: raw.at as number, target: targetOf(raw) }), "flash"))];
+      case "addCoin": {
+        const stops = (raw.stops as Record<string, unknown>[]).map((stop) => ({ at: stop.at as number, target: targetOf(stop) }));
+        return [json(await this.macro((ctx) => macros.addCoin(ctx, { stops, ...(typeof raw.size === "number" ? { size: raw.size } : {}) }), "coin"))];
+      }
+      case "deleteComponent":
+      case "moveComponent": {
+        const name = raw.component as string;
+        const scene = raw.scene as string | undefined;
+        const members = project.tracks.flatMap((track) =>
+          track.clips.filter((c) => c.component === name && (scene === undefined || c.scene === scene)).map((clip) => ({ track, clip })),
+        );
+        if (members.length === 0) throw new ToolError(`No clip belongs to component ${name}${scene ? ` in scene ${scene}` : ""}. A macro's result names its component.`);
+        const scenes = new Set(members.map((m) => m.clip.scene ?? "no scene"));
+        if (scene === undefined && scenes.size > 1) throw new ToolError(`${name} is a component in ${scenes.size} scenes (${[...scenes].join(", ")}); pass scene.`);
+        const locked = members.find((m) => m.track.locked);
+        if (locked) throw new ToolError(`Part of ${name} is on ${locked.track.name}, which the user locked. Ask before changing it.`);
+        const refs = members.map((m) => ({ trackId: m.track.id, clipId: m.clip.id }));
+        if (key === "deleteComponent") {
+          for (const ref of refs) this.commit({ type: "deleteClip", ref });
+          return [json({ ok: true, deleted: refs.length })];
+        }
+        const by = typeof raw.by === "number" ? raw.by : 0;
+        const u = project.height / 1080;
+        const dx = typeof raw.dx === "number" ? (raw.dx * u) / project.width : 0;
+        const dy = typeof raw.dy === "number" ? (raw.dy * u) / project.height : 0;
+        if (!by && !dx && !dy) throw new ToolError("Say how far: by in seconds, or dx and dy in pixels.");
+        if (by) {
+          // The last clip first when moving later, so none lands on its neighbour on the way.
+          const order = [...members].sort((p, q) => (by > 0 ? q.clip.start - p.clip.start : p.clip.start - q.clip.start));
+          for (const m of order) this.commit({ type: "moveClip", ref: { trackId: m.track.id, clipId: m.clip.id }, start: Math.max(0, m.clip.start + by) });
+        }
+        if (dx || dy) {
+          for (const ref of refs) {
+            const clip = findClip(this.host.history().present, ref);
+            if (!clip) continue;
+            const keyframes = clip.keyframes.map((k) => (k.property === "transform.x" ? { ...k, value: k.value + dx } : k.property === "transform.y" ? { ...k, value: k.value + dy } : k));
+            this.commit({ type: "patchClip", ref, patch: { transform: { ...clip.transform, x: clip.transform.x + dx, y: clip.transform.y + dy }, keyframes } });
+          }
+        }
+        const after = this.host.history().present;
+        const stuck = by ? members.filter((m) => Math.abs((findClip(after, { trackId: m.track.id, clipId: m.clip.id })?.start ?? -1) - Math.max(0, m.clip.start + by)) > 1e-3).length : 0;
+        return [json({ ok: true, clips: refs.length, ...(stuck ? { notes: [`${stuck} of its clips could not move by ${by} s: something else is in the way on their tracks.`] } : {}) })];
+      }
       case "importMedia": {
         const fromPath = typeof raw.path === "string" && raw.path ? raw.path : null;
         const name = (typeof raw.name === "string" && raw.name) || (fromPath ? fromPath.split(/[\\/]/).pop() ?? "" : "");
@@ -1138,7 +1198,7 @@ export class AgentBridge {
       case "compileStoryboard":
         return [json(await this.macro((ctx) => compileStoryboard(ctx, raw.only ? { only: raw.only as string[] } : {})))];
       case "addBackdrop":
-        return [json(await this.macro((ctx) => macros.addBackdrop(ctx, raw as unknown as macros.BackdropArgs)))];
+        return [json(await this.macro((ctx) => macros.addBackdrop(ctx, raw as unknown as macros.BackdropArgs), "backdrop"))];
       case "previewThemes": {
         const ids = (raw.themes as string[] | undefined) ?? THEMES.map((t) => t.id);
         const sheet = await themeSheet(project, Number(raw.time), ids.map((id) => themeById(id)), (raw.width as number | undefined) ?? 480);

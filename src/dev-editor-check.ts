@@ -40,6 +40,8 @@ import { brandOverrides, contrast, mergeTheme, paletteOf, themeById } from "./ed
 import { AnchorError, findPhrase, resolveAnchor } from "./editor/storyboard";
 import { afterCut, cutRange, lockedTracksIn, rangeOfWords, snapToWords } from "./editor/cut";
 import { exportProject } from "./editor/export";
+import { drawFrame, textLineBoxes, type ClipBox } from "./editor/compositor";
+import { addCoin, addStack, addTable, addTree, measureOnCanvas, type MacroContext } from "./editor/agent-macros";
 import type { Clip, ClipRef, Easing, MediaAsset, Project } from "./editor/types";
 
 const out = document.getElementById("log")!;
@@ -770,6 +772,129 @@ async function run() {
     const low = seen.issues.filter((i) => i.kind === "contrast").map((i) => i.clips[0]?.text);
     check("contrast is measured on the frame, and only the unreadable one fails",
       seen.contrastMeasured === 2 && low.length === 1, `${seen.contrastMeasured} measured; low: ${low.join()} · ${seen.issues.map((i) => i.detail).join(" | ")}`);
+  }
+
+  /* --- tables, stacks and motion: few tracks, and the frames show it ------- */
+  // A price table made a clip per cell once took a project from 28 video tracks
+  // to 44. A column is one clip now, its rows brought in by text.reveal.
+  log("\ntables, stacks and motion", "dim");
+  {
+    const fresh = (name: string): Project => ({ ...newProject(name), width: 960, height: 540, theme: themeById("studio-dark") });
+    let doc = fresh("table");
+    const ctx: MacroContext = { project: () => doc, commit: (action) => { doc = reduce(doc, action); }, measure: measureOnCanvas, tag: { component: "check" } };
+    const all = () => doc.tracks.flatMap((t) => t.clips);
+    const videoTracks = () => doc.tracks.filter((t) => t.kind === "video").length;
+    const frame = (p: Project, t: number) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = p.width;
+      canvas.height = p.height;
+      const c = canvas.getContext("2d", { willReadFrequently: true })!;
+      drawFrame(c, p, t, () => null);
+      return c;
+    };
+    const without = (p: Project, keep: (c: Clip) => boolean): Project => ({ ...p, tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.filter(keep) })) });
+    // Pixels that differ between two frames, in a box.
+    const differ = (a: CanvasRenderingContext2D, b: CanvasRenderingContext2D, x0 = 0, y0 = 0, x1 = a.canvas.width, y1 = a.canvas.height) => {
+      const w = Math.max(1, Math.round(x1 - x0));
+      const h = Math.max(1, Math.round(y1 - y0));
+      const da = a.getImageData(Math.round(x0), Math.round(y0), w, h).data;
+      const db = b.getImageData(Math.round(x0), Math.round(y0), w, h).data;
+      let n = 0;
+      for (let i = 0; i < da.length; i += 4) if (Math.abs(da[i]! - db[i]!) + Math.abs(da[i + 1]! - db[i + 1]!) + Math.abs(da[i + 2]! - db[i + 2]!) > 30) n += 1;
+      return n;
+    };
+    const around = (b: ClipBox) => [b.cx + b.x - 4, b.cy + b.y - 4, b.cx + b.x + b.w + 4, b.cy + b.y + b.h + 4] as const;
+
+    const before = videoTracks();
+    addTable(ctx, {
+      end: 20,
+      columns: [{ header: "Level" }, { header: "Price" }, { header: "Needs" }],
+      rows: Array.from({ length: 9 }, (_, i) => ({ at: 1 + i * 0.8, cells: [`Level ${i + 1}`, `₹${(i + 1) * 1000}`, { text: `${(i + 1) * 2} referrals`, at: 9 + i * 0.3 }] })),
+    });
+    const tableTracks = videoTracks() - before;
+    check("a 9 × 3 table takes a handful of tracks, not one per cell", tableTracks <= 8, `${tableTracks} tracks for ${all().length} clips`);
+    check("everything one call makes is one component", all().every((c) => c.component === "check"));
+    const empty = frame(without(doc, () => false), 0);
+    const price = all().find((c) => c.text?.content.startsWith("₹1000"))!;
+    const priceLines = textLineBoxes(doc, price);
+    const sixth = around(priceLines[5]!.box);
+    check("a row is not drawn before its word, and is once it has arrived",
+      differ(frame(doc, 4.9), empty, ...sixth) < 5 && differ(frame(doc, 5.6), empty, ...sixth) > 40,
+      `${differ(frame(doc, 4.9), empty, ...sixth)} px before, ${differ(frame(doc, 5.6), empty, ...sixth)} after`);
+    check("rows above it stay drawn", differ(frame(doc, 4.9), empty, ...around(priceLines[0]!.box)) > 40);
+    const needs = all().find((c) => c.text?.content.startsWith("2 referrals"))!;
+    const firstNeed = around(textLineBoxes(doc, needs)[0]!.box);
+    check("a column whose cells have their own times fills in later",
+      differ(frame(doc, 8.8), empty, ...firstNeed) < 5 && differ(frame(doc, 9.6), empty, ...firstNeed) > 40);
+    const sixThousand = scanNumbers(doc).find((n) => n.value.replace(/\D/g, "") === "6000");
+    check("the fact check times a figure from when its row arrives", Boolean(sixThousand) && Math.abs(sixThousand!.shown[0]!.start - 5.1) < 0.3,
+      sixThousand ? `shown from ${sixThousand.shown[0]!.start.toFixed(2)} s` : "not found");
+    const lint = await lintScene(doc, { from: 0, to: 20, contrast: false });
+    const clashes = lint.issues.filter((i) => i.kind === "overlap");
+    check("lint reads a column line by line: a clean table has no overlaps", clashes.length === 0, clashes.map((i) => i.detail).join(" | "));
+
+    doc = fresh("stack");
+    const stackBefore = videoTracks();
+    addStack(ctx, {
+      end: 12,
+      items: Array.from({ length: 6 }, (_, i) => ({ at: 1 + i, title: `Level ${i + 1}`, value: `${6 ** i} seats` })),
+      connectors: Array.from({ length: 5 }, () => "↓ ×6"),
+    });
+    const cards = all().filter((c) => c.kind === "shape");
+    const titles = all().find((c) => c.text?.content.startsWith("Level 1"))!;
+    const offsets = textLineBoxes(doc, titles).map((l, i) => Math.abs(l.box.cy + l.box.y + l.box.h / 2 - cards[i]!.transform.y * doc.height));
+    check("a stack of six cards takes nine tracks", videoTracks() - stackBefore === 9, `${videoTracks() - stackBefore}`);
+    check("each title sits in the middle of its card", offsets.length === 6 && Math.max(...offsets) < 1.5, offsets.map((o) => o.toFixed(2)).join(" "));
+
+    doc = fresh("tree");
+    addTree({ ...ctx, tag: { component: "tree" } }, {
+      end: 12,
+      ghost: 2,
+      nodes: [
+        { id: "you", label: "You", at: 1 },
+        { id: "a", label: "A", parent: "you", at: 2, flash: true },
+        { id: "b", label: "B", parent: "you", at: 3 },
+      ],
+    });
+    const ghost = all().find((c) => c.shape?.kind === "path");
+    check("a tree's empty seats and edges are one path clip", Boolean(ghost) && all().filter((c) => c.role === "ghost").length === 1);
+    const seatsDrawn = differ(frame(doc, 6), frame(without(doc, (c) => c.role !== "ghost"), 6));
+    check("and they are drawn", seatsDrawn > 150, `${seatsDrawn} px`);
+    const nodeOf = (id: string) => all().find((c) => c.name === `node ${id}`)!;
+    const gw = doc.width * 0.3 * ghost!.transform.scaleX;
+    const gx0 = ghost!.transform.x * doc.width - gw / 2;
+    check("nodes sit in the ghost's seats",
+      Math.abs(nodeOf("a").transform.x * doc.width - (gx0 + gw / 4)) < 1 && Math.abs(nodeOf("b").transform.x * doc.width - (gx0 + (gw * 3) / 4)) < 1);
+    const ringless = (t: number) => frame(without(doc, (c) => c.role !== "flash"), t);
+    const ringAt = differ(frame(doc, 2.5), ringless(2.5));
+    const ringAfter = differ(frame(doc, 3.0), ringless(3.0));
+    check("a node that arrives with flash gets a ring, which is gone 0.7 s later", ringAt > 100 && ringAfter === 0, `${ringAt} px during, ${ringAfter} after`);
+
+    addCoin(ctx, { stops: [{ at: 4, target: { node: "a" } }, { at: 6, target: { node: "you" } }] });
+    const coin = all().find((c) => c.role === "coin")!;
+    const coinAt = (t: number) => clipAt(coin, t - coin.start).transform;
+    const [ax, ay, rx, ry] = [nodeOf("a").transform.x, nodeOf("a").transform.y, nodeOf("you").transform.x, nodeOf("you").transform.y];
+    const mid = coinAt(5.55);
+    check("a coin waits at its stop, then travels to arrive on time",
+      Math.abs(coinAt(4.8).x - ax) < 1e-3 && Math.abs(mid.x - (ax + rx) / 2) < 2e-3 && Math.abs(mid.y - (ay + ry) / 2) < 2e-3 && Math.abs(coinAt(6).x - rx) < 1e-3,
+      `mid ${mid.x.toFixed(3)},${mid.y.toFixed(3)} vs ${((ax + rx) / 2).toFixed(3)},${((ay + ry) / 2).toFixed(3)}`);
+    const coinPx = differ(frame(doc, 5.55), frame(without(doc, (c) => c.role !== "coin"), 5.55), mid.x * doc.width - 8, mid.y * doc.height - 8, mid.x * doc.width + 8, mid.y * doc.height + 8);
+    check("and is drawn where it is, fading in and out", coinPx > 20 && coinAt(3.8).opacity < 1 && coinAt(6.5).opacity < 0.2, `${coinPx} px`);
+
+    // The export draws in a worker: Path2D and DOMMatrix have to exist there too.
+    const still = newProject("path export");
+    still.width = 640;
+    still.height = 360;
+    const plate = shapeClip(0, 1);
+    plate.shape = { ...plate.shape!, kind: "path", path: "M0.25 0.25L0.75 0.25L0.75 0.75L0.25 0.75Z", fill: "#ff2020", strokeWidth: 0 };
+    plate.transform = { ...plate.transform, x: 0.5, y: 0.5, scaleX: 1 / 0.3, scaleY: 1 / 0.3 };
+    still.tracks.find((t) => t.kind === "video")!.clips = [plate];
+    still.inPoint = 0;
+    still.outPoint = 1;
+    const shot = await frameCanvas(await exportProject(still, { container: "mp4", height: 360, frameRate: 30, quality: "high", bitrateMbps: null, useInOut: true }), 0.5);
+    const inside = shot ? sample(shot, shot.canvas.width / 2, shot.canvas.height / 2) : { r: 0, g: 0, b: 0 };
+    const outside = shot ? sample(shot, 20, 20) : { r: 255, g: 0, b: 0 };
+    check("a path shape reaches the export, drawn in its box's own units", isRed(inside) && !isRed(outside), `${describe(inside)} inside, ${describe(outside)} outside`);
   }
 
   /* --- record a real take ------------------------------------------ */

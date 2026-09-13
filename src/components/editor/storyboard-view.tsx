@@ -40,6 +40,14 @@ const summary = (c: StoryComponent): string => {
       return c.nodes.map((n) => n.label).join(", ");
     case "lower_third":
       return c.name;
+    case "table":
+      return c.rows.map((r) => { const cell = r.cells[0]; return typeof cell === "object" ? cell.text : (cell ?? ""); }).join(" · ");
+    case "stack":
+      return c.items.map((i) => i.title).join(" ↓ ");
+    case "flash":
+      return `flash on ${c.node}`;
+    case "coin":
+      return c.stops.map((s) => s.node).join(" → ");
   }
 };
 

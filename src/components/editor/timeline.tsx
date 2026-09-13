@@ -609,6 +609,22 @@ export function Timeline({
                         >
                           {clip.enabled ? "Disable" : "Enable"}
                         </ContextMenuItem>
+                        {clip.component && (
+                          <>
+                            <ContextMenuSeparator />
+                            <ContextMenuItem
+                              onClick={() => {
+                                // Everything one macro call or storyboard component made, as one undo step.
+                                const refs = project.tracks.flatMap((t) =>
+                                  t.locked ? [] : t.clips.filter((c) => c.component === clip.component && c.scene === clip.scene).map((c) => ({ trackId: t.id, clipId: c.id })),
+                                );
+                                refs.forEach((r, i) => dispatch({ type: "deleteClip", ref: r }, i > 0));
+                              }}
+                            >
+                              Delete all of “{clip.component}”
+                            </ContextMenuItem>
+                          </>
+                        )}
                         {clip.kind === "media" && asset?.hasAudio && onAutoCaption && (
                           <>
                             <ContextMenuSeparator />

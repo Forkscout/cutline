@@ -16,7 +16,7 @@
  */
 
 import { clipBox, visibleClips } from "./compositor";
-import { readProperty, valueAt } from "./keyframes";
+import { clipAt, readProperty, valueAt } from "./keyframes";
 import { shapeClip, textClip, type Action } from "./project";
 import { shapeStyleFor, textStyleFor, themeOf } from "./themes";
 import type { Clip, ClipRef, ClipRole, Keyframe, Project, ShapeKind, TextAnimation, Theme, Track, Transition } from "./types";
@@ -32,8 +32,11 @@ export interface Font {
 export interface MacroContext {
   /** The live project, read again after every commit. */
   project(): Project;
-  /** Stamped on every clip made, when a storyboard compile is making them. */
-  tag?: { scene: string; component: string };
+  /**
+   * Stamped on every clip made: a storyboard compile's scene and component, or
+   * the component one tool call makes, so it can be moved or deleted whole.
+   */
+  tag?: { scene?: string; component: string };
   commit(action: Action): void;
   /** Width of one line of text, in the project's pixels. */
   measure(text: string, font: Font): number;
@@ -78,6 +81,10 @@ const keyframe = (property: string, time: number, value: number, easing: Keyfram
   easing,
 });
 const dissolve = (duration: number): Transition => ({ type: "dissolve", duration, easing: "ease" });
+
+/** A flash ring's life, and a coin's longest trip between two stops, in seconds. */
+const FLASH = 0.7;
+const TRAVEL = 0.9;
 
 /* -------------------------------------------------------------- the frame */
 
@@ -231,7 +238,7 @@ class Build {
   add(clip: Clip, role: ClipRole): Placed {
     clip.role = role;
     if (this.ctx.tag) {
-      clip.scene = this.ctx.tag.scene;
+      if (this.ctx.tag.scene) clip.scene = this.ctx.tag.scene;
       clip.component = this.ctx.tag.component;
     }
     const trackId = this.trackFor(clip.start, clip.start + clip.duration);
@@ -248,7 +255,15 @@ class Build {
     size: number,
     start: number,
     end: number,
-    o: { align?: "left" | "center" | "right"; anim?: TextAnimation; lineHeight?: number; pad?: number; weight?: number; spacing?: number } = {},
+    o: {
+      align?: "left" | "center" | "right";
+      anim?: TextAnimation;
+      lineHeight?: number;
+      pad?: number;
+      weight?: number;
+      spacing?: number;
+      keyframes?: Keyframe[];
+    } = {},
   ): Placed {
     const { theme, W, H } = this.f;
     const clip = textClip(start, Math.max(0.1, end - start));
@@ -269,26 +284,31 @@ class Build {
     clip.transform = { ...clip.transform, x: at.x / W, y: at.y / H };
     clip.textAnimation = o.anim ?? theme.motion.enter;
     clip.transitionOut = dissolve(theme.motion.exit);
+    if (o.keyframes) clip.keyframes.push(...o.keyframes);
     return this.add(clip, role);
   }
 
-  /** A shape centred at (cx, cy), w by h project pixels. "grow" draws it from its start along its direction. */
+  /**
+   * A shape centred at (cx, cy), w by h project pixels. "grow" draws it from
+   * its start along its direction; "flash" pops it in with a ring.
+   */
   shape(
     role: ClipRole,
     kind: ShapeKind,
     box: { cx: number; cy: number; w: number; h: number; rotation?: number },
     start: number,
     end: number,
-    enter: "rise" | "grow" | "pop" | "fade" = "rise",
+    enter: "rise" | "grow" | "pop" | "fade" | "flash" = "rise",
+    extra: { name?: string; path?: string; opacity?: number } = {},
   ): Placed {
     const { theme, W, H, u } = this.f;
     const clip = shapeClip(start, Math.max(0.1, end - start));
-    clip.name = role;
-    clip.shape = { ...clip.shape!, kind, fill: "rgba(0,0,0,0)", stroke: "rgba(0,0,0,0)", strokeWidth: 0, cornerRadius: 0, ...shapeStyleFor(role, theme) };
+    clip.name = extra.name ?? role;
+    clip.shape = { ...clip.shape!, kind, fill: "rgba(0,0,0,0)", stroke: "rgba(0,0,0,0)", strokeWidth: 0, cornerRadius: 0, ...shapeStyleFor(role, theme), ...(extra.path ? { path: extra.path } : {}) };
     const scaleX = box.w / (W * 0.3);
     const scaleY = box.h / (H * 0.3);
     const rotation = box.rotation ?? 0;
-    clip.transform = { ...clip.transform, x: box.cx / W, y: box.cy / H, scale: 1, scaleX, scaleY, rotation };
+    clip.transform = { ...clip.transform, x: box.cx / W, y: box.cy / H, scale: 1, scaleX, scaleY, rotation, ...(extra.opacity !== undefined ? { opacity: extra.opacity } : {}) };
     clip.transitionOut = dissolve(theme.motion.exit);
     if (enter === "grow") {
       const rad = (rotation * Math.PI) / 180;
@@ -307,11 +327,31 @@ class Build {
       clip.transitionIn = dissolve(0.4);
       if (enter === "rise") {
         clip.keyframes.push(keyframe("transform.y", 0, (box.cy + 24 * u) / H, "easeOut"), keyframe("transform.y", 0.5, box.cy / H, "linear"));
-      } else if (enter === "pop") {
+      } else if (enter === "pop" || enter === "flash") {
         clip.keyframes.push(keyframe("transform.scale", 0, 0.6, "easeOut"), keyframe("transform.scale", 0.45, 1, "linear"));
       }
     }
-    return this.add(clip, role);
+    const placed = this.add(clip, role);
+    if (enter === "flash") this.flash(box, start + 0.15, kind === "ellipse" ? "ellipse" : "rectangle", clip.shape.cornerRadius);
+    return placed;
+  }
+
+  /** A ring that grows out of a box and fades: on whatever just arrived or changed. */
+  flash(box: { cx: number; cy: number; w: number; h: number }, at: number, kind: "ellipse" | "rectangle" = "ellipse", radius = 0): Placed {
+    const { theme, W, H, u } = this.f;
+    const clip = shapeClip(Math.max(0, at), FLASH);
+    clip.name = "flash";
+    clip.shape = { ...clip.shape!, kind, cornerRadius: radius, ...shapeStyleFor("flash", theme) };
+    clip.transform = { ...clip.transform, x: box.cx / W, y: box.cy / H, scale: 1, scaleX: box.w / (W * 0.3), scaleY: box.h / (H * 0.3), opacity: 0.9 };
+    // A node grows to 1.9×; a wide card by about the same margin, not to twice its width.
+    const grow = 1 + 0.9 * Math.min(1, (140 * u) / Math.max(box.w, box.h, 1));
+    clip.keyframes.push(
+      keyframe("transform.scale", 0, 1, "easeOut"),
+      keyframe("transform.scale", FLASH, grow, "linear"),
+      keyframe("transform.opacity", 0, 0.9, "easeOut"),
+      keyframe("transform.opacity", FLASH, 0, "linear"),
+    );
+    return this.add(clip, "flash");
   }
 
   result(bottom?: number): MacroResult {
@@ -868,26 +908,91 @@ export function addSplit(ctx: MacroContext, a: SplitArgs): MacroResult {
   return { clips: [...build.clips, ...result.clips], bottom: result.bottom ?? Math.round(cardsTop), notes: [...build.notes, ...result.notes] };
 }
 
-/** A line from one point to another, as a shape box. */
+/** Where a line between two circles leaves the first's rim and meets the second's. */
+function rims(x1: number, y1: number, x2: number, y2: number, r1 = 0, r2 = 0) {
+  const len = Math.hypot(x2 - x1, y2 - y1) || 1;
+  const ux = (x2 - x1) / len;
+  const uy = (y2 - y1) / len;
+  return { ax: x1 + ux * r1, ay: y1 + uy * r1, bx: x2 - ux * r2, by: y2 - uy * r2 };
+}
+
+/** A line from one point to another, as a shape box: a line is drawn along its width, then rotated. */
 function lineBox(x1: number, y1: number, x2: number, y2: number, r1 = 0, r2 = 0) {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const len = Math.hypot(dx, dy) || 1;
-  const ux = dx / len;
-  const uy = dy / len;
-  const ax = x1 + ux * r1;
-  const ay = y1 + uy * r1;
-  const bx = x2 - ux * r2;
-  const by = y2 - uy * r2;
-  return { cx: (ax + bx) / 2, cy: (ay + by) / 2, w: Math.max(1, Math.hypot(bx - ax, by - ay)), h: 4, rotation: (Math.atan2(dy, dx) * 180) / Math.PI };
+  const { ax, ay, bx, by } = rims(x1, y1, x2, y2, r1, r2);
+  return { cx: (ax + bx) / 2, cy: (ay + by) / 2, w: Math.max(1, Math.hypot(bx - ax, by - ay)), h: 4, rotation: (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI };
 }
 
 export interface TreeArgs {
   end: number;
-  nodes: { id: string; label: string; parent?: string | null; at: number; tone?: "accent" | "positive" | "neutral"; note?: string }[];
-  moves?: { node: string; parent: string; at: number }[];
+  nodes: { id: string; label: string; parent?: string | null; at: number; tone?: "accent" | "positive" | "neutral"; note?: string; flash?: boolean }[];
+  moves?: { node: string; parent: string; at: number; flash?: boolean }[];
   y?: number;
   size?: number;
+  /** Draw the empty seats and edges faintly, this many levels below the root. */
+  ghost?: number;
+}
+
+type Seats = Map<string, { x: number; y: number; depth: number }>;
+
+/**
+ * The seats of a complete tree as deep as `ghost` asks, with as many children
+ * to a node as the busiest node has: where each node sits — its parent's seat,
+ * by its place among the children — and one faint path holding every seat and
+ * edge, so the rest of the matrix is one clip however many seats it has.
+ */
+function ghostSeats(a: TreeArgs, parents: Map<string, string | null>, zone: Zone, top: number, gapY: number, size: number, u: number) {
+  const roots = a.nodes.filter((n) => !parents.get(n.id));
+  if (roots.length !== 1) throw new MacroError("ghost draws the rest of one tree: give the tree exactly one root.");
+  const kids = (map: Map<string, string | null>, id: string) => a.nodes.filter((n) => map.get(n.id) === id).map((n) => n.id);
+  const depthOf = (id: string): number => {
+    const parent = parents.get(id);
+    return parent ? depthOf(parent) + 1 : 0;
+  };
+  const branching = Math.max(2, ...a.nodes.map((n) => kids(parents, n.id).length));
+  const levels = Math.max(a.ghost ?? 0, ...a.nodes.map((n) => depthOf(n.id)));
+  const seats = (branching ** (levels + 1) - 1) / (branching - 1);
+  if (seats > 121) throw new MacroError(`A ${branching}-way tree ${levels} levels deep has ${seats} seats, too many to read. Use a smaller ghost.`);
+  const notes: string[] = [];
+  const width = zone.x1 - zone.x0;
+  let d = size;
+  const narrowest = width / branching ** levels;
+  if (d > narrowest * 0.8) {
+    d = Math.max(28 * u, narrowest * 0.8);
+    notes.push(`Nodes are ${Math.round(d / u)} px across so ${branching ** levels} seats fit along the bottom row.`);
+  }
+  const seatX = (level: number, seat: number) => zone.x0 + ((seat + 0.5) * width) / branching ** level;
+  const seatY = (level: number) => top + d / 2 + level * gapY;
+  const radius = (level: number) => (level === 0 ? d * 1.15 : d) / 2;
+  const layout = (map: Map<string, string | null>): Seats => {
+    const pos: Seats = new Map();
+    const place = (id: string, level: number, seat: number) => {
+      pos.set(id, { x: seatX(level, seat), y: seatY(level), depth: level });
+      kids(map, id).forEach((k, i) => place(k, level + 1, seat * branching + i));
+    };
+    for (const n of a.nodes) if (map.has(n.id) && !map.get(n.id)) place(n.id, 0, 0);
+    return pos;
+  };
+  // The path is written in its own box, 0..1 each way; an arc's radii too, so a seat stays round.
+  const bh = levels * gapY + 2 * radius(0);
+  const by0 = seatY(0) - radius(0);
+  const X = (x: number) => ((x - zone.x0) / width).toFixed(5);
+  const Y = (y: number) => ((y - by0) / bh).toFixed(5);
+  const parts: string[] = [];
+  for (let level = 0; level <= levels; level += 1) {
+    for (let seat = 0; seat < branching ** level; seat += 1) {
+      const x = seatX(level, seat);
+      const y = seatY(level);
+      const r = radius(level);
+      const rx = (r / width).toFixed(5);
+      const ry = (r / bh).toFixed(5);
+      parts.push(`M${X(x + r)} ${Y(y)}A${rx} ${ry} 0 1 0 ${X(x - r)} ${Y(y)}A${rx} ${ry} 0 1 0 ${X(x + r)} ${Y(y)}`);
+      if (level > 0) {
+        const e = rims(seatX(level - 1, Math.floor(seat / branching)), seatY(level - 1), x, y, radius(level - 1), r);
+        parts.push(`M${X(e.ax)} ${Y(e.ay)}L${X(e.bx)} ${Y(e.by)}`);
+      }
+    }
+  }
+  return { d, levels, notes, layout, path: parts.join(""), box: { cx: zone.x0 + width / 2, cy: by0 + bh / 2, w: width, h: bh } };
 }
 
 /**
@@ -905,9 +1010,17 @@ export function addTree(ctx: MacroContext, a: TreeArgs): MacroResult {
   for (const n of a.nodes) if (n.parent && !ids.has(n.parent)) throw new MacroError(`Node ${n.id} names a parent ${n.parent} that is not in the tree.`);
   for (const m of a.moves ?? []) if (!ids.has(m.node) || !ids.has(m.parent)) throw new MacroError(`A move names a node that is not in the tree: ${m.node} → ${m.parent}.`);
 
-  const d = (a.size ?? 96) * u;
+  let d = (a.size ?? 96) * u;
   const gapY = 190 * u;
-  const layout = (parents: Map<string, string | null>) => {
+  const initialParents = new Map(a.nodes.map((n) => [n.id, n.parent ?? null] as const));
+  const finalParents = new Map(initialParents);
+  for (const m of a.moves ?? []) finalParents.set(m.node, m.parent);
+  const ghost = a.ghost ? ghostSeats(a, finalParents, zone, top, gapY, d, u) : null;
+  if (ghost) {
+    d = ghost.d;
+    build.notes.push(...ghost.notes);
+  }
+  const layout = ghost ? ghost.layout : (parents: Map<string, string | null>): Seats => {
     const children = new Map<string | null, string[]>();
     for (const n of a.nodes) {
       const p = parents.get(n.id) ?? null;
@@ -939,9 +1052,6 @@ export function addTree(ctx: MacroContext, a: TreeArgs): MacroResult {
     return pos;
   };
 
-  const initialParents = new Map(a.nodes.map((n) => [n.id, n.parent ?? null] as const));
-  const finalParents = new Map(initialParents);
-  for (const m of a.moves ?? []) finalParents.set(m.node, m.parent);
   const moving = new Map((a.moves ?? []).map((m) => [m.node, m] as const));
   // Stable layout without the movers, then the movers: where they arrive (beside
   // the first root when they come in unattached) and where they end up.
@@ -959,6 +1069,8 @@ export function addTree(ctx: MacroContext, a: TreeArgs): MacroResult {
   };
   const positionOf = (id: string) => (moving.has(id) ? start0(id) : settled.get(id)!);
   const MOVE = 1.8;
+
+  if (ghost) build.shape("ghost", "path", ghost.box, first, a.end, "fade", { path: ghost.path, opacity: 0.7, name: "empty seats" });
 
   // Connectors first, so the nodes cover their ends.
   for (const n of a.nodes) {
@@ -980,7 +1092,8 @@ export function addTree(ctx: MacroContext, a: TreeArgs): MacroResult {
     const nodeRole: ClipRole = tone === "accent" ? "node-accent" : tone === "positive" ? "node-positive" : "node";
     const textRole: ClipRole = tone === "accent" ? "label-accent" : tone === "positive" ? "label-positive" : "label";
     const placed = [
-      build.shape(nodeRole, "ellipse", { cx: from.x, cy: from.y, w: size, h: size }, n.at, a.end, "pop"),
+      // Named for its id, so add_flash and add_coin can find it.
+      build.shape(nodeRole, "ellipse", { cx: from.x, cy: from.y, w: size, h: size }, n.at, a.end, n.flash ? "flash" : "pop", { name: `node ${n.id}` }),
       build.text(textRole, n.label, { x: from.x, y: from.y }, Math.round(theme.type.body * 0.9), n.at + 0.1, a.end, { align: "center", anim: "fade" }),
       ...(n.note ? [build.text("muted", n.note, { x: from.x, y: from.y + size / 2 + 30 * u }, Math.round(theme.type.body * 0.8), n.at + 0.3, a.end, { align: "center", anim: "fade" })] : []),
     ];
@@ -1000,9 +1113,10 @@ export function addTree(ctx: MacroContext, a: TreeArgs): MacroResult {
         );
         ctx.commit({ type: "patchClip", ref: { trackId: p.trackId, clipId: p.clipId }, patch: { keyframes: keys } });
       }
+      if (move.flash) build.flash({ cx: to.x, cy: to.y, w: size, h: size }, move.at + MOVE);
     }
   }
-  const depth = Math.max(...[...settled.values()].map((p) => p.depth));
+  const depth = Math.max(ghost?.levels ?? 0, ...[...settled.values()].map((p) => p.depth));
   return build.result(top + depth * gapY + d + (a.nodes.some((n) => n.note) ? 60 * u : 0));
 }
 
@@ -1016,5 +1130,326 @@ export interface FooterArgs {
 export function addFooter(ctx: MacroContext, a: FooterArgs): MacroResult {
   const { f, zone, build } = start(ctx, a.start, a.end);
   build.text("footer", a.text.toUpperCase(), { x: zone.x0, y: (REFERENCE_HEIGHT - 68) * f.u }, 16, a.start, a.end, { anim: "fade", spacing: 3 });
+  return build.result();
+}
+
+/* ------------------------------------------------ tables, stacks, motion */
+
+/** Seconds a line of a table or a stack takes to arrive. */
+const REVEAL = 0.4;
+
+/** Row height of a table, in lines of its type. */
+const ROW = 1.75;
+
+/** Times made to run down the page: an item never arrives before the one above it. */
+function inOrder(times: number[]): { times: number[]; late: boolean } {
+  let floor = Number.NEGATIVE_INFINITY;
+  let late = false;
+  const ordered = times.map((t) => {
+    if (t < floor - 0.01) late = true;
+    floor = Math.max(floor, t);
+    return floor;
+  });
+  return { times: ordered, late };
+}
+
+/**
+ * `text.reveal` keys that bring a block's lines in at their times, seconds
+ * into a clip that starts at `start`. Lines arriving together stagger, one
+ * waits for the one before it to land, and once the last has landed every
+ * line shows — so a line added by hand later is not hidden for good.
+ */
+function revealKeys(times: number[], start: number): Keyframe[] {
+  const keys: Keyframe[] = [];
+  let shown = 0;
+  let free = start;
+  for (let i = 0; i < times.length; ) {
+    let together = 1;
+    while (i + together < times.length && Math.abs(times[i + together]! - times[i]!) < 0.05) together += 1;
+    const at = Math.max(times[i]!, free);
+    const span = Math.min(1.2, REVEAL + 0.12 * (together - 1));
+    keys.push(keyframe("text.reveal", at - start, shown, "easeOut"));
+    shown += together;
+    keys.push(keyframe("text.reveal", at - start + span, shown, "hold"));
+    free = at + span;
+    i += together;
+  }
+  keys.push(keyframe("text.reveal", free - start + 0.01, 999, "hold"));
+  return keys;
+}
+
+export interface TableArgs {
+  end: number;
+  columns: { header?: string; align?: "left" | "center" | "right" }[];
+  rows: { at: number; cells: (string | { text: string; at: number })[] }[];
+  highlight?: number[];
+  y?: number;
+  size?: number;
+}
+
+/**
+ * A table: a header over each column, rows arriving on their words, and a
+ * cell with its own time arriving then — a column that fills in later. Each
+ * column is one clip whose lines `text.reveal` brings in, so a 9 × 3 table
+ * takes seven tracks where a clip per cell took thirty-seven.
+ */
+export function addTable(ctx: MacroContext, a: TableArgs): MacroResult {
+  const n = a.columns.length;
+  if (a.rows.some((r) => r.cells.length > n)) throw new MacroError(`A row has more cells than the ${n} columns.`);
+  for (const r of a.highlight ?? []) {
+    if (r < 0 || r >= a.rows.length) throw new MacroError(`highlight names row ${r}, but rows count from 0 and there are ${a.rows.length}.`);
+  }
+  const cellOf = (row: TableArgs["rows"][number], c: number) => {
+    const cell = row.cells[c];
+    return typeof cell === "object" ? cell : { text: cell ?? "", at: row.at };
+  };
+  const first = Math.min(...a.rows.flatMap((r) => [r.at, ...r.cells.map((_, c) => cellOf(r, c).at)]));
+  const { f, zone, build, top } = start(ctx, first, a.end, a.y);
+  const { theme, u } = f;
+  const t = theme.type;
+
+  let late = false;
+  const columns = a.columns.map((col, c) => {
+    const ordered = inOrder(a.rows.map((r) => cellOf(r, c).at));
+    late ||= ordered.late;
+    return { ...col, texts: a.rows.map((r) => cellOf(r, c).text), times: ordered.times };
+  });
+  if (late) build.notes.push("A cell was timed before the one above it in its column; it arrives just after that one.");
+
+  const headerText = (h: string) => (t.kickerUppercase ? h.toUpperCase() : h);
+  const headerFont = fontOf(theme, "display", theme.weights.kicker, t.kicker, u, t.kickerSpacing);
+  const labelled = n > 1;
+  const weightOf = (c: number) => (c === 0 && labelled ? 700 : theme.weights.body);
+  const widthsAt = (size: number) =>
+    columns.map((col, c) =>
+      Math.max(col.header ? ctx.measure(headerText(col.header), headerFont) : 0, ...col.texts.map((x) => ctx.measure(x, fontOf(theme, "body", weightOf(c), size, u)))),
+    );
+  const avail = zone.x1 - zone.x0;
+  const minGap = 40 * u;
+  let size = a.size ?? t.body;
+  let widths = widthsAt(size);
+  const needed = () => widths.reduce((sum, w) => sum + w, 0) + minGap * (n - 1);
+  for (let tries = 0; tries < 4 && needed() > avail; tries += 1) {
+    size = Math.round(size * 0.9);
+    widths = widthsAt(size);
+  }
+  if (needed() > avail) build.notes.push("The table is wider than its space: shorten the cells, or use fewer columns.");
+  const natural = widths.reduce((sum, w) => sum + w, 0);
+  const gap = n > 1 ? Math.min(120 * u, Math.max(minGap, (avail - natural) / (n - 1))) : 0;
+  const tableW = natural + gap * (n - 1);
+  const numeric = (x: string) => /^[\s₹$€£¥+\-−~≈]*\d/.test(x);
+  const alignOf = (c: number) => columns[c]!.align ?? (c > 0 && columns[c]!.texts.every((x) => !x.trim() || numeric(x)) ? "right" : "left");
+  const anchorX = (c: number) => {
+    const left = zone.x0 + widths.slice(0, c).reduce((sum, w) => sum + w, 0) + gap * c;
+    const align = alignOf(c);
+    return align === "left" ? left : align === "right" ? left + widths[c]! : left + widths[c]! / 2;
+  };
+
+  const header = columns.some((col) => col.header);
+  const headerH = header ? t.kicker * u * 1.3 : 0;
+  const ruleY = top + headerH + 14 * u;
+  const rowsTop = header ? ruleY + 12 * u : top;
+  const rowH = size * u * ROW;
+  const middle = zone.x0 + tableW / 2;
+
+  // Behind the text first: the rule, then the cards that highlight rows.
+  if (header) build.shape("connector", "line", { cx: middle, cy: ruleY, w: tableW, h: 4 }, first, a.end, "grow");
+  for (const r of a.highlight ?? []) {
+    build.shape("card-accent", "rectangle", { cx: middle, cy: rowsTop + (r + 0.5) * rowH, w: tableW + 40 * u, h: rowH - 6 * u }, columns[0]!.times[r]!, a.end, "fade");
+  }
+  columns.forEach((col, c) => {
+    if (!col.header) return;
+    build.text("kicker", headerText(col.header), { x: anchorX(c), y: top + headerH / 2 }, t.kicker, Math.max(first, col.times[0]! - 0.1), a.end, {
+      align: alignOf(c),
+      anim: "fade",
+      spacing: t.kickerSpacing,
+    });
+  });
+  columns.forEach((col, c) => {
+    const begin = col.times[0]!;
+    build.text(c === 0 && labelled ? "label" : "body", col.texts.join("\n"), { x: anchorX(c), y: rowsTop + (rowH * col.texts.length) / 2 }, size, begin, a.end, {
+      align: alignOf(c),
+      anim: "none",
+      lineHeight: ROW,
+      weight: weightOf(c),
+      keyframes: revealKeys(col.times, begin),
+    });
+  });
+  return build.result(rowsTop + rowH * a.rows.length);
+}
+
+export interface StackArgs {
+  end: number;
+  items: { at: number; title: string; value?: string; tone?: "accent" | "neutral" }[];
+  connectors?: string[];
+  y?: number;
+  width?: number;
+}
+
+/**
+ * Cards stacked down the space, each arriving on its word, a value on the
+ * right of each and a label in the gap between two ("↓ ×6"). The titles, the
+ * values and the gap labels are one clip each, spaced to sit in their cards:
+ * six cards take nine tracks, not twenty-three.
+ */
+export function addStack(ctx: MacroContext, a: StackArgs): MacroResult {
+  const { f, zone, build, top } = start(ctx, Math.min(...a.items.map((i) => i.at)), a.end, a.y);
+  const { theme, u } = f;
+  const n = a.items.length;
+  const ordered = inOrder(a.items.map((i) => i.at));
+  if (ordered.late) build.notes.push("A card was timed before the one above it; it arrives just after that one.");
+  const cardW = Math.min(zone.x1 - zone.x0, (a.width ?? 760) * u);
+  const pad = 32 * u;
+  const font = (size: number) => fontOf(theme, "body", 700, size, u);
+  const widest = (size: number) => Math.max(...a.items.map((i) => ctx.measure(i.title, font(size)) + (i.value ? ctx.measure(i.value, font(size)) + 32 * u : 0)));
+  let size = theme.type.body;
+  for (let tries = 0; tries < 4 && widest(size) > cardW - 2 * pad; tries += 1) size = Math.round(size * 0.9);
+  if (widest(size) > cardW - 2 * pad) build.notes.push("A card's title and value do not fit on one line: shorten them.");
+  const labels = Array.from({ length: Math.max(0, n - 1) }, (_, i) => a.connectors?.[i] ?? "");
+  const labelled = labels.some((l) => l.trim());
+  const cardH = size * u * 2.3;
+  const gap = labelled ? size * u * 1.9 : 18 * u;
+  const step = cardH + gap;
+  const cx = zone.x0 + cardW / 2;
+  // The centre of a block of lines one step apart, whose first line is centred at y0.
+  const blockY = (y0: number, lines: number) => y0 + ((lines - 1) * step) / 2;
+
+  a.items.forEach((item, i) => {
+    build.shape(item.tone === "accent" ? "card-accent" : "card", "rectangle", { cx, cy: top + cardH / 2 + i * step, w: cardW, h: cardH }, ordered.times[i]!, a.end, "rise");
+  });
+  const arrive = ordered.times.map((time) => time + 0.1);
+  const rows = { anim: "none" as const, lineHeight: step / (size * u), weight: 700 };
+  build.text("label", a.items.map((i) => i.title).join("\n"), { x: zone.x0 + pad, y: blockY(top + cardH / 2, n) }, size, arrive[0]!, a.end, { ...rows, keyframes: revealKeys(arrive, arrive[0]!) });
+  if (a.items.some((i) => i.value)) {
+    build.text("label-accent", a.items.map((i) => i.value ?? "").join("\n"), { x: zone.x0 + cardW - pad, y: blockY(top + cardH / 2, n) }, size, arrive[0]!, a.end, {
+      ...rows,
+      align: "right",
+      keyframes: revealKeys(arrive, arrive[0]!),
+    });
+  }
+  if (labelled) {
+    const small = Math.round(size * 0.85);
+    const times = ordered.times.slice(1).map((time) => Math.max(ordered.times[0]!, time - 0.15));
+    build.text("muted", labels.join("\n"), { x: cx, y: blockY(top + cardH + gap / 2, n - 1) }, small, times[0]!, a.end, {
+      align: "center",
+      anim: "none",
+      lineHeight: step / (small * u),
+      keyframes: revealKeys(times, times[0]!),
+    });
+  }
+  return build.result(top + n * step - gap);
+}
+
+/** A clip, or a tree's node by the id add_tree was given — within a component, when two trees share ids. */
+export type Target = { trackId: string; clipId: string } | { node: string; component?: string };
+
+/** Where a target is drawn at a moment: its centre then, and its size once it has settled. */
+function locate(ctx: MacroContext, target: Target, time: number) {
+  const project = ctx.project();
+  let found: { track: Track; clip: Clip } | undefined;
+  if ("node" in target) {
+    const name = `node ${target.node}`;
+    found = project.tracks
+      .flatMap((track) =>
+        track.clips
+          .filter(
+            (c) =>
+              c.kind === "shape" &&
+              c.name === name &&
+              (!target.component || c.component === target.component) &&
+              (!ctx.tag?.scene || c.scene === ctx.tag.scene) &&
+              c.start <= time + 0.05 &&
+              c.start + c.duration > time,
+          )
+          .map((clip) => ({ track, clip })),
+      )
+      .sort((p, q) => q.clip.start - p.clip.start)[0];
+    if (!found) {
+      throw new MacroError(`No tree node "${target.node}" is on screen at ${time.toFixed(2)} s${target.component ? ` in ${target.component}` : ""}. Use an id add_tree was given, at a time after that node arrives.`);
+    }
+  } else {
+    const track = project.tracks.find((t) => t.id === target.trackId);
+    const clip = track?.clips.find((c) => c.id === target.clipId);
+    if (!track || !clip) throw new MacroError(`There is no clip ${target.clipId} on track ${target.trackId}.`);
+    found = { track, clip };
+  }
+  const { track, clip } = found;
+  const asset = project.assets.find((x) => x.id === clip.assetId);
+  const source = asset ? { width: asset.width, height: asset.height } : null;
+  const boxAt = (t: number) => clipBox(project, clipAt(clip, Math.max(0, Math.min(clip.duration, t - clip.start))), source, false);
+  const now = boxAt(time);
+  // Sized once an entrance like a pop has finished, so a ring is not drawn around a node still growing.
+  const settled = boxAt(Math.max(time, clip.start + 0.6));
+  if (!now || !settled) throw new MacroError("That clip has no size on screen to point at.");
+  const r = (now.rotation * Math.PI) / 180;
+  const lx = now.x + now.w / 2;
+  const ly = now.y + now.h / 2;
+  return {
+    trackIndex: project.tracks.indexOf(track),
+    cx: now.cx + lx * Math.cos(r) - ly * Math.sin(r),
+    cy: now.cy + lx * Math.sin(r) + ly * Math.cos(r),
+    w: settled.w,
+    h: settled.h,
+    kind: clip.shape?.kind === "ellipse" ? ("ellipse" as const) : ("rectangle" as const),
+    radius: clip.shape?.cornerRadius ?? 0,
+  };
+}
+
+export interface FlashArgs {
+  at: number;
+  target: Target;
+}
+
+/** A ring on something that just arrived or changed: it grows to about 1.9× and fades in 0.7 s. */
+export function addFlash(ctx: MacroContext, a: FlashArgs): MacroResult {
+  const spot = locate(ctx, a.target, a.at);
+  const build = new Build(ctx, frameOf(ctx), spot.trackIndex);
+  build.flash(spot, a.at, spot.kind, spot.radius);
+  return build.result();
+}
+
+export interface CoinArgs {
+  stops: { at: number; target: Target }[];
+  size?: number;
+}
+
+/**
+ * A small dot that fades in at the first stop, travels to each next one —
+ * arriving on its time, following a node that moves — and fades out at the
+ * last: a payment or a referral moving through a tree.
+ */
+export function addCoin(ctx: MacroContext, a: CoinArgs): MacroResult {
+  if (a.stops.length < 2) throw new MacroError("A coin needs at least two stops.");
+  const stops = [...a.stops].sort((p, q) => p.at - q.at);
+  const spots = stops.map((stop) => locate(ctx, stop.target, stop.at));
+  const f = frameOf(ctx);
+  const { W, H, u, theme } = f;
+  const build = new Build(ctx, f, Math.max(...spots.map((spot) => spot.trackIndex)));
+  const d = (a.size ?? 22) * u;
+  const begin = Math.max(0, stops[0]!.at - 0.3);
+  const landed = stops[stops.length - 1]!.at;
+  const clip = shapeClip(begin, landed + 0.4 - begin);
+  clip.name = "coin";
+  clip.shape = { ...clip.shape!, kind: "ellipse", ...shapeStyleFor("coin", theme) };
+  clip.transform = { ...clip.transform, x: spots[0]!.cx / W, y: spots[0]!.cy / H, scale: 1, scaleX: d / (W * 0.3), scaleY: d / (H * 0.3), opacity: 0 };
+  const local = (t: number) => t - begin;
+  const keys: Keyframe[] = [
+    keyframe("transform.opacity", 0, 0, "easeOut"),
+    keyframe("transform.opacity", local(stops[0]!.at), 1, "hold"),
+    keyframe("transform.opacity", local(landed + 0.05), 1, "easeIn"),
+    keyframe("transform.opacity", local(landed + 0.4), 0, "linear"),
+  ];
+  stops.forEach((stop, i) => {
+    const spot = spots[i]!;
+    if (i > 0) {
+      // It waits at a stop, then leaves in time to arrive at the next on its word.
+      const previous = spots[i - 1]!;
+      const leaves = stop.at - Math.min(TRAVEL, stop.at - stops[i - 1]!.at);
+      keys.push(keyframe("transform.x", local(leaves), previous.cx / W, "ease"), keyframe("transform.y", local(leaves), previous.cy / H, "ease"));
+    }
+    keys.push(keyframe("transform.x", local(stop.at), spot.cx / W, "linear"), keyframe("transform.y", local(stop.at), spot.cy / H, "linear"));
+  });
+  clip.keyframes = keys;
+  build.add(clip, "coin");
   return build.result();
 }

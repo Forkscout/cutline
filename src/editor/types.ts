@@ -227,6 +227,13 @@ export interface TextStyle {
   shadowColor: string;
   background: string | null;
   backgroundPadding: number;
+  /**
+   * How many lines are shown, from the top: line i is drawn at reveal − i
+   * opacity (0..1), rising into place as it arrives. Unset shows every line.
+   * Keyframed as `text.reveal`, it brings rows in on their words while the
+   * whole column stays one clip — a table is a clip per column, not per cell.
+   */
+  reveal?: number;
 }
 
 export type TextAnimation =
@@ -240,7 +247,7 @@ export type TextAnimation =
 
 /* ------------------------------------------------------------------ shape */
 
-export type ShapeKind = "rectangle" | "ellipse" | "line" | "triangle" | "star" | "arrow";
+export type ShapeKind = "rectangle" | "ellipse" | "line" | "triangle" | "star" | "arrow" | "path";
 
 export interface ShapeStyle {
   kind: ShapeKind;
@@ -250,6 +257,13 @@ export interface ShapeStyle {
   /** Star and polygon only. */
   points: number;
   cornerRadius: number;
+  /**
+   * Path only: SVG path data in the shape's own box — 0..1 across and down
+   * from its top-left — so it resizes with the shape and its stroke keeps its
+   * width. Arc radii are in the same units: rx r/w and ry r/h draw a circle.
+   * One clip can hold many marks: every empty seat and edge of a tree.
+   */
+  path?: string;
 }
 
 /* ------------------------------------------------------------ transitions */
@@ -514,9 +528,22 @@ export type StoryComponent = { id: string; until?: Anchor; y?: number } & (
   | { type: "tally"; items: Item<{ label: string; count: number; value: string }>[] }
   | {
       type: "tree";
-      nodes: Item<{ id: string; label: string; parent?: string | null; tone?: "accent" | "positive" | "neutral"; note?: string }>[];
-      moves?: Item<{ node: string; parent: string }>[];
+      nodes: Item<{ id: string; label: string; parent?: string | null; tone?: "accent" | "positive" | "neutral"; note?: string; flash?: boolean }>[];
+      moves?: Item<{ node: string; parent: string; flash?: boolean }>[];
+      /** Draw the empty seats and edges faintly, this many levels below the root. */
+      ghost?: number;
     }
+  | {
+      type: "table";
+      columns: { header?: string; align?: "left" | "center" | "right" }[];
+      /** A cell with its own anchor arrives then: a column that fills in later. */
+      rows: Item<{ cells: (string | { text: string; at: Anchor })[] }>[];
+      /** Rows set on an accent card, counted from 0. */
+      highlight?: number[];
+    }
+  | { type: "stack"; items: Item<{ title: string; value?: string; tone?: "accent" | "neutral" }>[]; connectors?: string[] }
+  | { type: "flash"; at: Anchor; node: string; tree?: string }
+  | { type: "coin"; stops: Item<{ node: string }>[]; tree?: string }
   | { type: "lower_third"; at: Anchor; name: string; role?: string }
 );
 
@@ -685,7 +712,10 @@ export type ClipRole =
   | "bar"
   | "bar-accent"
   | "scrim"
-  | "lower-third-plate";
+  | "lower-third-plate"
+  | "flash"
+  | "coin"
+  | "ghost";
 
 /* ---------------------------------------------------------------- helpers */
 

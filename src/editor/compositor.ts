@@ -704,23 +704,23 @@ export interface ClipBox {
 
 let measureCtx: CanvasRenderingContext2D | null = null;
 
-function textMetrics(project: Project, clip: Clip): { w: number; h: number } {
+function textMetrics(project: Project, clip: Clip): { w: number; h: number; widths: number[] } {
   const style = clip.text;
-  if (!style) return { w: 0, h: 0 };
+  if (!style) return { w: 0, h: 0, widths: [] };
   if (!measureCtx) {
     measureCtx = makeCanvas(2, 2).getContext("2d") as CanvasRenderingContext2D | null;
   }
   const unit = project.height / REFERENCE_HEIGHT;
   const fontSize = style.fontSize * unit * clip.transform.scale;
   const lines = style.content.split("\n");
-  if (!measureCtx) return { w: fontSize * 6, h: fontSize * lines.length * style.lineHeight };
+  if (!measureCtx) return { w: fontSize * 6, h: fontSize * lines.length * style.lineHeight, widths: lines.map(() => fontSize * 6) };
   measureCtx.font = `${style.italic ? "italic " : ""}${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
   // Spaced the way it is drawn: a tracked-out kicker is measurably wider.
   if ("letterSpacing" in measureCtx) {
     (measureCtx as unknown as { letterSpacing: string }).letterSpacing = `${style.letterSpacing * unit * clip.transform.scale}px`;
   }
-  const width = Math.max(...lines.map((l) => measureCtx!.measureText(l).width), 1);
-  return { w: width, h: lines.length * fontSize * style.lineHeight };
+  const widths = lines.map((l) => measureCtx!.measureText(l).width);
+  return { w: Math.max(...widths, 1), h: lines.length * fontSize * style.lineHeight, widths };
 }
 
 export function clipBox(
@@ -764,6 +764,29 @@ export function clipBox(
     h: size.h,
     rotation: t.rotation,
   };
+}
+
+/**
+ * Each line of a text clip with something on it, boxed around its glyphs where
+ * it is drawn. A table column is one clip whose rows sit in different cards,
+ * so checks that ask what a piece of text overlaps read lines, not the block.
+ */
+export function textLineBoxes(project: Project, clip: Clip): { index: number; text: string; box: ClipBox }[] {
+  const style = clip.text;
+  const whole = clip.kind === "text" ? clipBox(project, clip, null, false) : null;
+  if (!style || !whole) return [];
+  const fontSize = style.fontSize * (project.height / REFERENCE_HEIGHT) * clip.transform.scale;
+  const lineHeight = fontSize * style.lineHeight;
+  const { widths } = textMetrics(project, clip);
+  const out: { index: number; text: string; box: ClipBox }[] = [];
+  style.content.split("\n").forEach((line, index) => {
+    if (!line.trim()) return;
+    const w = widths[index] ?? 0;
+    const x = style.align === "left" ? 0 : style.align === "right" ? -w : -w / 2;
+    const y = whole.y + index * lineHeight + (lineHeight - fontSize) / 2;
+    out.push({ index, text: line.trim(), box: { cx: whole.cx, cy: whole.cy, x, y, w, h: fontSize, rotation: whole.rotation } });
+  });
+  return out;
 }
 
 /** True when a point in project pixels falls inside the clip's drawn box. */
@@ -868,8 +891,14 @@ function drawText(
     ctx.shadowColor = style.shadowColor;
   }
 
+  // Lines arrive one by one as reveal passes them, each fading and rising into place.
+  const base = ctx.globalAlpha;
+  const rise = Math.min(lineHeight * 0.35, 24 * unit);
   lines.forEach((line, i) => {
-    const y = startY + i * lineHeight;
+    const shown = style.reveal === undefined ? 1 : Math.max(0, Math.min(1, style.reveal - i));
+    if (shown <= 0) return;
+    ctx.globalAlpha = base * shown;
+    const y = startY + i * lineHeight + (1 - shown) * rise;
     if (style.strokeWidth > 0) {
       ctx.lineWidth = style.strokeWidth * unit;
       ctx.strokeStyle = style.strokeColor;
@@ -908,8 +937,12 @@ function drawShape(
   ctx.translate(t.x * project.width, t.y * project.height);
   if (t.rotation !== 0) ctx.rotate((t.rotation * Math.PI) / 180);
 
+  let path: Path2D | null = null;
   ctx.beginPath();
   switch (shape.kind) {
+    case "path":
+      path = boxPath(shape.path ?? "", w, h);
+      break;
     case "ellipse":
       ctx.ellipse(0, 0, w / 2, h / 2, 0, 0, Math.PI * 2);
       break;
@@ -958,15 +991,38 @@ function drawShape(
 
   if (shape.kind !== "line") {
     ctx.fillStyle = shape.fill;
-    ctx.fill();
+    if (path) ctx.fill(path);
+    else ctx.fill();
   }
   if (shape.strokeWidth > 0 || shape.kind === "line") {
     ctx.lineWidth = Math.max(1, shape.strokeWidth * unit);
     ctx.strokeStyle = shape.stroke;
     ctx.lineCap = "round";
-    ctx.stroke();
+    ctx.lineJoin = "round";
+    if (path) ctx.stroke(path);
+    else ctx.stroke();
   }
   ctx.restore();
+}
+
+const unitPaths = new Map<string, Path2D>();
+
+/**
+ * A path written in its box's own units, drawn w × h about the centre. The
+ * scaling is applied to the geometry, not the context, so a stroke is as wide
+ * on a wide box as on a tall one. Path2D and DOMMatrix exist in workers too.
+ */
+function boxPath(d: string, w: number, h: number): Path2D | null {
+  if (!d || typeof Path2D === "undefined" || typeof DOMMatrix === "undefined") return null;
+  let unit = unitPaths.get(d);
+  if (!unit) {
+    if (unitPaths.size > 200) unitPaths.clear();
+    unit = new Path2D(d);
+    unitPaths.set(d, unit);
+  }
+  const out = new Path2D();
+  out.addPath(unit, new DOMMatrix([w, 0, 0, h, -w / 2, -h / 2]));
+  return out;
 }
 
 /* ---------------------------------------------------------------- captions */

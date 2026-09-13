@@ -8,6 +8,7 @@
  * client to confirm, with where it appears and what was heard.
  */
 
+import { lineArrivesAt } from "./keyframes";
 import { wordsOnTimeline, type TimelineWord } from "./transcript";
 import type { Fact, Project } from "./types";
 
@@ -67,14 +68,21 @@ export function scanNumbers(project: Project): OnScreenNumber[] {
       const content = clip.kind === "text" ? (clip.text?.content ?? "") : "";
       // A lone digit, or a numbered label like 01, is a step, not a figure.
       if (!content || /^\s*0?\d\s*$/.test(content)) continue;
-      for (const value of new Set(numbersIn(content))) {
-        let entry = byValue.get(value);
-        if (!entry) {
-          entry = { value, shown: [], heard: false, excerpt: "", fact: null };
-          byValue.set(value, entry);
+      // A table column is one clip whose rows arrive at their own times: a figure is on screen from when its line arrives.
+      const seen = new Set<string>();
+      content.split("\n").forEach((line, index) => {
+        for (const value of numbersIn(line)) {
+          const arrives = lineArrivesAt(clip, index);
+          if (seen.has(value) || !Number.isFinite(arrives)) continue;
+          seen.add(value);
+          let entry = byValue.get(value);
+          if (!entry) {
+            entry = { value, shown: [], heard: false, excerpt: "", fact: null };
+            byValue.set(value, entry);
+          }
+          entry.shown.push({ trackId: track.id, clipId: clip.id, start: clip.start + arrives, end: clip.start + clip.duration, text: content });
         }
-        entry.shown.push({ trackId: track.id, clipId: clip.id, start: clip.start, end: clip.start + clip.duration, text: content });
-      }
+      });
     }
   }
   for (const entry of byValue.values()) {

@@ -162,6 +162,12 @@ export function Inspector({
                 <NumberSlider label="Line height" value={clip.text.lineHeight} min={0.8} max={2.5} step={0.05}
                   dispatch={dispatch}
                   onChange={(v, c) => dispatch({ type: "setText", ref: selected, patch: { lineHeight: v } }, c)} />
+                {(clip.text.reveal !== undefined || clip.keyframes.some((k) => k.property === "text.reveal")) && (
+                  <NumberSlider label="Lines shown" path="text.reveal" clip={clip} clipRef={selected} localTime={localTime}
+                    value={clip.text.reveal ?? clip.text.content.split("\n").length} min={0} max={clip.text.content.split("\n").length} step={0.05}
+                    format={(v) => (v >= clip.text!.content.split("\n").length ? "all" : v.toFixed(1))} dispatch={dispatch}
+                    onChange={(v, c) => dispatch({ type: "setText", ref: selected, patch: { reveal: v } }, c)} />
+                )}
                 <ColorField label="Colour" value={clip.text.color}
                   onChange={(v) => dispatch({ type: "setText", ref: selected, patch: { color: v } })} />
                 <ColorField label="Stroke" value={clip.text.strokeColor}
@@ -198,7 +204,7 @@ export function Inspector({
                     onValueChange={(v) => dispatch({ type: "setShape", ref: selected, patch: { kind: v as never } })}>
                     <SelectTrigger className="h-7 text-[11px]"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {["rectangle", "ellipse", "line", "triangle", "star", "arrow"].map((k) => (
+                      {["rectangle", "ellipse", "line", "triangle", "star", "arrow", ...(clip.shape.kind === "path" ? ["path"] : [])].map((k) => (
                         <SelectItem key={k} value={k}>{k}</SelectItem>
                       ))}
                     </SelectContent>

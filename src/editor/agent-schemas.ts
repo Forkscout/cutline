@@ -85,17 +85,19 @@ export const textPatch = z
     shadowColor: color,
     background: color.nullable(),
     backgroundPadding: z.number().min(0),
+    reveal: z.number().min(0).describe("Lines shown from the top: line i is drawn at reveal − i opacity. Keyframe text.reveal to bring rows in one by one"),
   })
   .partial();
 
 export const shapePatch = z
   .object({
-    kind: z.enum(["rectangle", "ellipse", "line", "triangle", "star", "arrow"]),
+    kind: z.enum(["rectangle", "ellipse", "line", "triangle", "star", "arrow", "path"]),
     fill: color,
     stroke: color,
     strokeWidth: z.number().min(0),
     points: z.number().int().min(3).describe("Stars only"),
     cornerRadius: z.number().min(0),
+    path: z.string().max(20000).describe("kind path: SVG path data in the shape's own box, 0..1 across and down from its top-left; arc radii too (rx r/w, ry r/h is a circle)"),
   })
   .partial();
 
@@ -135,7 +137,7 @@ export const clipRole = z.enum([
   "speaker", "kicker", "title", "subtitle", "body", "muted", "footer", "chip", "chip-positive", "chip-neutral",
   "stat", "label", "label-accent", "label-positive", "number", "icon-positive", "icon-negative", "lower-third-name", "lower-third-role",
   "card", "card-accent", "connector", "connector-accent", "arrow", "node", "node-accent", "node-positive", "bar",
-  "bar-accent", "scrim", "lower-third-plate",
+  "bar-accent", "scrim", "lower-third-plate", "flash", "coin", "ghost",
 ]);
 
 export const clipPatch = z
@@ -375,12 +377,33 @@ export const storyComponent = z.discriminatedUnion("type", [
           parent: z.string().nullable().optional().describe("Omit for a root, or for a node that arrives unattached and moves later"),
           tone: tone3.optional(),
           note: z.string().max(40).optional().describe("A line under the node"),
+          flash: z.boolean().optional().describe("A ring flashes on it as it arrives"),
         }),
       )
       .min(1)
       .max(15),
-    moves: z.array(z.object({ at: anchor, node: z.string(), parent: z.string() })).max(5).optional(),
+    moves: z.array(z.object({ at: anchor, node: z.string(), parent: z.string(), flash: z.boolean().optional().describe("A ring flashes where it lands") })).max(5).optional(),
+    ghost: z.number().int().min(1).max(4).optional().describe("Also draw the empty seats and edges faintly, this many levels below the root"),
   }),
+  z.object({
+    ...common,
+    type: z.literal("table"),
+    columns: z.array(z.object({ header: z.string().max(40).optional(), align: z.enum(["left", "center", "right"]).optional() })).min(1).max(6),
+    rows: z
+      .array(z.object({ at: anchor, cells: z.array(z.union([z.string().max(60), z.object({ text: z.string().max(60), at: anchor })])).min(1).max(6) }))
+      .min(1)
+      .max(14)
+      .describe("A cell given as { text, at } arrives at its own word — a column that fills in later"),
+    highlight: z.array(z.number().int().min(0)).max(4).optional().describe("Rows set on an accent card, from 0"),
+  }),
+  z.object({
+    ...common,
+    type: z.literal("stack"),
+    items: z.array(z.object({ at: anchor, title: z.string().min(1).max(60), value: z.string().max(24).optional(), tone: z.enum(["accent", "neutral"]).optional() })).min(1).max(8),
+    connectors: z.array(z.string().max(24)).max(7).optional().describe("Labels in the gaps between cards, top to bottom: '↓ ×6'"),
+  }),
+  z.object({ ...common, type: z.literal("flash"), at: anchor, node: z.string().min(1).max(30), tree: z.string().max(60).optional().describe("The tree component the node is in; default any in this scene") }),
+  z.object({ ...common, type: z.literal("coin"), stops: z.array(z.object({ at: anchor, node: z.string().min(1).max(30) })).min(2).max(8), tree: z.string().max(60).optional() }),
   z.object({ ...common, type: z.literal("lower_third"), at: anchor, name: z.string().min(1).max(60), role: z.string().max(80).optional() }),
 ]);
 

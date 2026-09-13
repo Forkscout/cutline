@@ -154,10 +154,36 @@ function compileComponent(ctx: macros.MacroContext, c: StoryComponent, words: Ti
     case "tree": {
       const nodes = c.nodes.map((n) => ({ ...n, at: at(n.at) }));
       const moves = (c.moves ?? []).map((m) => ({ ...m, at: resolveAnchor(m.at, words, nodes.find((n) => n.id === m.node)?.at ?? from) }));
-      return macros.addTree(ctx, { end: until, nodes, moves, ...y });
+      return macros.addTree(ctx, { end: until, nodes, moves, ...(c.ghost ? { ghost: c.ghost } : {}), ...y });
     }
     case "lower_third":
       return macros.addLowerThird(ctx, { start: at(c.at), end: until, name: c.name, ...(c.role ? { role: c.role } : {}) });
+    case "table": {
+      const rows = c.rows.map((r) => ({ ...r, at: at(r.at) }));
+      // A cell with its own word is looked for after its row, and after the cell above it.
+      const after = c.columns.map(() => from);
+      return macros.addTable(ctx, {
+        end: until,
+        columns: c.columns,
+        rows: rows.map((r) => ({
+          at: r.at,
+          cells: r.cells.map((cell, i) => {
+            if (typeof cell === "string") return cell;
+            const t = resolveAnchor(cell.at, words, Math.max(r.at, after[i] ?? from));
+            after[i] = t;
+            return { text: cell.text, at: t };
+          }),
+        })),
+        ...(c.highlight ? { highlight: c.highlight } : {}),
+        ...y,
+      });
+    }
+    case "stack":
+      return macros.addStack(ctx, { end: until, items: c.items.map((i) => ({ ...i, at: at(i.at) })), ...(c.connectors ? { connectors: c.connectors } : {}), ...y });
+    case "flash":
+      return macros.addFlash(ctx, { at: at(c.at), target: { node: c.node, ...(c.tree ? { component: c.tree } : {}) } });
+    case "coin":
+      return macros.addCoin(ctx, { stops: c.stops.map((s) => ({ at: at(s.at), target: { node: s.node, ...(c.tree ? { component: c.tree } : {}) } })) });
   }
 }
 

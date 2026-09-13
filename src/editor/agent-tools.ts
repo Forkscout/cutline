@@ -353,7 +353,7 @@ export const ACTION_TOOLS = {
     name: "set_storyboard",
     title: "Set storyboard",
     description:
-      "Writes the whole storyboard: scenes in order, each with a layout (panel, full, pip, backdrop) and components (title, points, chips, stat, statement, flow, cards, split, bars, tally, tree, lower_third) anchored to the words they land on. Nothing is drawn until compile_storyboard. Anchors: { word } is the first time that phrase is said after the previous anchor — copy it from the transcript tool, in the transcript's own spelling; { time } is a timeline time. guide('storyboard') has the format and a worked scene.",
+      "Writes the whole storyboard: scenes in order, each with a layout (panel, full, pip, backdrop) and components (title, points, chips, stat, statement, flow, cards, split, bars, tally, tree, table, stack, flash, coin, lower_third) anchored to the words they land on. Nothing is drawn until compile_storyboard. Anchors: { word } is the first time that phrase is said after the previous anchor — copy it from the transcript tool, in the transcript's own spelling; { time } is a timeline time. guide('storyboard') has the format and a worked scene.",
     input: { storyboard: s.storyboard },
   }),
   setFact: tool({
@@ -685,16 +685,115 @@ export const EDITOR_TOOLS = {
     name: "add_tree",
     title: "Add tree",
     description:
-      "A tree of nodes drawn level by level, each arriving on its word — a referral matrix, the seats under a member. A node with no parent is a root, or arrives unattached; a move carries a node to a new parent at a time (a spill to the first empty seat).",
+      "A tree of nodes drawn level by level, each arriving on its word — a referral matrix, the seats under a member. A node with no parent is a root, or arrives unattached; a move carries a node to a new parent at a time (a spill to the first empty seat). flash rings a node as it arrives or lands; ghost draws the empty seats and edges faintly, so the tree reads as a matrix. Node ids name the nodes for add_flash and add_coin.",
     input: {
       end: s.seconds("When the scene ends"),
       nodes: z
-        .array(z.object({ id: z.string().min(1).max(30), label: z.string().min(1).max(12), parent: z.string().nullable().optional(), at: s.seconds("When it arrives"), tone: z.enum(["accent", "positive", "neutral"]).optional(), note: z.string().max(40).optional() }))
+        .array(
+          z.object({
+            id: z.string().min(1).max(30),
+            label: z.string().min(1).max(12),
+            parent: z.string().nullable().optional(),
+            at: s.seconds("When it arrives"),
+            tone: z.enum(["accent", "positive", "neutral"]).optional(),
+            note: z.string().max(40).optional(),
+            flash: z.boolean().optional().describe("A ring flashes on it as it arrives"),
+          }),
+        )
         .min(1)
         .max(15),
-      moves: z.array(z.object({ node: z.string(), parent: z.string(), at: s.seconds("When it arrives") })).max(5).optional(),
+      moves: z.array(z.object({ node: z.string(), parent: z.string(), at: s.seconds("When it arrives"), flash: z.boolean().optional().describe("A ring flashes where it lands") })).max(5).optional(),
+      ghost: z.number().int().min(1).max(4).optional().describe("Also draw the empty seats and edges, faintly, this many levels below the root"),
       y: z.number().min(0).optional(),
       size: z.number().min(40).max(160).optional().describe("Node diameter, px at 1080p; default 96"),
+    },
+  }),
+  addTable: tool({
+    name: "add_table",
+    title: "Add table",
+    description:
+      "A table: a header over each column, then rows arriving on their words — prices by level, a comparison. A cell given as { text, at } arrives at its own time, so a column can fill in later. Each column is one clip whose rows keyframes on text.reveal bring in: a 9 × 3 table is a handful of tracks, not one per cell. Numbers right-align unless align says otherwise; highlight sets rows (from 0) on an accent card.",
+    input: {
+      end: s.seconds("When the scene ends"),
+      columns: z.array(z.object({ header: z.string().max(40).optional(), align: z.enum(["left", "center", "right"]).optional() })).min(1).max(6),
+      rows: z
+        .array(
+          z.object({
+            at: s.seconds("When the row arrives"),
+            cells: z.array(z.union([z.string().max(60), z.object({ text: z.string().max(60), at: s.seconds("When this cell arrives") })])).min(1).max(6),
+          }),
+        )
+        .min(1)
+        .max(14),
+      highlight: z.array(z.number().int().min(0)).max(4).optional(),
+      y: z.number().min(0).optional(),
+      size: z.number().min(12).max(80).optional().describe("px at 1080p; default the theme's body size, smaller when the table does not fit"),
+    },
+  }),
+  addStack: tool({
+    name: "add_stack",
+    title: "Add stack",
+    description:
+      "Cards stacked top to bottom, each arriving on its word: a title, a value on the right, and labels in the gaps between cards (\"↓ ×6\") — levels, stages, a funnel. Titles, values and gap labels are one clip each.",
+    input: {
+      end: s.seconds("When the scene ends"),
+      items: z.array(z.object({ at: s.seconds("When it arrives"), title: z.string().min(1).max(60), value: z.string().max(24).optional(), tone: z.enum(["accent", "neutral"]).optional() })).min(1).max(8),
+      connectors: z.array(z.string().max(24)).max(7).optional().describe("Labels between the cards, top to bottom"),
+      y: z.number().min(0).optional(),
+      width: z.number().min(240).max(1600).optional().describe("Card width, px at 1080p; default 760, or the space"),
+    },
+  }),
+  addFlash: tool({
+    name: "add_flash",
+    title: "Add flash",
+    description:
+      "A ring on something that just arrived or changed: it grows to about 1.9× and fades in 0.7 s. Name a tree node by its id (from add_tree, or a tree component in the storyboard) or any clip by trackId and clipId — no coordinates.",
+    input: {
+      at: s.seconds("When it flashes"),
+      node: z.string().max(30).optional(),
+      component: z.string().max(80).optional().describe("The tree's component, when two trees share node ids"),
+      trackId: z.string().optional(),
+      clipId: z.string().optional(),
+    },
+  }),
+  addCoin: tool({
+    name: "add_coin",
+    title: "Add coin",
+    description:
+      "A small dot that fades in at the first stop, travels to each next stop arriving on its time, and fades out at the last — money or a referral moving through a tree. Stops name tree nodes by id, or clips by trackId and clipId, so there is nothing to measure; a node that moves is followed.",
+    input: {
+      stops: z
+        .array(
+          z.object({
+            at: s.seconds("When the coin reaches this stop"),
+            node: z.string().max(30).optional(),
+            component: z.string().max(80).optional(),
+            trackId: z.string().optional(),
+            clipId: z.string().optional(),
+          }),
+        )
+        .min(2)
+        .max(8),
+      size: z.number().min(8).max(60).optional().describe("Diameter, px at 1080p; default 22"),
+    },
+  }),
+  deleteComponent: tool({
+    name: "delete_component",
+    title: "Delete component",
+    description:
+      "Deletes every clip one macro call or storyboard component made: the component a macro's result names, or a storyboard component's id with its scene. Refused when part of it is on a track the user locked.",
+    input: { component: z.string().min(1).max(80), scene: z.string().max(60).optional() },
+  }),
+  moveComponent: tool({
+    name: "move_component",
+    title: "Move component",
+    description: "Moves every clip of a component together: by seconds along the timeline, and dx/dy across the frame (px at 1080p), keyframed positions included.",
+    input: {
+      component: z.string().min(1).max(80),
+      scene: z.string().max(60).optional(),
+      by: z.number().optional().describe("Seconds; negative is earlier"),
+      dx: z.number().optional(),
+      dy: z.number().optional(),
     },
   }),
   addBackdrop: tool({
@@ -927,7 +1026,7 @@ export const SERVER_INSTRUCTIONS = `Cutline is a video editor open in the user's
 2. If the brief has unanswered questions, ask the client (ask_client shows a form in their editor, or ask in chat) and record answers with set_brief. Do not build on guesses about layout, brand or tone.
 3. Look at the source before deciding: analyze_media, transcribe then transcript, contact_sheet.
 4. Propose a treatment in a few lines and show the look with preview_themes. Build one scene as a styleframe and get a yes before the full build.
-5. Call start_turn with the instruction before editing, so the whole change is one undo step. Write the edit as a storyboard — set_storyboard, get_storyboard, compile_storyboard; guide('storyboard') — rather than hundreds of calls: scenes anchored to the words, compiled the same way every time, changed one scene at a time with set_scene. The macros (layout_move, add_title, add_points, add_chips, add_stat, add_flow, add_bars, add_lower_third) are the same vocabulary for one-off additions; raw tools remain for anything custom.
+5. Call start_turn with the instruction before editing, so the whole change is one undo step. Write the edit as a storyboard — set_storyboard, get_storyboard, compile_storyboard; guide('storyboard') — rather than hundreds of calls: scenes anchored to the words, compiled the same way every time, changed one scene at a time with set_scene. The macros (layout_move, add_title, add_points, add_chips, add_stat, add_flow, add_bars, add_table, add_stack, add_tree, add_flash, add_coin, add_lower_third) are the same vocabulary for one-off additions; raw tools remain for anything custom.
 6. Verify before you report: lint_scene on what you built, fixing until it is clean; render_frame or contact_sheet across everything you touched; audio_envelope after timing edits. list_facts shows numbers on screen nobody said: ask the client, record answers with set_fact or correct_fact, and report any still unconfirmed.
 7. export_video only once the checks look right; give the user the path it returns.
 8. When the client leaves notes, list_notes, fix each, resolve_note with what you did, and save_version after the pass — \"v3 · notes pass\".

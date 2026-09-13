@@ -443,6 +443,20 @@ with room, and tags each clip's role. One reducer action per clip, inside the
 agent's turn. The TreeFlux edit took ~1300 raw calls; the same scenes are a
 few dozen macro calls.
 
+**One clip can carry a whole column.** Two clips on screen at once never share
+a track, so a price table made a clip per cell took a real project from 28
+video tracks to 44 in one pass. `text.reveal`, a keyframable number, is how many
+of a text clip's lines are shown, each fading and rising in as it is passed: so
+`add_table` is a clip per column and `add_stack` one clip for all its titles.
+The `path` shape kind holds many marks in one clip, in the box's own units, which
+is how `add_tree({ ghost })` draws every empty seat and edge. Lint and the fact
+check read such clips line by line (`textLineBoxes`, `lineArrivesAt`), from when
+each line arrives. A group clip, with children that have their own transforms,
+is the fuller answer and is not built; `docs/adr/0001-group-clips.md` says why.
+Every macro call is one component (`table-3f2a`), which `delete_component`,
+`move_component` and the timeline's menu act on whole. `add_flash` and
+`add_coin` find tree nodes by id, because node shapes are named `node <id>`.
+
 **Web fonts reach the export.** Canvas text uses a face only once it has
 loaded, and the export worker has no document, so it never saw the page's CSS
 fonts: exports drew fallbacks while the preview showed the real face.

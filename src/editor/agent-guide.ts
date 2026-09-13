@@ -97,7 +97,9 @@ Rhythm, from the TreeFlux edit:
     body: `- **One idea per scene.** A kicker (2–4 words, the section), a title (under ~8 words), then at most 3–6 supporting items.
 - **Time to the word.** Use transcript word times: an item appears when its word is said, not before the sentence starts. Titles land 0.1–0.3 s after the scene's first word.
 - **Stagger** related items by theme.motion.stagger; exits happen together at the scene's end, 0.15 s before the next scene's first entrance.
-- **Pick the device for the idea**: a sequence → add_flow; a list of rules or steps → add_points; tags or options → add_chips; one striking number → add_stat; a ladder or comparison of numbers → add_bars (scale "log" when they span orders of magnitude); names → add_lower_third.
+- **Pick the device for the idea**: a sequence → add_flow; a list of rules or steps → add_points; tags or options → add_chips; one striking number → add_stat; a ladder or comparison of numbers → add_bars (scale "log" when they span orders of magnitude); figures in rows and columns → add_table; levels or stages with a count between them → add_stack; a matrix or referral tree → add_tree (ghost draws the empty rest of it); names → add_lower_third.
+- **Motion that explains**: add_flash rings what just arrived or changed (or flash: true on a tree's node or move); add_coin carries a dot from node to node, arriving on each word — money moving up a matrix. Both name tree nodes by id, never coordinates.
+- **Each call is one component.** A macro's result names it (table-3f2a); move_component and delete_component act on all of it, and so does the timeline's menu for the client.
 - **Numbers are exact or absent.** If the transcript was unsure, ask; say so in your report.
 - **Write in the brief's on-screen language**, short and concrete. Paraphrase the speaker; do not caption them in the graphics.
 - Keep graphics clear of faces and inside the margins; the macros do both when the speaker is in a panel.`,
@@ -127,7 +129,7 @@ Around the scenes: \`{ "version": 1, "footer": "Brand · Topic", "subjectX": 0.5
 
 **Layouts.** panel — the speaker in a rounded side card (side, subjectX), graphics beside it. full — the speaker full frame, no graphics region (lower thirds only). pip — a small speaker in a corner. backdrop — a full-frame graphic background over the speaker, for B-roll style scenes. The speaker's moves are rebuilt from the whole storyboard on every compile: into each scene's layout 0.3 s before it starts, and back to full frame across any gap of 3 s or more between scenes — so leave gaps where the speaker should be seen.
 
-**Components.** title, points, chips, stat, statement, flow, cards, split, bars, tally, tree, lower_third — the add_* macros, with anchors in place of times. Each stacks below the one before it in the scene; y places one by hand; until (an anchor) ends one before the scene does. Component ids are unique within a scene.
+**Components.** title, points, chips, stat, statement, flow, cards, split, bars, tally, tree, table, stack, flash, coin, lower_third — the add_* macros, with anchors in place of times. A table cell written \`{ "text": "4 referrals", "at": { "word": "four" } }\` arrives on its own word, after its row. flash and coin name nodes of a tree earlier in the same scene (tree gives its component id when a scene has two). Each stacks below the one before it in the scene; y places one by hand; until (an anchor) ends one before the scene does. Component ids are unique within a scene.
 
 **The loop.**
 1. transcript, then set_storyboard with the whole thing.
@@ -160,13 +162,29 @@ Then audio_envelope if you changed timing. Report what you checked and what you 
 **Notes and versions.** The client pins notes on the picture (a marker with a pin). list_notes shows each with what is under the pin — the clip, its scene and component — so you know what to change. Fix it, then resolve_note with one sentence on what you did; answer a question without resolving it. save_version before a big change and after each round of notes (\"v3 · notes pass\"); restore_version when a direction did not work — History keeps what it replaced. A track the user locked is theirs: edits to it are refused, so ask before working there.`,
   },
 
+  shapes: {
+    title: "Placing shapes by hand",
+    summary: "The geometry the compositor uses, for what no macro covers.",
+    body: `Reach for a macro first; these are the facts they are built on, for the cases none covers. The compositor draws exactly this, and render_frame is the check.
+
+- **A shape's box** is the frame × 0.3 × scale, times scaleX across and scaleY down, centred on transform x and y (0..1 of the frame). A 200 × 80 px card in a 1920 × 1080 frame is scale 1, scaleX 200 / 576, scaleY 80 / 324.
+- **A line** is drawn along its box's width through its centre, then turned by rotation (degrees, clockwise): its length is its width.
+- **An edge between two nodes runs rim to rim.** Start at the first centre plus its radius towards the second, end at the second centre minus its radius; the line's centre is the midpoint, its width the distance between the ends, its rotation atan2(dy, dx).
+- **A picture or video fits** min(W · scale · scaleX / w, H · scale · scaleY / h) of its cropped source, inside the project's padding when it is the bottom layer.
+- **Text is anchored by its alignment**: a left-aligned line starts at x, a right-aligned one ends there. Lines are fontSize × lineHeight apart and the block is centred on y. Sizes are px at 1080p.
+- **Strokes do not scale** with the box: strokeWidth is px at 1080p on any size.
+- **Many marks, one clip.** Shape kind path takes SVG path data in the box's own units, 0..1 from its top-left — arc radii too, so rx r/w and ry r/h draw a circle. Every empty seat of a tree is one path.
+- **Rows arriving one by one, one clip.** Keyframe text.reveal from 0 to the number of lines: line i shows at reveal − i, fading and rising in. Two clips on screen at once can never share a track, so a clip per row is a track per row.
+- **Opacity** is transform.opacity, keyframed like any other number.`,
+  },
+
   gotchas: {
     title: "Things that bite",
     summary: "Hard-won details about the editor and the bridge.",
     body: `- **The tab is the source of truth.** Every tool edits the project open in the client's browser. If they switch projects in that tab, your calls go to the other project — check get_editor_state when in doubt. Never open the client's project in a second tab.
 - **One undo step per turn.** start_turn before editing, again for each new request.
 - **Long calls answer "running".** transcribe waits up to 90 s, then returns progress; call it again with the same assetId to keep waiting. ask_client does the same while the client fills the form.
-- **Tracks.** The macros find free overlay tracks and add more when needed; raw add_clip needs a track that has no clip overlapping in time, and later video tracks draw on top.
+- **Tracks.** The macros find free overlay tracks and add more when needed; raw add_clip needs a track that has no clip overlapping in time, and later video tracks draw on top. Every clip on screen at once needs its own track — prefer add_table, add_stack and path shapes, which put many marks in one clip.
 - **Keyframe times are clip-relative**, positions are 0..1 of the frame, sizes are pixels at 1080p.
 - **Text in a clip is one block**; wrap long lines with \\n yourself.
 - **Transcripts are cached** beside the file; transcribe({ force: true }) to redo one with another service.

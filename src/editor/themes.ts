@@ -407,6 +407,12 @@ export function shapeStyleFor(role: ClipRole, theme: Theme): Partial<ShapeStyle>
       return { fill: withAlpha(p.background, 0.78), strokeWidth: 0, cornerRadius: radius };
     case "lower-third-plate":
       return { fill: withAlpha(p.background, 0.86), stroke: p.line, strokeWidth: 1, cornerRadius: radius };
+    case "flash":
+      return { fill: "rgba(0,0,0,0)", stroke: p.accent, strokeWidth: Math.max(3, stroke) };
+    case "coin":
+      return { fill: p.accent, stroke: p.background, strokeWidth: 2 };
+    case "ghost":
+      return { fill: "rgba(0,0,0,0)", stroke: p.line, strokeWidth: 2 };
     default:
       return {};
   }

@@ -120,3 +120,16 @@ export function clipAt(clip: Clip, localTime: number): Clip {
   }
   return result;
 }
+
+/**
+ * When line `index` of a text clip has arrived, in seconds into the clip: the
+ * first moment `text.reveal` is half-way through that line. 0 when every line
+ * shows from the start, Infinity when this one never does.
+ */
+export function lineArrivesAt(clip: Clip, index: number): number {
+  if (keyframesFor(clip, "text.reveal").length === 0) return (clip.text?.reveal ?? Number.POSITIVE_INFINITY) >= index + 0.5 ? 0 : Number.POSITIVE_INFINITY;
+  for (let t = 0; t <= clip.duration; t += 1 / 30) {
+    if ((valueAt(clip, "text.reveal", t) ?? 0) >= index + 0.5) return t;
+  }
+  return Number.POSITIVE_INFINITY;
+}

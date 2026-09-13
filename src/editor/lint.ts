@@ -9,8 +9,8 @@
  */
 
 import { findSpeaker } from "./agent-macros";
-import { clipBox, visibleClips, type ClipBox } from "./compositor";
-import { clipAt } from "./keyframes";
+import { clipBox, textLineBoxes, visibleClips, type ClipBox } from "./compositor";
+import { clipAt, lineArrivesAt } from "./keyframes";
 import { renderFrames } from "./snapshot";
 import { sceneTimes } from "./storyboard";
 import { contrast, parseColor, toHex } from "./themes";
@@ -63,7 +63,12 @@ interface Placed {
   clip: Clip;
   rect: Rect;
   text: string;
+  /** Which line of a text clip, since lines are checked one by one. */
+  line?: number;
 }
+
+/** Marks that pass over other things on purpose: a coin travelling, a ring flashing. */
+const MOTION = new Set<string>(["coin", "flash"]);
 
 /** Frames rendered for contrast, at most: a long timeline is sampled, not rendered whole. */
 const MAX_FRAMES = 80;
@@ -106,9 +111,17 @@ function placed(project: Project, time: number): Placed[] {
     if (clip.kind !== "text" && clip.kind !== "shape") continue;
     const now = clipAt(clip, time - clip.start);
     if (now.transform.opacity < 0.05) continue;
+    if (clip.kind === "text") {
+      // Line by line: a table column is one clip, its rows in different cards and some not arrived yet.
+      for (const line of textLineBoxes(project, now)) {
+        if (now.text?.reveal !== undefined && now.text.reveal - line.index < 0.5) continue;
+        if (line.box.w > 0) out.push({ track, clip, rect: bounds(line.box), text: line.text, line: line.index });
+      }
+      continue;
+    }
     const box = clipBox(project, now, null, false);
     if (!box || box.w <= 0 || box.h <= 0) continue;
-    out.push({ track, clip, rect: bounds(box), text: clip.kind === "text" ? (clip.text?.content ?? "").trim() : "" });
+    out.push({ track, clip, rect: bounds(box), text: "" });
   }
   return out;
 }
@@ -226,13 +239,14 @@ export async function lintScene(
 
   for (const time of samples) {
     const here = placed(project, time);
-    for (const p of here) if (p.text && !firstSeen.has(p.clip.id)) firstSeen.set(p.clip.id, { time, p });
+    for (const p of here) if (p.text && !firstSeen.has(`${p.clip.id}:${p.line ?? 0}`)) firstSeen.set(`${p.clip.id}:${p.line ?? 0}`, { time, p });
 
     // Text on text; text running over the edge of a shape it is not inside.
     for (let i = 0; i < here.length; i += 1) {
       for (let j = i + 1; j < here.length; j += 1) {
         const a = here[i]!;
         const b = here[j]!;
+        if (a.clip === b.clip || MOTION.has(a.clip.role ?? "") || MOTION.has(b.clip.role ?? "")) continue;
         const texts = [a, b].filter((p) => p.text);
         if (texts.length === 0) continue;
         const overlap = area(intersect(a.rect, b.rect));
@@ -275,11 +289,15 @@ export async function lintScene(
 
   for (const { track, clip } of graphics) {
     const text = clip.kind === "text" ? (clip.text?.content ?? "").trim() : "";
-    const words = text.split(/\s+/).filter(Boolean).length;
-    if (words < 3) continue;
-    const needed = 0.6 + words / 3.2;
-    if (clip.duration < needed) {
-      add({ kind: "too-brief", severity: "warning", time: round(clip.start + Math.min(0.65, clip.duration / 2)), clips: [describe({ track, clip, text })], detail: `${words} words on screen for ${clip.duration.toFixed(1)} s; reading them takes about ${needed.toFixed(1)} s.`, fix: "Keep it up longer, or say it in fewer words." });
+    // A table's column is read a row at a time, each row from when it arrives.
+    const pieces = clip.keyframes.some((k) => k.property === "text.reveal")
+      ? (clip.text?.content ?? "").split("\n").map((line, i) => ({ words: line.split(/\s+/).filter(Boolean).length, shown: clip.duration - lineArrivesAt(clip, i) }))
+      : [{ words: text.split(/\s+/).filter(Boolean).length, shown: clip.duration }];
+    const brief = pieces.find((piece) => piece.words >= 3 && Number.isFinite(piece.shown) && piece.shown < 0.6 + piece.words / 3.2);
+    if (brief) {
+      const { words, shown } = brief;
+      const needed = 0.6 + words / 3.2;
+      add({ kind: "too-brief", severity: "warning", time: round(clip.start + Math.min(0.65, clip.duration / 2)), clips: [describe({ track, clip, text })], detail: `${words} words on screen for ${shown.toFixed(1)} s; reading them takes about ${needed.toFixed(1)} s.`, fix: "Keep it up longer, or say it in fewer words." });
     }
   }
 
