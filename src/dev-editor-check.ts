@@ -38,6 +38,7 @@ import { needsConfirming, numbersIn, scanNumbers } from "./editor/facts";
 import { lintScene } from "./editor/lint";
 import { brandOverrides, contrast, mergeTheme, paletteOf, themeById } from "./editor/themes";
 import { AnchorError, findPhrase, resolveAnchor } from "./editor/storyboard";
+import { afterCut, cutRange, lockedTracksIn, rangeOfWords, snapToWords } from "./editor/cut";
 import { exportProject } from "./editor/export";
 import type { Clip, ClipRef, Easing, MediaAsset, Project } from "./editor/types";
 
@@ -306,6 +307,127 @@ async function run() {
       shorter[0]!.start === 13.3 && worst(mid, shorter, 13.3, 29.99) < 1e-9, `worst ${worst(mid, shorter, 13.3, 29.99)}`);
     const longer = edit(shorter[0]!, (ref) => ({ type: "trimClip", ref, edge: "in", time: 11 }));
     check("and extending it back again does too", worst(mid, longer, 11, 29.99) < 1e-9, `worst ${worst(mid, longer, 11, 29.99)}`);
+  }
+
+  /* --- cutting a range of time ------------------------------------------ */
+  log("\ncutting a range", "dim");
+  {
+    const said = [["one", 0, 0.4], ["two", 0.6, 1.0], ["three", 1.2, 1.6], ["four", 2.0, 2.4], ["five", 2.6, 3.0], ["six", 3.2, 3.6], ["seven", 3.8, 4.2]] as const;
+    const take: MediaAsset = {
+      id: "cut-take", origin: { type: "file" }, name: "take", kind: "video", mimeType: "video/webm",
+      bytes: 1, durationSec: 5, hasVideo: true, hasAudio: true, width: 1920, height: 1080, frameRate: 30,
+      createdAt: 0, binId: null, tags: [], rating: 0, colorLabel: null, favorite: false,
+      transcript: {
+        version: 1, provider: "check", model: "none", language: "en", durationSec: 5, timing: "word", createdAt: 0,
+        words: said.map(([text, start, end]) => ({ text, start, end })),
+      },
+    };
+    const p = newProject("cut check");
+    p.assets = [take];
+    const picture = newMediaClip(take, 10);
+    // Into a side panel over 0.8 s and held, and a slower scale later: what a cut must not disturb.
+    picture.keyframes = [
+      { id: "kx0", property: "transform.x", time: 0, value: 0.5, easing: "ease" },
+      { id: "kx1", property: "transform.x", time: 0.8, value: 0.875, easing: "linear" },
+      { id: "ks0", property: "transform.scale", time: 1.5, value: 1, easing: "ease" },
+      { id: "ks1", property: "transform.scale", time: 3.5, value: 0.6, easing: "ease" },
+    ];
+    p.tracks.find((t) => t.kind === "video")!.clips = [picture];
+    const graphic = (start: number, duration: number, content: string) => {
+      const c = textClip(start, duration);
+      c.text!.content = content;
+      return c;
+    };
+    const titles = emptyTrack("video", "Titles");
+    titles.clips = [graphic(10.2, 0.6, "before"), graphic(11.0, 3.0, "across"), graphic(14.0, 1.0, "after")];
+    const extras = emptyTrack("video", "Extras");
+    extras.clips = [graphic(11.5, 0.5, "inside"), graphic(16.0, 1.0, "later")];
+    p.tracks = [...p.tracks, titles, extras];
+    p.markers = [
+      { id: "m1", time: 13.5, duration: 0, name: "after", note: "", color: "#ffffff" },
+      { id: "m2", time: 11.8, duration: 0, name: "inside", note: "", color: "#ffffff" },
+    ];
+    p.captions = [
+      { id: "c1", start: 10.0, end: 11.1, text: "one two" },
+      { id: "c2", start: 11.2, end: 12.4, text: "three four" },
+      { id: "c3", start: 12.6, end: 14.2, text: "five six seven" },
+    ];
+    p.inPoint = 11.5;
+    p.outPoint = 14.5;
+
+    const words = wordsOnTimeline(p);
+    const { from, to } = rangeOfWords(words, 2, 3);
+    check("cutting words runs from the middle of the pause before to the middle of the pause after",
+      Math.abs(from - 11.1) < 1e-9 && Math.abs(to - 12.5) < 1e-9, `${from}–${to}`);
+    check("a boundary inside a word moves to the nearer pause; one in a pause stays",
+      Math.abs(snapToWords(words, 11.3) - 11.1) < 1e-9 && Math.abs(snapToWords(words, 11.5) - 11.8) < 1e-9 && snapToWords(words, 11.9) === 11.9,
+      `${snapToWords(words, 11.3)} ${snapToWords(words, 11.5)} ${snapToWords(words, 11.9)}`);
+
+    const cut = cutRange(p, from, to);
+    const length = to - from;
+    const on = (name: string) => cut.tracks.find((t) => t.name === name)!.clips;
+    const texts = (list: Clip[]) => list.map((c) => `${c.text?.content}@${c.start.toFixed(2)}+${c.duration.toFixed(2)}`).join(" ");
+    check("every graphic after the cut moves left by exactly the removed length",
+      Math.abs(on("Titles").find((c) => c.text?.content === "after")!.start - (14 - length)) < 1e-9 &&
+        Math.abs(on("Extras").find((c) => c.text?.content === "later")!.start - (16 - length)) < 1e-9,
+      `${texts(on("Titles"))} | ${texts(on("Extras"))}`);
+    check("a graphic inside the cut goes, and one before it stays where it was",
+      !on("Extras").some((c) => c.text?.content === "inside") && on("Titles").some((c) => c.text?.content === "before" && c.start === 10.2));
+    const across = on("Titles").filter((c) => c.text?.content === "across");
+    check("a graphic across the cut is split at it, and its tail does not enter again",
+      across.length === 2 && Math.abs(across[0]!.start + across[0]!.duration - from) < 1e-9 && Math.abs(across[1]!.start - from) < 1e-9 &&
+        across[1]!.textAnimation === "none",
+      texts(across));
+
+    // The same source frame, with the same transform, at every moment that survives.
+    const pieces = cut.tracks.find((t) => t.kind === "video")!.clips;
+    let worst = 0;
+    let covered = 0;
+    for (let k = 0; k < 100; k += 1) {
+      const s = k * 0.05;
+      const before = 10 + s;
+      if (before > from - 1e-9 && before < to + 1e-9) continue;
+      const after = afterCut(before, from, to);
+      const piece = pieces.find(
+        (c) => after >= c.start - 1e-9 && after < c.start + c.duration - 1e-9 && Math.abs(c.inPoint + (after - c.start) * c.speed - s) < 1e-6,
+      );
+      if (!piece) continue;
+      covered += 1;
+      for (const property of ["transform.x", "transform.scale"]) {
+        worst = Math.max(worst, Math.abs((valueAt(picture, property, s) ?? 0) - (valueAt(piece, property, after - piece.start) ?? 0)));
+      }
+    }
+    check("the picture shows the same source frame with the same transform at every surviving moment",
+      pieces.length === 2 && covered >= 60 && worst < 1e-9, `${pieces.length} pieces, ${covered} moments, worst ${worst}`);
+
+    const joined = wordsOnTimeline(cut).map((w) => w.text).join(" ");
+    check("the transcript reads straight across the join", joined === "one two five six seven", joined);
+
+    check("markers, captions and the in and out points move with the cut",
+      Math.abs(cut.markers.find((m) => m.id === "m1")!.time - (13.5 - length)) < 1e-9 &&
+        Math.abs(cut.markers.find((m) => m.id === "m2")!.time - from) < 1e-9 &&
+        !cut.captions.some((c) => c.id === "c2") &&
+        Math.abs(cut.captions.find((c) => c.id === "c3")!.start - (12.6 - length)) < 1e-9 &&
+        Math.abs((cut.inPoint ?? -1) - from) < 1e-9 &&
+        Math.abs((cut.outPoint ?? -1) - (14.5 - length)) < 1e-9,
+      `markers ${cut.markers.map((m) => m.time.toFixed(2))} · captions ${cut.captions.map((c) => `${c.text}@${c.start.toFixed(2)}`)} · in ${cut.inPoint} out ${cut.outPoint}`);
+
+    const locked = { ...p, tracks: p.tracks.map((t) => (t.name === "Extras" ? { ...t, locked: true } : t)) };
+    check("a cut that would leave a locked track behind is refused and changes nothing",
+      lockedTracksIn(locked, from).length === 1 && reduce(locked, { type: "cutRange", from, to }) === locked);
+
+    const pair = newProject("cut links");
+    const v = newMediaClip(take, 0);
+    const a = newMediaClip(take, 0);
+    v.linkId = "take";
+    a.linkId = "take";
+    pair.tracks.find((t) => t.kind === "video")!.clips = [v];
+    pair.tracks.find((t) => t.kind === "audio")!.clips = [a];
+    const cutPair = cutRange(pair, 1, 2).tracks.flatMap((t) => t.clips);
+    const heads = cutPair.filter((c) => c.start === 0);
+    const tails = cutPair.filter((c) => c.start === 1);
+    check("a linked take stays linked on each side of a cut, as two groups",
+      heads.length === 2 && tails.length === 2 && heads.every((c) => c.linkId === "take") && tails[0]!.linkId === tails[1]!.linkId && tails[0]!.linkId !== "take");
   }
 
   /* --- linked clips: the lip-sync guarantee ------------------------ */

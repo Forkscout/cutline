@@ -26,9 +26,10 @@ import { clipBox, hitTest, visibleClips } from "./compositor";
 import { createEffect } from "./effects";
 import { exportProject } from "./export";
 import { audioEnvelope, describeChange, leanProject } from "./inspect";
-import { captionsForAsset, wordsOnTimeline, type Transcript } from "./transcript";
+import { captionsForAsset, wordsOnTimeline, type TimelineWord, type Transcript } from "./transcript";
 import { needsConfirming, scanNumbers } from "./facts";
 import { lintScene } from "./lint";
+import { lockedTracksIn, movesAt, rangeOfWords, snapToWords } from "./cut";
 import { listVersions, loadVersion, saveVersion } from "./persistence";
 import { RECIPES, recipeById } from "./recipes";
 import { applyBrandKit, applyRecipe, attachReference, type ApplyContext } from "./workspace-apply";
@@ -38,7 +39,7 @@ import { clipAt, readProperty } from "./keyframes";
 import { THEMES, brandOverrides, fontsInUse, mergeTheme, paletteOf, themeById, themeOf } from "./themes";
 import { themeSheet } from "./styleframes";
 import { analysisOf } from "./analyze";
-import { AnchorError, compileStoryboard, resolveAnchor } from "./storyboard";
+import { AnchorError, compileStoryboard, resolveAnchor, findPhrase, normalizeWord } from "./storyboard";
 import { askClient, type ClientQuestion } from "./client-questions";
 import { assetUrl } from "./media";
 import { renderFrames as drawFrames } from "./snapshot";
@@ -66,6 +67,19 @@ class ToolError extends Error {}
 
 type ActionOf<K extends Action["type"]> = Extract<Action, { type: K }>;
 type ToolArgs<K> = K extends ActionToolKey ? ArgsOf<(typeof ACTION_TOOLS)[K]> : never;
+/** What an action tool's executor wants said beside its result: warnings the action itself cannot carry. */
+const ACTION_NOTES = new WeakMap<object, string[]>();
+
+/** Refuses a cut that a locked track would be left behind by. */
+function assertCuttable(project: Project, from: number): void {
+  const locked = lockedTracksIn(project, from);
+  if (locked.length) {
+    throw new ToolError(
+      `${locked.map((t) => t.name).join(", ")} ${locked.length > 1 ? "are" : "is"} locked and ${locked.length > 1 ? "have" : "has"} clips after ${from.toFixed(2)} s. A cut closes the gap on every track, so it would leave ${locked.length > 1 ? "them" : "it"} behind, out of sync. Ask the user to unlock, or cut elsewhere.`,
+    );
+  }
+}
+
 type Executors = {
   [K in Action["type"]]: (args: ToolArgs<K>, project: Project) => ActionOf<K> | Promise<ActionOf<K>>;
 };
@@ -274,6 +288,21 @@ const EXECUTORS: Executors = {
     type: "setServices",
     patch: Object.fromEntries(Object.entries(a).map(([role, id]) => [role, id ?? undefined])),
   }),
+  cutRange: (a, project) => {
+    const words = a.snap === "words" ? wordsOnTimeline(project) : [];
+    const from = a.snap === "words" ? snapToWords(words, a.from) : a.from;
+    const to = a.snap === "words" ? snapToWords(words, a.to) : a.to;
+    if (!(to - from > 0.01)) throw new ToolError(`Nothing to cut between ${from.toFixed(2)} and ${to.toFixed(2)} s.`);
+    assertCuttable(project, from);
+    const action = { type: "cutRange" as const, from, to };
+    const notes = [
+      ...(from !== a.from || to !== a.to ? [`Moved off the words to ${from.toFixed(2)}–${to.toFixed(2)} s.`] : []),
+      ...movesAt(project, from),
+      ...movesAt(project, to),
+    ];
+    if (notes.length) ACTION_NOTES.set(action, notes);
+    return action;
+  },
   setTheme: async (a, project) => {
     const look = a.lookId ? await getItem("looks", a.lookId).catch(() => null) : null;
     if (a.lookId && !look) throw new ToolError(`There is no look ${a.lookId}; list_themes shows them.`);
@@ -627,7 +656,8 @@ export class AgentBridge {
     const executor = EXECUTORS[key] as (a: unknown, p: Project) => Action | Promise<Action>;
     const action = await executor(args, this.host.history().present);
     const { label, change } = this.commit(action);
-    return [json({ ok: true, undoStep: label, ...change })];
+    const notes = ACTION_NOTES.get(action);
+    return [json({ ok: true, undoStep: label, ...change, ...(notes ? { notes } : {}) })];
   }
 
   /** Applies an action as the agent's edit, joining the turn's undo step. */
@@ -824,6 +854,58 @@ export class AgentBridge {
         return [json(await this.macro((ctx) => macros.addSplit(ctx, raw as unknown as macros.SplitArgs)))];
       case "addTree":
         return [json(await this.macro((ctx) => macros.addTree(ctx, raw as unknown as macros.TreeArgs)))];
+      case "cutRanges": {
+        const words = raw.snap === "words" ? wordsOnTimeline(project) : [];
+        const asked = (raw.ranges as { from: number; to: number }[]).map((r) =>
+          raw.snap === "words" ? { from: snapToWords(words, r.from), to: snapToWords(words, r.to) } : { from: r.from, to: r.to },
+        );
+        // Merged, then cut from the last to the first, so no cut moves another.
+        const merged: { from: number; to: number }[] = [];
+        for (const r of asked.filter((r) => r.to - r.from > 0.01).sort((a, b) => a.from - b.from)) {
+          const last = merged.at(-1);
+          if (last && r.from <= last.to) last.to = Math.max(last.to, r.to);
+          else merged.push({ ...r });
+        }
+        if (!merged.length) throw new ToolError("None of those ranges has anything in it.");
+        assertCuttable(project, merged[0]!.from);
+        const notes = merged.flatMap((r) => [...movesAt(project, r.from), ...movesAt(project, r.to)]);
+        for (const r of [...merged].reverse()) this.commit({ type: "cutRange", from: r.from, to: r.to });
+        const removed = merged.reduce((n, r) => n + r.to - r.from, 0);
+        return [
+          json({
+            ok: true,
+            cut: merged.map((r) => ({ from: round(r.from), to: round(r.to) })),
+            removedSeconds: round(removed),
+            ...(notes.length ? { notes } : {}),
+            next: "Read transcript across each join and render_frame the joins; every later time has moved.",
+          }),
+        ];
+      }
+      case "cutWords": {
+        const words = wordsOnTimeline(project);
+        if (!words.length) throw new ToolError("There is no transcript on the timeline to cut words from. transcribe first.");
+        const start = findPhrase(words, String(raw.from), typeof raw.after === "number" ? raw.after : 0);
+        if (!start) throw new ToolError(`"${String(raw.from)}" is not said after ${typeof raw.after === "number" ? raw.after : 0} s; transcript shows the words as heard.`);
+        const endFirst = findPhrase(words, String(raw.to), start.start);
+        if (!endFirst) throw new ToolError(`"${String(raw.to)}" is not said after "${String(raw.from)}".`);
+        const first = words.indexOf(start);
+        const last = words.indexOf(endFirst) + normalizeWord(String(raw.to)).split(/\s+/).filter(Boolean).length - 1;
+        const { from, to } = rangeOfWords(words, first, Math.min(last, words.length - 1));
+        assertCuttable(project, from);
+        const notes = [...movesAt(project, from), ...movesAt(project, to)];
+        this.commit({ type: "cutRange", from, to });
+        const context = (list: TimelineWord[]) => list.map((w) => w.text).join(" ");
+        return [
+          json({
+            ok: true,
+            cut: { from: round(from), to: round(to), seconds: round(to - from) },
+            removed: context(words.slice(first, last + 1)),
+            nowReads: `${context(words.slice(Math.max(0, first - 6), first))} | ${context(words.slice(last + 1, last + 7))}`,
+            ...(notes.length ? { notes } : {}),
+            next: "render_frame the join; every later time has moved left.",
+          }),
+        ];
+      }
       case "listServices": {
         const [connected, fallback] = await Promise.all([listProviders(), capabilities().catch(() => ({ transcribe: null }))]);
         return [

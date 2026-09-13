@@ -400,6 +400,17 @@ export const ACTION_TOOLS = {
       video: z.string().nullable().optional(),
     },
   }),
+  cutRange: tool({
+    name: "cut_range",
+    title: "Cut range",
+    description:
+      "Removes a stretch of time from the whole edit and closes the gap: on every track, clips inside it go, a clip across a boundary is split with its source and animation continuous, and everything after moves left by the removed length — markers, in/out, captions, facts and storyboard time anchors too. One undo step. snap: \"words\" moves a boundary that lands inside a word to the middle of the nearest pause — use it, or cut_words, whenever speech is involved. Refused if a locked track would be left behind. Afterwards read transcript across the join and render_frame it.",
+    input: {
+      from: z.number().min(0).describe("Start of the stretch to remove, timeline seconds"),
+      to: z.number().min(0).describe("End of the stretch to remove, timeline seconds"),
+      snap: z.enum(["words"]).optional(),
+    },
+  }),
   setTheme: tool({
     name: "set_theme",
     title: "Set theme",
@@ -843,6 +854,27 @@ export const EDITOR_TOOLS = {
     description:
       "The AI services connected on this machine — what each can do, and with which model — and which one this project uses for each role. Keys never appear here. set_services chooses one for this project; voice, image and video are written down for later, as nothing in Cutline generates them yet.",
     input: {},
+  }),
+  cutRanges: tool({
+    name: "cut_ranges",
+    title: "Cut ranges",
+    description:
+      "Several cuts at once, as one undo step — a tightening pass. Give ranges in the timeline as it is now; they are applied from the last to the first, so no range shifts another, and overlapping ranges merge. snap: \"words\" as in cut_range. Answers with what was cut and any warnings.",
+    input: {
+      ranges: z.array(z.object({ from: z.number().min(0), to: z.number().min(0) })).min(1).max(200),
+      snap: z.enum(["words"]).optional(),
+    },
+  }),
+  cutWords: tool({
+    name: "cut_words",
+    title: "Cut words",
+    description:
+      "Removes speech by its words: from the first word of the `from` phrase to the last word of the `to` phrase, the first time each is said after `after` seconds. The cut runs from the middle of the pause before to the middle of the pause after, so the join keeps a natural pause and no word is clipped. Copy phrases from transcript, in its spelling. Answers with the words removed and the sentence as it now reads across the join.",
+    input: {
+      from: z.string().min(1).describe("The first words to remove"),
+      to: z.string().min(1).describe("The last words to remove; the same as from for a single phrase"),
+      after: z.number().min(0).optional(),
+    },
   }),
   startTurn: tool({
     name: "start_turn",

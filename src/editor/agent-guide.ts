@@ -170,7 +170,9 @@ Then audio_envelope if you changed timing. Report what you checked and what you 
 - **Keyframe times are clip-relative**, positions are 0..1 of the frame, sizes are pixels at 1080p.
 - **Text in a clip is one block**; wrap long lines with \\n yourself.
 - **Transcripts are cached** beside the file; transcribe({ force: true }) to redo one with another service.
-- **The server may restart** (development saves); calls wait for the editor to reconnect and turns keep their names.`,
+- **The server may restart** (development saves); calls wait for the editor to reconnect and turns keep their names.
+
+**Cutting time.** cut_words for speech — its boundaries fall in the middle of the pauses, so no word is clipped and the join keeps a natural pause. cut_ranges for a tightening pass (one undo step, applied last to first), and cut_range with snap: \"words\" for anything else near speech. A cut closes the gap on every track: graphics, markers, captions and storyboard time anchors move with it, and a locked track stops it. After each pass read transcript across every join and render_frame it; a cut inside a layout move is reported, because the move now happens in less time. Never rebuild a project document to cut — restore_version is for versions.`,
   },
 };
 

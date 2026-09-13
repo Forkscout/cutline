@@ -778,6 +778,18 @@ not to the same time, so a take whose tracks began a few milliseconds apart
 keeps that offset; and a split gives the tail halves a **new** link id, because
 one shared id across all four pieces would weld the timeline together.
 
+**A cut removes time from the whole edit, not from one track.** `cut.ts` takes
+[from, to) out of every track: clips inside go, a clip across a boundary is
+split with its source and its keys continuous, and everything after closes up
+— markers, in/out, captions, facts and the storyboard's time anchors with it.
+Ripple delete and a rippling trim move only their own track or linked group, so
+"remove these seven sentences" once meant writing a whole project document
+outside the editor and restoring it as a version. A locked track stops a cut
+rather than being left behind out of sync. `cut_words` cuts from the middle of
+the pause before to the middle of the pause after, because cutting at a word's
+start clipped the word before it; `snap: "words"` does the same for any
+boundary. The Monitor's Cut In–Out is the same action.
+
 **Keyframe times are clip-relative, and an animation stays where it is on the
 timeline.** Moving a clip carries its animation with it. A head trim, a split
 and a cut change where a clip begins without moving what it shows, so

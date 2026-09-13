@@ -6,6 +6,7 @@
  * complete snapshots costs far less than the bugs that inverse operations breed.
  */
 
+import { cutRange } from "./cut";
 import { sliceKeyframes } from "./keyframes";
 import type { SessionMeta } from "@/recorder/types";
 import {
@@ -395,7 +396,9 @@ export type Action =
   /** Puts the project back to a saved version; the id stays, and History keeps what it replaced. */
   | { type: "restoreVersion"; project: Project; label: string }
   /** Which connected service each role uses here; a role set to undefined goes back to the workspace's. */
-  | { type: "setServices"; patch: ProjectServices };
+  | { type: "setServices"; patch: ProjectServices }
+  /** Removes [from, to) from every track and closes the gap; see cut.ts. */
+  | { type: "cutRange"; from: number; to: number };
 
 /** Applies `fn` to every clip named in `refs`, wherever those clips live. */
 function mapClips(
@@ -905,6 +908,10 @@ export function reduce(project: Project, action: Action): Project {
       return touched({ ...project, storyboard: action.storyboard });
     case "restoreVersion":
       return touched({ ...action.project, id: project.id });
+    case "cutRange": {
+      const next = cutRange(project, action.from, action.to);
+      return next === project ? project : touched(next);
+    }
     case "setServices": {
       const services = { ...project.services };
       for (const [role, id] of Object.entries(action.patch)) {

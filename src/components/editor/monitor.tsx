@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { lockedTracksIn } from "@/editor/cut";
+import { toast } from "sonner";
 import { MessageSquarePlus, Palette,
   ChevronLeft,
   ChevronRight,
@@ -218,6 +220,30 @@ export function Monitor({
           >
             Out
           </Button>
+          {project.inPoint !== null && project.outPoint !== null && project.outPoint - project.inPoint > 0.05 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-[11px]"
+              title="Remove everything between In and Out on every track, and close the gap"
+              onClick={() => {
+                const from = project.inPoint!;
+                const to = project.outPoint!;
+                const locked = lockedTracksIn(project, from);
+                if (locked.length) {
+                  toast.error(`${locked.map((t) => t.name).join(", ")} ${locked.length > 1 ? "are" : "is"} locked`, {
+                    description: "A cut closes the gap on every track; unlock them so the edit stays in sync.",
+                  });
+                  return;
+                }
+                dispatch({ type: "cutRange", from, to });
+                dispatch({ type: "setProject", patch: { inPoint: null, outPoint: null } }, true);
+                toast.success(`Cut ${(to - from).toFixed(2)} s from every track`, { description: "Undo brings it back." });
+              }}
+            >
+              Cut In–Out
+            </Button>
+          )}
           {(project.inPoint !== null || project.outPoint !== null) && (
             <Button
               variant="ghost"
