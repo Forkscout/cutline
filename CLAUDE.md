@@ -457,6 +457,16 @@ Every macro call is one component (`table-3f2a`), which `delete_component`,
 `move_component` and the timeline's menu act on whole. `add_flash` and
 `add_coin` find tree nodes by id, because node shapes are named `node <id>`.
 
+**A number can count.** Content is a string and cannot be keyframed, so a
+text clip may carry a `counter` (`counter.ts`) and a keyframable
+`counterValue`, 0..1. The figure is read as it was written — ₹1,26,000 keeps
+its prefix and Indian grouping through `Intl.NumberFormat("en-IN")` — and
+`content` keeps the final figure. The box is measured from that figure, and
+digits are drawn one at a time in the widest digit's width, because canvas has
+no `font-variant-numeric`: without it a right-aligned count shimmers. Facts and
+lint read the final figure; new content or a corrected fact re-reads what it
+counts to, and content that is no longer one figure drops the counter.
+
 **Web fonts reach the export.** Canvas text uses a face only once it has
 loaded, and the export worker has no document, so it never saw the page's CSS
 fonts: exports drew fallbacks while the preview showed the real face.

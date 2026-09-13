@@ -97,7 +97,7 @@ Rhythm, from the TreeFlux edit:
     body: `- **One idea per scene.** A kicker (2–4 words, the section), a title (under ~8 words), then at most 3–6 supporting items.
 - **Time to the word.** Use transcript word times: an item appears when its word is said, not before the sentence starts. Titles land 0.1–0.3 s after the scene's first word.
 - **Stagger** related items by theme.motion.stagger; exits happen together at the scene's end, 0.15 s before the next scene's first entrance.
-- **Pick the device for the idea**: a sequence → add_flow; a list of rules or steps → add_points; tags or options → add_chips; one striking number → add_stat; a ladder or comparison of numbers → add_bars (scale "log" when they span orders of magnitude); figures in rows and columns → add_table; levels or stages with a count between them → add_stack; a matrix or referral tree → add_tree (ghost draws the empty rest of it); names → add_lower_third.
+- **Pick the device for the idea**: a sequence → add_flow; a list of rules or steps → add_points; tags or options → add_chips; one striking number → add_stat (count: true counts up to it, written as given); a ladder or comparison of numbers → add_bars (scale "log" when they span orders of magnitude); figures in rows and columns → add_table; levels or stages with a count between them → add_stack; a matrix or referral tree → add_tree (ghost draws the empty rest of it); names → add_lower_third.
 - **Motion that explains**: add_flash rings what just arrived or changed (or flash: true on a tree's node or move); add_coin carries a dot from node to node, arriving on each word — money moving up a matrix. Both name tree nodes by id, never coordinates.
 - **Each call is one component.** A macro's result names it (table-3f2a); move_component and delete_component act on all of it, and so does the timeline's menu for the client.
 - **Numbers are exact or absent.** If the transcript was unsure, ask; say so in your report.
@@ -129,7 +129,7 @@ Around the scenes: \`{ "version": 1, "footer": "Brand · Topic", "subjectX": 0.5
 
 **Layouts.** panel — the speaker in a rounded side card (side, subjectX), graphics beside it. full — the speaker full frame, no graphics region (lower thirds only). pip — a small speaker in a corner. backdrop — a full-frame graphic background over the speaker, for B-roll style scenes. The speaker's moves are rebuilt from the whole storyboard on every compile: into each scene's layout 0.3 s before it starts, and back to full frame across any gap of 3 s or more between scenes — so leave gaps where the speaker should be seen.
 
-**Components.** title, points, chips, stat, statement, flow, cards, split, bars, tally, tree, table, stack, flash, coin, lower_third — the add_* macros, with anchors in place of times. A table cell written \`{ "text": "4 referrals", "at": { "word": "four" } }\` arrives on its own word, after its row. flash and coin name nodes of a tree earlier in the same scene (tree gives its component id when a scene has two). Each stacks below the one before it in the scene; y places one by hand; until (an anchor) ends one before the scene does. Component ids are unique within a scene.
+**Components.** title, points, chips, stat, statement, flow, cards, split, bars, tally, tree, table, stack, flash, coin, lower_third — the add_* macros, with anchors in place of times. A stat with "count": true counts up to its value. A table cell written \`{ "text": "4 referrals", "at": { "word": "four" } }\` arrives on its own word, after its row. flash and coin name nodes of a tree earlier in the same scene (tree gives its component id when a scene has two). Each stacks below the one before it in the scene; y places one by hand; until (an anchor) ends one before the scene does. Component ids are unique within a scene.
 
 **The loop.**
 1. transcript, then set_storyboard with the whole thing.
@@ -175,7 +175,8 @@ Then audio_envelope if you changed timing. Report what you checked and what you 
 - **Strokes do not scale** with the box: strokeWidth is px at 1080p on any size.
 - **Many marks, one clip.** Shape kind path takes SVG path data in the box's own units, 0..1 from its top-left — arc radii too, so rx r/w and ry r/h draw a circle. Every empty seat of a tree is one path.
 - **Rows arriving one by one, one clip.** Keyframe text.reveal from 0 to the number of lines: line i shows at reveal − i, fading and rising in. Two clips on screen at once can never share a track, so a clip per row is a track per row.
-- **Opacity** is transform.opacity, keyframed like any other number.`,
+- **Opacity** is transform.opacity, keyframed like any other number.
+- **A number that counts up.** set_text({ patch: { counter: {} } }) on text showing one plain figure reads it as written (₹1,26,000: prefix ₹, Indian grouping, from 0), then keyframe text.counterValue from 0 to 1. The box stays the final figure's while it counts, and list_facts checks that figure.`,
   },
 
   gotchas: {

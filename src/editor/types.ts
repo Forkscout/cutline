@@ -210,6 +210,18 @@ export interface ChromaKey {
 
 /* ------------------------------------------------------------------- text */
 
+/** A figure that counts from `from` to `to`, written the way it was given. */
+export interface TextCounter {
+  from: number;
+  to: number;
+  decimals: number;
+  /** The grouping: "en-IN" writes 1,26,000, "en-US" 126,000. */
+  locale: string;
+  grouping: boolean;
+  prefix: string;
+  suffix: string;
+}
+
 export interface TextStyle {
   content: string;
   fontFamily: string;
@@ -234,6 +246,14 @@ export interface TextStyle {
    * whole column stays one clip — a table is a clip per column, not per cell.
    */
   reveal?: number;
+  /**
+   * A number counting instead of the content, which keeps the final figure
+   * (counter.ts). The box is measured from that figure and digits are drawn
+   * tabular, so nothing shifts while it counts.
+   */
+  counter?: TextCounter;
+  /** How far the counter has counted, 0..1; keyframed as `text.counterValue`. */
+  counterValue?: number;
 }
 
 export type TextAnimation =
@@ -512,7 +532,7 @@ export type StoryComponent = { id: string; until?: Anchor; y?: number } & (
   | { type: "title"; at: Anchor; kicker?: string; title: string; subtitle?: string }
   | { type: "points"; items: Item<{ text: string; icon?: "check" | "cross" | "dot" | "number" | "none"; lead?: string }>[] }
   | { type: "chips"; items: Item<{ text: string; tone?: "accent" | "positive" | "neutral" }>[] }
-  | { type: "stat"; at: Anchor; value: string; label?: string }
+  | { type: "stat"; at: Anchor; value: string; label?: string; count?: boolean }
   | { type: "statement"; lines: Item<{ text: string; tone?: "text" | "accent" | "muted" }>[]; size?: "hero" | "stat" | "title" }
   | { type: "flow"; steps: Item<{ text: string; style?: "box" | "pill" }>[]; highlight?: "last" | "none" }
   | { type: "cards"; cards: Item<{ kicker?: string; title: string; body?: string }>[]; highlight?: "last" | "first" | "none" }

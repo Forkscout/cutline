@@ -86,6 +86,20 @@ export const textPatch = z
     background: color.nullable(),
     backgroundPadding: z.number().min(0),
     reveal: z.number().min(0).describe("Lines shown from the top: line i is drawn at reveal − i opacity. Keyframe text.reveal to bring rows in one by one"),
+    counter: z
+      .object({
+        from: z.number(),
+        to: z.number(),
+        decimals: z.number().int().min(0).max(4),
+        locale: z.string().max(20).describe("en-IN writes 1,26,000; en-US 126,000"),
+        grouping: z.boolean(),
+        prefix: z.string().max(12),
+        suffix: z.string().max(24),
+      })
+      .partial()
+      .nullable()
+      .describe("Count a number instead of showing content. What is left out is read from the figure the text shows (₹1,26,000 → en-IN, prefix ₹, from 0); null stops counting. Then keyframe text.counterValue 0 → 1"),
+    counterValue: z.number().min(0).max(1).describe("How far a counter has counted, 0..1"),
   })
   .partial();
 
@@ -326,7 +340,7 @@ export const storyComponent = z.discriminatedUnion("type", [
       .max(10),
   }),
   z.object({ ...common, type: z.literal("chips"), items: z.array(z.object({ at: anchor, text: z.string().min(1).max(40), tone: tone3.optional() })).min(1).max(12) }),
-  z.object({ ...common, type: z.literal("stat"), at: anchor, value: z.string().min(1).max(16), label: z.string().max(120).optional() }),
+  z.object({ ...common, type: z.literal("stat"), at: anchor, value: z.string().min(1).max(16), label: z.string().max(120).optional(), count: z.boolean().optional().describe("Count up to the value as it arrives") }),
   z.object({
     ...common,
     type: z.literal("statement"),

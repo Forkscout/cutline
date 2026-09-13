@@ -8,6 +8,7 @@
  * client to confirm, with where it appears and what was heard.
  */
 
+import { settledText } from "./counter";
 import { lineArrivesAt } from "./keyframes";
 import { wordsOnTimeline, type TimelineWord } from "./transcript";
 import type { Fact, Project } from "./types";
@@ -65,7 +66,8 @@ export function scanNumbers(project: Project): OnScreenNumber[] {
   for (const track of project.tracks) {
     if (track.hidden) continue;
     for (const clip of track.clips) {
-      const content = clip.kind === "text" ? (clip.text?.content ?? "") : "";
+      // A counter is checked for the figure it lands on, not the numbers on the way.
+      const content = clip.kind === "text" && clip.text ? settledText(clip.text) : "";
       // A lone digit, or a numbered label like 01, is a step, not a figure.
       if (!content || /^\s*0?\d\s*$/.test(content)) continue;
       // A table column is one clip whose rows arrive at their own times: a figure is on screen from when its line arrives.

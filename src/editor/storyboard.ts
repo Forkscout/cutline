@@ -130,7 +130,7 @@ function compileComponent(ctx: macros.MacroContext, c: StoryComponent, words: Ti
     case "chips":
       return macros.addChips(ctx, { end: until, items: c.items.map((i) => ({ ...i, at: at(i.at) })), ...y });
     case "stat":
-      return macros.addStat(ctx, { start: at(c.at), end: until, value: c.value, ...(c.label ? { label: c.label } : {}), ...y });
+      return macros.addStat(ctx, { start: at(c.at), end: until, value: c.value, ...(c.label ? { label: c.label } : {}), ...(c.count ? { count: true } : {}), ...y });
     case "statement":
       return macros.addStatement(ctx, { end: until, lines: c.lines.map((l) => ({ ...l, at: at(l.at) })), ...(c.size ? { size: c.size } : {}), ...y });
     case "flow":

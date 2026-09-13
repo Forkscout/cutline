@@ -591,12 +591,17 @@ export const EDITOR_TOOLS = {
   addStat: tool({
     name: "add_stat",
     title: "Add stat",
-    description: "One striking number or short value, large, with what it means beside or below it.",
+    description:
+      "One striking number or short value, large, with what it means beside or below it. count counts up to it as it arrives, written the way the value is — ₹1,26,000 keeps its prefix and Indian grouping.",
     input: {
       start: s.seconds("When it arrives"),
       end: s.seconds("When the scene ends"),
       value: z.string().min(1).max(16),
       label: z.string().max(120).optional(),
+      count: z
+        .union([z.boolean(), z.object({ from: z.number().optional(), seconds: z.number().min(0.2).max(10).optional() })])
+        .optional()
+        .describe("Count up to the value: true, or { from, seconds }; default from 0 over 1.6 s"),
       y: z.number().min(0).optional(),
     },
   }),

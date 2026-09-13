@@ -37,6 +37,7 @@ import { applyBrandKit, applyRecipe, attachReference, type ApplyContext } from "
 import { getItem, listItems } from "@/lib/workspace";
 import { getAgents, type AgentPermissions } from "@/lib/agents";
 import { clipAt, readProperty } from "./keyframes";
+import { formatCount, parseFigure } from "./counter";
 import { THEMES, brandOverrides, fontsInUse, mergeTheme, paletteOf, themeById, themeOf } from "./themes";
 import { themeSheet } from "./styleframes";
 import { analysisOf } from "./analyze";
@@ -107,6 +108,13 @@ function clipOrThrow(project: Project, r: ClipRef): Clip {
   return clip;
 }
 
+type Counter = NonNullable<NonNullable<Clip["text"]>["counter"]>;
+
+/** A counter from what a tool gave; the rest comes from the counter already there, or the figure the text shows. */
+function counterFrom(given: Partial<Counter>, text: NonNullable<Clip["text"]>, content = text.content): Counter {
+  return { ...(text.counter ?? parseFigure(content) ?? { from: 0, to: 0, decimals: 0, locale: "en-US", grouping: true, prefix: "", suffix: "" }), ...given };
+}
+
 const EXECUTORS: Executors = {
   addClip: (a, project) => {
     const track = findTrack(project, a.trackId);
@@ -122,7 +130,14 @@ const EXECUTORS: Executors = {
     } else {
       if (track.kind !== "video") throw new ToolError("Text and shape clips go on a video track.");
       clip = a.kind === "text" ? textClip(a.start, a.duration) : shapeClip(a.start, a.duration);
-      if (a.text && clip.text) clip.text = { ...clip.text, ...a.text };
+      if (a.text && clip.text) {
+        const { counter, ...text } = a.text;
+        clip.text = { ...clip.text, ...text };
+        if (counter) {
+          const full = counterFrom(counter, clip.text);
+          clip.text = { ...clip.text, counter: full, content: formatCount(full, full.to), counterValue: text.counterValue ?? 1 };
+        }
+      }
       if (a.shape && clip.shape) clip.shape = { ...clip.shape, ...a.shape };
       if (a.transform) clip.transform = { ...clip.transform, ...a.transform };
     }
@@ -142,7 +157,16 @@ const EXECUTORS: Executors = {
   linkClips: (a) => ({ type: "linkClips", refs: a.clips.map(ref) }),
   setTransform: (a) => ({ type: "setTransform", ref: ref(a), patch: a.patch }),
   setColor: (a) => ({ type: "setColor", ref: ref(a), patch: a.patch }),
-  setText: (a) => ({ type: "setText", ref: ref(a), patch: a.patch }),
+  setText: (a, project) => {
+    const { counter, ...rest } = a.patch;
+    if (counter === undefined) return { type: "setText", ref: ref(a), patch: rest };
+    if (counter === null) return { type: "setText", ref: ref(a), patch: { ...rest, counter: undefined, counterValue: undefined } };
+    const text = clipOrThrow(project, ref(a)).text;
+    if (!text) throw new ToolError("That clip has no text to count.");
+    const full = counterFrom(counter, text, rest.content ?? text.content);
+    // counterValue exists from here on, so add_keyframe can animate it.
+    return { type: "setText", ref: ref(a), patch: { ...rest, counter: full, content: formatCount(full, full.to), counterValue: rest.counterValue ?? text.counterValue ?? 1 } };
+  },
   setShape: (a) => ({ type: "setShape", ref: ref(a), patch: a.patch }),
   setMask: (a) => ({ type: "setMask", ref: ref(a), patch: a.patch }),
   setChroma: (a) => ({ type: "setChroma", ref: ref(a), patch: a.patch }),

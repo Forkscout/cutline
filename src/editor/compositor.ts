@@ -11,6 +11,7 @@
 
 import { chromaKeyGl } from "./chroma-gl";
 import { clipAt } from "./keyframes";
+import { counterText, settledText } from "./counter";
 import { effectsToFilter, gradeToFilter, isNeutralGrade, overlayEffects } from "./effects";
 import type {
   Clip,
@@ -712,14 +713,14 @@ function textMetrics(project: Project, clip: Clip): { w: number; h: number; widt
   }
   const unit = project.height / REFERENCE_HEIGHT;
   const fontSize = style.fontSize * unit * clip.transform.scale;
-  const lines = style.content.split("\n");
+  const lines = style.counter ? [settledText(style)] : style.content.split("\n");
   if (!measureCtx) return { w: fontSize * 6, h: fontSize * lines.length * style.lineHeight, widths: lines.map(() => fontSize * 6) };
   measureCtx.font = `${style.italic ? "italic " : ""}${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
   // Spaced the way it is drawn: a tracked-out kicker is measurably wider.
   if ("letterSpacing" in measureCtx) {
     (measureCtx as unknown as { letterSpacing: string }).letterSpacing = `${style.letterSpacing * unit * clip.transform.scale}px`;
   }
-  const widths = lines.map((l) => measureCtx!.measureText(l).width);
+  const widths = lines.map((l) => (style.counter ? tabularWidth(measureCtx!, l) : measureCtx!.measureText(l).width));
   return { w: Math.max(...widths, 1), h: lines.length * fontSize * style.lineHeight, widths };
 }
 
@@ -779,7 +780,7 @@ export function textLineBoxes(project: Project, clip: Clip): { index: number; te
   const lineHeight = fontSize * style.lineHeight;
   const { widths } = textMetrics(project, clip);
   const out: { index: number; text: string; box: ClipBox }[] = [];
-  style.content.split("\n").forEach((line, index) => {
+  settledText(style).split("\n").forEach((line, index) => {
     if (!line.trim()) return;
     const w = widths[index] ?? 0;
     const x = style.align === "left" ? 0 : style.align === "right" ? -w : -w / 2;
@@ -800,6 +801,49 @@ export function hitTest(box: ClipBox, px: number, py: number): boolean {
 }
 
 /* -------------------------------------------------------------------- text */
+
+const digitWidths = new Map<string, number>();
+
+/** The widest digit in the current font: every digit of a counter gets this much room. */
+function digitWidth(ctx: CanvasRenderingContext2D): number {
+  const key = `${ctx.font}|${(ctx as unknown as { letterSpacing?: string }).letterSpacing ?? ""}`;
+  let width = digitWidths.get(key);
+  if (width === undefined) {
+    width = Math.max(...[..."0123456789"].map((d) => ctx.measureText(d).width));
+    if (digitWidths.size > 100) digitWidths.clear();
+    digitWidths.set(key, width);
+  }
+  return width;
+}
+
+/** Width of text with tabular digits. */
+function tabularWidth(ctx: CanvasRenderingContext2D, text: string): number {
+  const digit = digitWidth(ctx);
+  let width = 0;
+  for (const ch of text) width += /\d/.test(ch) ? digit : ctx.measureText(ch).width;
+  return width;
+}
+
+/**
+ * Text drawn a character at a time with every digit centred in the same
+ * width, so a number counting up does not shimmer from side to side. Canvas
+ * has no font-variant-numeric to ask the face for tabular figures.
+ */
+function drawTabular(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, stroke: boolean): void {
+  const digit = digitWidth(ctx);
+  const align = ctx.textAlign;
+  ctx.textAlign = "left";
+  let cursor = x;
+  for (const ch of text) {
+    const width = ctx.measureText(ch).width;
+    const isDigit = /\d/.test(ch);
+    const at = isDigit ? cursor + (digit - width) / 2 : cursor;
+    if (stroke) ctx.strokeText(ch, at, y);
+    ctx.fillText(ch, at, y);
+    cursor += isDigit ? digit : width;
+  }
+  ctx.textAlign = align;
+}
 
 function drawText(
   ctx: CanvasRenderingContext2D,
@@ -850,7 +894,9 @@ function drawText(
     }
   }
 
-  const content = style.content.slice(0, visibleChars);
+  // A counter shows the number it has counted to, in the box its final figure sets.
+  const counting = style.counter ? counterText(style) : null;
+  const content = counting ?? style.content.slice(0, visibleChars);
   const lines = content.split("\n");
   const fontSize = style.fontSize * unit * t.scale * extraScale;
   const lineHeight = fontSize * style.lineHeight;
@@ -876,7 +922,7 @@ function drawText(
 
   if (style.background) {
     const pad = style.backgroundPadding * unit;
-    const widest = Math.max(...lines.map((l) => ctx.measureText(l).width), 0);
+    const widest = counting !== null ? tabularWidth(ctx, settledText(style)) : Math.max(...lines.map((l) => ctx.measureText(l).width), 0);
     const bx = style.align === "center" ? -widest / 2 : style.align === "right" ? -widest : 0;
     ctx.save();
     ctx.fillStyle = style.background;
@@ -899,6 +945,20 @@ function drawText(
     if (shown <= 0) return;
     ctx.globalAlpha = base * shown;
     const y = startY + i * lineHeight + (1 - shown) * rise;
+    if (counting !== null) {
+      const final = tabularWidth(ctx, settledText(style));
+      const now = tabularWidth(ctx, line);
+      const left = style.align === "left" ? 0 : style.align === "right" ? -final : -final / 2;
+      const x = style.align === "left" ? left : style.align === "right" ? left + final - now : left + (final - now) / 2;
+      if (style.strokeWidth > 0) {
+        ctx.lineWidth = style.strokeWidth * unit;
+        ctx.strokeStyle = style.strokeColor;
+        ctx.lineJoin = "round";
+      }
+      ctx.fillStyle = style.color;
+      drawTabular(ctx, line, x, y, style.strokeWidth > 0);
+      return;
+    }
     if (style.strokeWidth > 0) {
       ctx.lineWidth = style.strokeWidth * unit;
       ctx.strokeStyle = style.strokeColor;

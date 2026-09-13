@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp, Diamond, Plus, Trash2, X } from "lucide-react";
 import { EFFECTS, createEffect, effectSpec } from "@/editor/effects";
+import { parseFigure } from "@/editor/counter";
 import { animatedProperties, keyframesFor } from "@/editor/keyframes";
 import type { Action } from "@/editor/project";
 import { assetOf, findClip } from "@/editor/project";
@@ -167,6 +168,29 @@ export function Inspector({
                     value={clip.text.reveal ?? clip.text.content.split("\n").length} min={0} max={clip.text.content.split("\n").length} step={0.05}
                     format={(v) => (v >= clip.text!.content.split("\n").length ? "all" : v.toFixed(1))} dispatch={dispatch}
                     onChange={(v, c) => dispatch({ type: "setText", ref: selected, patch: { reveal: v } }, c)} />
+                )}
+                {(clip.text.counter || parseFigure(clip.text.content)) && (
+                  <Toggle label="Count up to this figure" checked={Boolean(clip.text.counter)}
+                    onChange={(on) => {
+                      const others = clip.keyframes.filter((k) => k.property !== "text.counterValue");
+                      if (!on) {
+                        const { counter: _counter, counterValue: _counterValue, ...words } = clip.text!;
+                        dispatch({ type: "patchClip", ref: selected, patch: { text: words, keyframes: others } });
+                        return;
+                      }
+                      const seconds = Math.min(1.6, clip.duration / 2);
+                      dispatch({ type: "patchClip", ref: selected, patch: {
+                        text: { ...clip.text!, counter: parseFigure(clip.text!.content)!, counterValue: 1 },
+                        keyframes: [...others,
+                          { id: crypto.randomUUID(), property: "text.counterValue", time: 0, value: 0, easing: "easeOut" },
+                          { id: crypto.randomUUID(), property: "text.counterValue", time: seconds, value: 1, easing: "hold" }],
+                      } });
+                    }} />
+                )}
+                {clip.text.counter && (
+                  <NumberSlider label="Counted" path="text.counterValue" clip={clip} clipRef={selected} localTime={localTime}
+                    value={clip.text.counterValue ?? 1} min={0} max={1} step={0.01} format={(v) => `${Math.round(v * 100)}%`} dispatch={dispatch}
+                    onChange={(v, c) => dispatch({ type: "setText", ref: selected, patch: { counterValue: v } }, c)} />
                 )}
                 <ColorField label="Colour" value={clip.text.color}
                   onChange={(v) => dispatch({ type: "setText", ref: selected, patch: { color: v } })} />

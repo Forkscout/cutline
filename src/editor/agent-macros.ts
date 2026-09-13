@@ -16,10 +16,11 @@
  */
 
 import { clipBox, visibleClips } from "./compositor";
+import { parseFigure } from "./counter";
 import { clipAt, readProperty, valueAt } from "./keyframes";
 import { shapeClip, textClip, type Action } from "./project";
 import { shapeStyleFor, textStyleFor, themeOf } from "./themes";
-import type { Clip, ClipRef, ClipRole, Keyframe, Project, ShapeKind, TextAnimation, Theme, Track, Transition } from "./types";
+import type { Clip, ClipRef, ClipRole, Keyframe, Project, ShapeKind, TextAnimation, TextCounter, Theme, Track, Transition } from "./types";
 
 export interface Font {
   family: string;
@@ -27,6 +28,8 @@ export interface Font {
   /** Pixels in the project's frame. */
   size: number;
   letterSpacing?: number;
+  /** Every digit as wide as the widest, the way a counter draws its figure. */
+  tabular?: boolean;
 }
 
 export interface MacroContext {
@@ -53,7 +56,14 @@ export function measureOnCanvas(text: string, font: Font): number {
   if (!measurer) return text.length * font.size * 0.55;
   measurer.font = `${font.weight} ${font.size}px ${font.family}`;
   if ("letterSpacing" in measurer) (measurer as unknown as { letterSpacing: string }).letterSpacing = `${font.letterSpacing ?? 0}px`;
-  return Math.max(...text.split("\n").map((line) => measurer!.measureText(line).width));
+  const width = (line: string) => {
+    if (!font.tabular) return measurer!.measureText(line).width;
+    const digit = Math.max(...[..."0123456789"].map((d) => measurer!.measureText(d).width));
+    let total = 0;
+    for (const ch of line) total += /\d/.test(ch) ? digit : measurer!.measureText(ch).width;
+    return total;
+  };
+  return Math.max(...text.split("\n").map(width));
 }
 
 export interface Placed {
@@ -263,6 +273,7 @@ class Build {
       weight?: number;
       spacing?: number;
       keyframes?: Keyframe[];
+      counter?: TextCounter;
     } = {},
   ): Placed {
     const { theme, W, H } = this.f;
@@ -280,6 +291,7 @@ class Build {
       backgroundPadding: o.pad ?? 0,
       ...(o.weight ? { fontWeight: o.weight } : {}),
       ...(o.spacing !== undefined ? { letterSpacing: o.spacing } : {}),
+      ...(o.counter ? { counter: o.counter, counterValue: 1 } : {}),
     };
     clip.transform = { ...clip.transform, x: at.x / W, y: at.y / H };
     clip.textAnimation = o.anim ?? theme.motion.enter;
@@ -600,6 +612,8 @@ export interface StatArgs {
   value: string;
   label?: string;
   y?: number;
+  /** Count up to the value as it arrives. */
+  count?: boolean | { from?: number; seconds?: number };
 }
 
 /** One number, large, with what it means beside or under it. */
@@ -608,9 +622,18 @@ export function addStat(ctx: MacroContext, a: StatArgs): MacroResult {
   const { theme, u } = f;
   const t = theme.type;
   const valueFont = fontOf(theme, "display", theme.weights.stat, t.stat, u);
-  const valueW = ctx.measure(a.value, valueFont);
+  // A counter's digits are drawn tabular, wider than the face's own, so the label beside it is placed from that width.
+  const figure = a.count ? parseFigure(a.value) : null;
+  const valueW = ctx.measure(a.value, { ...valueFont, tabular: Boolean(figure) });
   const valueH = t.stat * u * 1.05;
-  build.text("stat", a.value, { x: zone.x0, y: top + valueH / 2 }, t.stat, a.start, a.end, { anim: "pop", lineHeight: 1.05 });
+  // Counting up: the figure as it was written, easing out as it lands.
+  if (a.count && !figure) build.notes.push(`"${a.value}" is not one plain figure, so it is shown without counting.`);
+  const options = typeof a.count === "object" ? a.count : {};
+  const seconds = Math.min(options.seconds ?? 1.6, Math.max(0.3, (a.end - a.start) / 2));
+  const counting = figure
+    ? { counter: { ...figure, from: options.from ?? 0 }, keyframes: [keyframe("text.counterValue", 0, 0, "easeOut"), keyframe("text.counterValue", seconds, 1, "hold")] }
+    : {};
+  build.text("stat", a.value, { x: zone.x0, y: top + valueH / 2 }, t.stat, a.start, a.end, { anim: "pop", lineHeight: 1.05, ...counting });
   let bottom = top + valueH;
   if (a.label) {
     const labelFont = fontOf(theme, "body", 700, t.subtitle, u);

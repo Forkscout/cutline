@@ -6,6 +6,7 @@
  * complete snapshots costs far less than the bugs that inverse operations breed.
  */
 
+import { parseFigure, settledText } from "./counter";
 import { cutRange } from "./cut";
 import { sliceKeyframes } from "./keyframes";
 import type { SessionMeta } from "@/recorder/types";
@@ -463,6 +464,20 @@ function replaceInStrings(value: unknown, swap: (text: string) => string, key = 
   return value;
 }
 
+/**
+ * A text patch applied. New content on a counting clip sets what it counts to
+ * while it is still one plain figure; otherwise the counter goes and the words
+ * show. What a person typed is what is shown.
+ */
+function withText(text: TextStyle, patch: Partial<TextStyle>): TextStyle {
+  const next = { ...text, ...patch };
+  if (!text.counter || "counter" in patch || patch.content === undefined || patch.content === settledText(text)) return next;
+  const figure = parseFigure(patch.content);
+  if (figure) return { ...next, counter: { ...figure, from: text.counter.from } };
+  const { counter: _counter, counterValue: _counterValue, ...words } = next;
+  return words;
+}
+
 export function reduce(project: Project, action: Action): Project {
   const touched = (next: Project): Project => ({ ...next, updatedAt: Date.now() });
 
@@ -697,7 +712,7 @@ export function reduce(project: Project, action: Action): Project {
       return touched(
         mapClip(project, action.ref, (c) => ({
           ...c,
-          text: { ...(c.text ?? DEFAULT_TEXT), ...action.patch },
+          text: withText(c.text ?? DEFAULT_TEXT, action.patch),
         })),
       );
     case "setShape":
@@ -932,8 +947,8 @@ export function reduce(project: Project, action: Action): Project {
       const tracks = project.tracks.map((track) => ({
         ...track,
         clips: track.clips.map((clip) =>
-          clip.text && swap(clip.text.content) !== clip.text.content
-            ? { ...clip, name: swap(clip.name), text: { ...clip.text, content: swap(clip.text.content) } }
+          clip.text && swap(settledText(clip.text)) !== settledText(clip.text)
+            ? { ...clip, name: swap(clip.name), text: withText(clip.text, { content: swap(settledText(clip.text)) }) }
             : clip,
         ),
       }));

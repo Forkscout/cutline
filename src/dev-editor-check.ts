@@ -40,8 +40,9 @@ import { brandOverrides, contrast, mergeTheme, paletteOf, themeById } from "./ed
 import { AnchorError, findPhrase, resolveAnchor } from "./editor/storyboard";
 import { afterCut, cutRange, lockedTracksIn, rangeOfWords, snapToWords } from "./editor/cut";
 import { exportProject } from "./editor/export";
-import { drawFrame, textLineBoxes, type ClipBox } from "./editor/compositor";
-import { addCoin, addStack, addTable, addTree, measureOnCanvas, type MacroContext } from "./editor/agent-macros";
+import { clipBox, drawFrame, textLineBoxes, type ClipBox } from "./editor/compositor";
+import { counterText, formatCount, parseFigure, settledText } from "./editor/counter";
+import { addCoin, addStack, addStat, addTable, addTree, measureOnCanvas, type MacroContext } from "./editor/agent-macros";
 import type { Clip, ClipRef, Easing, MediaAsset, Project } from "./editor/types";
 
 const out = document.getElementById("log")!;
@@ -881,6 +882,46 @@ async function run() {
     const coinPx = differ(frame(doc, 5.55), frame(without(doc, (c) => c.role !== "coin"), 5.55), mid.x * doc.width - 8, mid.y * doc.height - 8, mid.x * doc.width + 8, mid.y * doc.height + 8);
     check("and is drawn where it is, fading in and out", coinPx > 20 && coinAt(3.8).opacity < 1 && coinAt(6.5).opacity < 0.2, `${coinPx} px`);
 
+    // A figure counts up the way it was written, in a box that does not move.
+    const figure = parseFigure("₹1,26,000");
+    check("a figure is read as written: Indian grouping and a prefix",
+      figure?.locale === "en-IN" && figure.to === 126000 && figure.prefix === "₹" && formatCount(figure, 126000) === "₹1,26,000", JSON.stringify(figure));
+    check("counting keeps that grouping on the way", figure !== null && formatCount(figure, 63000) === "₹63,000" && formatCount(figure, 1260000) === "₹12,60,000");
+    check("text that is not one plain figure is not counted",
+      parseFigure("Level 4 of 9") === null && parseFigure("12.5% APY")?.decimals === 1 && parseFigure("46,656 seats")?.locale === "en-US");
+    doc = fresh("counter");
+    addStat(ctx, { start: 1, end: 6, value: "₹1,26,000", label: "a year", count: true });
+    const stat = all().find((c) => c.role === "stat")!;
+    const midway = counterText(clipAt(stat, 0.5).text!);
+    check("add_stat with count counts up to the value as written",
+      stat.text?.counter?.to === 126000 && midway !== "₹1,26,000" && counterText(clipAt(stat, 3).text!) === "₹1,26,000", `${midway} half a second in`);
+    const statBox = (t: number) => clipBox(doc, clipAt(stat, t - stat.start), null, false)!;
+    check("its box is the final figure's all the way", Math.abs(statBox(1.2).w - statBox(4).w) < 0.01);
+    const statLint = await lintScene(doc, { from: 1, to: 6, contrast: false });
+    check("the label beside a counting stat clears its tabular figure", !statLint.issues.some((i) => i.kind === "overlap"), statLint.issues.map((i) => i.detail).join(" | "));
+    const tally = textClip(0, 4);
+    tally.text = { ...tally.text!, content: "46,656", align: "right", fontSize: 120, color: "#ffffff", counter: parseFigure("46,656")!, counterValue: 1 };
+    tally.textAnimation = "none";
+    tally.transform = { ...tally.transform, x: 0.8, y: 0.5 };
+    tally.keyframes = [
+      { id: "k0", property: "text.counterValue", time: 0, value: 0, easing: "linear" },
+      { id: "k1", property: "text.counterValue", time: 2, value: 1, easing: "hold" },
+    ];
+    const lone: Project = { ...fresh("tally"), tracks: [{ ...emptyTrack("video", "T"), clips: [tally] }] };
+    const rightEdge = (t: number) => {
+      const c = frame(lone, t);
+      const data = c.getImageData(0, 0, c.canvas.width, c.canvas.height).data;
+      let right = -1;
+      for (let i = 0; i < data.length; i += 4) if (data[i]! > 180 && data[i + 1]! > 180 && data[i + 2]! > 180) right = Math.max(right, (i / 4) % c.canvas.width);
+      return right;
+    };
+    // 0.65 of the way is 30,326: the same last digit as 46,656.
+    check("a right-aligned count keeps its right edge still", rightEdge(1.3) > 0 && Math.abs(rightEdge(1.3) - rightEdge(3)) <= 2, `${rightEdge(1.3)} vs ${rightEdge(3)}`);
+    const onScreen = scanNumbers(doc).filter((n) => n.shown.some((x) => x.clipId === stat.id)).map((n) => n.value.replace(/\D/g, ""));
+    check("the fact check reads the figure it counts to, not the numbers on the way", onScreen.length === 1 && onScreen[0] === "126000", onScreen.join());
+    const fixed = reduce(doc, { type: "correctFact", id: "f-count", from: "1,26,000", to: "1,29,600" }).tracks.flatMap((t) => t.clips).find((c) => c.id === stat.id)!;
+    check("correcting the figure changes what it counts to", fixed.text?.counter?.to === 129600 && settledText(fixed.text!) === "₹1,29,600", settledText(fixed.text!));
+
     // The export draws in a worker: Path2D and DOMMatrix have to exist there too.
     const still = newProject("path export");
     still.width = 640;
@@ -895,6 +936,26 @@ async function run() {
     const inside = shot ? sample(shot, shot.canvas.width / 2, shot.canvas.height / 2) : { r: 0, g: 0, b: 0 };
     const outside = shot ? sample(shot, 20, 20) : { r: 255, g: 0, b: 0 };
     check("a path shape reaches the export, drawn in its box's own units", isRed(inside) && !isRed(outside), `${describe(inside)} inside, ${describe(outside)} outside`);
+
+    const countStill = newProject("count export");
+    countStill.width = 640;
+    countStill.height = 360;
+    const big = textClip(0, 2);
+    big.text = { ...big.text!, content: "100,000", fontSize: 140, color: "#ffffff", counter: parseFigure("100,000")!, counterValue: 1 };
+    big.textAnimation = "none";
+    big.keyframes = [
+      { id: "c0", property: "text.counterValue", time: 0, value: 0, easing: "hold" },
+      { id: "c1", property: "text.counterValue", time: 1, value: 1, easing: "hold" },
+    ];
+    countStill.tracks.find((t) => t.kind === "video")!.clips = [big];
+    countStill.inPoint = 0;
+    countStill.outPoint = 2;
+    const countBlob = await exportProject(countStill, { container: "mp4", height: 360, frameRate: 30, quality: "high", bitrateMbps: null, useInOut: true });
+    const zeroShot = await frameCanvas(countBlob, 0.5);
+    const fullShot = await frameCanvas(countBlob, 1.5);
+    const zeroPx = zeroShot ? brightPixelsInBand(zeroShot, 180, 90) : 0;
+    const fullPx = fullShot ? brightPixelsInBand(fullShot, 180, 90) : 0;
+    check("a count reaches the export: 0 first, then the whole figure", zeroPx > 50 && fullPx > zeroPx * 3, `${zeroPx} px at 0.5 s, ${fullPx} at 1.5 s`);
   }
 
   /* --- record a real take ------------------------------------------ */
