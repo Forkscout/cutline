@@ -39,7 +39,7 @@ import { lintScene } from "./editor/lint";
 import { brandOverrides, contrast, mergeTheme, paletteOf, themeById } from "./editor/themes";
 import { AnchorError, findPhrase, resolveAnchor } from "./editor/storyboard";
 import { exportProject } from "./editor/export";
-import type { ClipRef, MediaAsset, Project } from "./editor/types";
+import type { Clip, ClipRef, Easing, MediaAsset, Project } from "./editor/types";
 
 const out = document.getElementById("log")!;
 const shots = document.getElementById("shots")!;
@@ -260,6 +260,53 @@ async function run() {
     `${clipAt(kfClip, 2).transform.opacity}`);
   check("keyframes hold before the first and after the last",
     valueAt(kfClip, "transform.opacity", -5) === 0 && valueAt(kfClip, "transform.opacity", 99) === 1);
+
+  /* --- keyframes across a split and a head trim ---------------------- */
+  log("\nkeyframes across cuts", "dim");
+  {
+    const moving = (keys: [number, number, Easing][]) => {
+      const c = shapeClip(10, 20);
+      c.keyframes = keys.map(([time, value, easing], i) => ({ id: `m${i}`, property: "transform.x", time, value, easing }));
+      return c;
+    };
+    /** The value on the timeline, as the compositor would draw it. */
+    const onTimeline = (c: Clip, t: number) => valueAt(c, "transform.x", t - c.start) ?? c.transform.x;
+    /** The largest difference at any time the pieces cover, sampled every 50 ms. */
+    const worst = (before: Clip, pieces: Clip[], from: number, to: number) => {
+      let most = 0;
+      for (let t = from; t <= to; t += 0.05) {
+        const piece = pieces.find((c) => t >= c.start && t < c.start + c.duration);
+        if (piece) most = Math.max(most, Math.abs(onTimeline(before, t) - onTimeline(piece, t)));
+      }
+      return most;
+    };
+    const edit = (clip: Clip, action: (ref: ClipRef) => Parameters<typeof reduce>[1]) => {
+      let p = newProject("keyframes across cuts");
+      const track = p.tracks.find((t) => t.kind === "video")!;
+      track.clips = [structuredClone(clip)];
+      p = reduce(p, action({ trackId: track.id, clipId: clip.id }));
+      return p.tracks.find((t) => t.id === track.id)!.clips;
+    };
+
+    // The speaker moves into a side panel by 11 s and is held there to the end.
+    const held = moving([[0, 0.5, "ease"], [1, 0.875, "linear"]]);
+    const heldSplit = edit(held, (ref) => ({ type: "splitClip", ref, time: 20 }));
+    check("a layout held past its last keyframe survives a split",
+      heldSplit.length === 2 && worst(held, heldSplit, 10, 29.99) < 1e-9, `worst ${worst(held, heldSplit, 10, 29.99)}`);
+
+    // A split in the middle of an eased move.
+    const mid = moving([[2, 0.5, "ease"], [4, 0.875, "ease"], [8, 0.2, "easeOut"]]);
+    const midSplit = edit(mid, (ref) => ({ type: "splitClip", ref, time: 13.3 }));
+    check("a split mid-move keeps the curve exactly", midSplit.length === 2 && worst(mid, midSplit, 10, 29.99) < 1e-9,
+      `worst ${worst(mid, midSplit, 10, 29.99)}`);
+
+    // A head trim, shorter and then longer, leaves the animation where it was on the timeline.
+    const shorter = edit(mid, (ref) => ({ type: "trimClip", ref, edge: "in", time: 13.3 }));
+    check("trimming the head leaves the animation where it was on the timeline",
+      shorter[0]!.start === 13.3 && worst(mid, shorter, 13.3, 29.99) < 1e-9, `worst ${worst(mid, shorter, 13.3, 29.99)}`);
+    const longer = edit(shorter[0]!, (ref) => ({ type: "trimClip", ref, edge: "in", time: 11 }));
+    check("and extending it back again does too", worst(mid, longer, 11, 29.99) < 1e-9, `worst ${worst(mid, longer, 11, 29.99)}`);
+  }
 
   /* --- linked clips: the lip-sync guarantee ------------------------ */
   log("\nlinked clips", "dim");

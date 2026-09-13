@@ -6,6 +6,7 @@
  * complete snapshots costs far less than the bugs that inverse operations breed.
  */
 
+import { sliceKeyframes } from "./keyframes";
 import type { SessionMeta } from "@/recorder/types";
 import {
   DEFAULT_CAPTION_STYLE,
@@ -532,6 +533,8 @@ export function reduce(project: Project, action: Action): Project {
           start: Math.max(0, c.start + delta),
           inPoint: Math.max(0, c.inPoint + delta * c.speed),
           duration: Math.max(MIN_CLIP_SEC, c.duration - delta),
+          // The animation stays where it was on the timeline, as it does across a split.
+          keyframes: sliceKeyframes(c.keyframes, delta),
         }));
         return touched(action.ripple ? rippleFrom(next, action.ref, -delta) : next);
       }
@@ -574,11 +577,9 @@ export function reduce(project: Project, action: Action): Project {
               duration: clip.duration - at,
               linkId: clip.linkId ? tailLink : null,
               transitionIn: structuredClone(NO_TRANSITION),
-              // Keyframes are stored clip-relative, so the second half's have to
-              // shift back by the split point or every animation jumps.
-              keyframes: clip.keyframes
-                .filter((k) => k.time >= at)
-                .map((k) => ({ ...k, id: id(), time: k.time - at })),
+              // Clip-relative keys, re-based to the split point with the one
+              // before it kept, so a held layout or a move in progress carries on.
+              keyframes: sliceKeyframes(clip.keyframes, at).map((k) => ({ ...k, id: id() })),
             },
           ];
         }),

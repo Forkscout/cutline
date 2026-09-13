@@ -82,7 +82,11 @@ export interface Keyframe {
   id: string;
   /** Dot path into the clip, e.g. "transform.scale" or "color.exposure". */
   property: string;
-  /** Seconds from the clip's own start, so trimming does not shift animation. */
+  /**
+   * Seconds from the clip's own start. Edits that move where a clip begins
+   * without moving what it shows re-base these (`sliceKeyframes`), so the
+   * animation stays put on the timeline; it may be negative after one.
+   */
   time: number;
   value: number;
   easing: Easing;

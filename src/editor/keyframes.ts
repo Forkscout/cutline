@@ -1,10 +1,11 @@
 /**
  * Keyframe evaluation.
  *
- * Keyframe times are stored relative to the clip's own start, not the
- * timeline's. That way moving a clip along the timeline, or trimming its head,
- * does not silently re-time every animation on it — which is the behaviour
- * people expect and the one that is annoying to retrofit later.
+ * Keyframe times are stored relative to the clip's own start, so moving a
+ * clip along the timeline carries its animation with it. Edits that change
+ * where a clip begins without moving what it shows — a head trim, a split, a
+ * cut — re-base the keys with `sliceKeyframes`, so the animation stays where
+ * it was on the timeline.
  */
 
 import type { Clip, Easing, Keyframe } from "./types";
@@ -46,6 +47,33 @@ export function writeProperty(clip: Clip, path: string, value: number): Clip {
 
 export function keyframesFor(clip: Clip, path: string): Keyframe[] {
   return clip.keyframes.filter((k) => k.property === path).sort((a, b) => a.time - b.time);
+}
+
+/**
+ * The keys for a stretch of a clip, `from` to `to` seconds into it, re-based so
+ * the stretch starts at 0. Per property it keeps the last key before `from`,
+ * every key inside, and the first key at or after `to` — so the stretch
+ * interpolates exactly as the whole clip did. A layout held past its last key
+ * stays held, and a cut in the middle of a move opens mid-move rather than on
+ * the next key's value. Keys kept from outside the stretch sit at negative
+ * times or past its end, and `valueAt` reads them like any other.
+ *
+ * A split used to give the tail only the keys after the split point: on a
+ * speaker held in a side panel, the tail had no keys at all and snapped back
+ * to full frame.
+ */
+export function sliceKeyframes(keyframes: Keyframe[], from: number, to = Number.POSITIVE_INFINITY): Keyframe[] {
+  const out: Keyframe[] = [];
+  for (const property of new Set(keyframes.map((k) => k.property))) {
+    const keys = keyframes.filter((k) => k.property === property).sort((a, b) => a.time - b.time);
+    const inside = keys.findIndex((k) => k.time >= from);
+    // Needed unless a key sits exactly at the start of the stretch.
+    const before = inside === -1 ? keys.length - 1 : keys[inside]!.time === from ? inside : inside - 1;
+    const after = keys.findIndex((k) => k.time >= to);
+    const end = after === -1 ? keys.length : after + 1;
+    for (const k of keys.slice(Math.max(0, before), end)) out.push({ ...k, time: k.time - from });
+  }
+  return out;
 }
 
 export function animatedProperties(clip: Clip): string[] {

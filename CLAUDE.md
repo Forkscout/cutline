@@ -778,9 +778,15 @@ not to the same time, so a take whose tracks began a few milliseconds apart
 keeps that offset; and a split gives the tail halves a **new** link id, because
 one shared id across all four pieces would weld the timeline together.
 
-**Keyframe times are clip-relative.** Moving or trimming a clip must not
-re-time its animation. `splitClip` shifts the second half's keyframes back by
-the split point for the same reason.
+**Keyframe times are clip-relative, and an animation stays where it is on the
+timeline.** Moving a clip carries its animation with it. A head trim, a split
+and a cut change where a clip begins without moving what it shows, so
+`sliceKeyframes` re-bases the keys: per property it keeps the last key before
+the new start, everything inside, and the first key after the end — keys before
+the start sit at negative times, and interpolation is exact across the edit.
+A tail used to get only the keys after the split, so a speaker held in a side
+panel snapped back to full frame, and a split mid-move opened on the next key's
+value; a head trim moved the whole animation by the trimmed amount.
 
 ## How the recorder fits together
 
