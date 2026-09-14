@@ -1001,6 +1001,16 @@ async function run() {
         Boolean(clip) && Math.abs(cover - (960 / 540) / (768 / 512)) < 1e-9 && clip!.start === 1 && clip!.duration === 4 &&
           Math.abs((valueAt(clip!, "transform.scale", 0) ?? 0) - cover) < 1e-9 && Math.abs((valueAt(clip!, "transform.scale", 4) ?? 0) - cover * 1.08) < 1e-9);
       const beside = placeImage(ctx, still, { start: 2, duration: 2, motion: "pan-left" });
+      // A title on screen over that stretch: the still goes between the picture and the title, not over it.
+      let titled: Project = { ...newProject("titled"), width: 960, height: 540 };
+      const titledCtx = { project: () => titled, commit: (action: Action) => { titled = reduce(titled, action); } };
+      titledCtx.commit({ type: "addTrack", kind: "video" });
+      const titleTrack = titled.tracks.filter((t) => t.kind === "video")[1]!;
+      titledCtx.commit({ type: "addClip", trackId: titleTrack.id, clip: { ...textClip(0, 6), text: { ...textClip(0, 6).text!, content: "Scene title" } } });
+      const under = placeImage(titledCtx, still, { start: 1, duration: 4, motion: "push-in" });
+      const stillIndex = titled.tracks.findIndex((t) => t.id === under?.trackId);
+      const titleIndex = titled.tracks.findIndex((t) => t.id === titleTrack.id);
+      check("under a title on screen, a still goes between the picture and the title", stillIndex > titled.tracks.findIndex((t) => t.kind === "video") && stillIndex < titleIndex, `still on track ${stillIndex}, title on ${titleIndex}`);
       check("a still overlapping it goes on another track, and a pan slides it",
         Boolean(beside) && beside!.trackId !== placed?.trackId && kenBurnsKeys("pan-left", 2, 1).some((k) => k.property === "transform.x" && k.time === 2 && k.value === 0.48));
     }

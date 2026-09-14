@@ -1079,8 +1079,8 @@ export class AgentBridge {
               (look.model !== g.model ||
                 look.prompt !== words ||
                 (look.negativePrompt ?? "") !== (g.negativePrompt ?? "") ||
-                look.width !== g.width ||
-                look.height !== g.height ||
+                // A tool outside Cutline picks its own size; only Cutline's own drawings are held to the look's.
+                (g.providerId !== undefined && (look.width !== g.width || look.height !== g.height)) ||
                 (look.steps ?? 0) !== (g.steps ?? 0) ||
                 (look.seed !== undefined && look.seed !== g.seed && !g.variationOf)),
           );
@@ -1423,9 +1423,85 @@ export class AgentBridge {
         } else {
           throw new ToolError("Send the file as data (base64) with a name, or put it in ~/Cutline/inbox and give its path.");
         }
+        const made = raw.generated as
+          | { prompt: string; sent_prompt?: string; negative_prompt?: string; style?: string; model: string; service: string; seed?: number; width?: number; height?: number; variation_of?: string }
+          | undefined;
+        const place = raw.place as { trackId?: string; start?: number; duration?: number; motion?: KenBurns } | undefined;
+        if ((made || place) && !file.type.startsWith("image/")) throw new ToolError("generated and place are for pictures. Place a video or a sound with add_clip.");
+        // Which look a picture made outside Cutline was made in, checked before anything is imported.
+        let look: (typeof project.imageStyles)[number] | undefined;
+        const notes: string[] = [];
+        if (made) {
+          const asked = made.style?.trim();
+          look = asked ? project.imageStyles.find((st) => st.id === asked || st.name.toLowerCase() === asked.toLowerCase()) : undefined;
+          if (asked && !look) throw new ToolError(`There is no look "${asked}". Looks: ${project.imageStyles.map((st) => `${st.name} (${st.id})`).join(", ") || "none — save one with set_image_style"}.`);
+          if (!asked && project.imageStyles.length > 1) throw new ToolError(`Say which look it was made in: generated.style is one of ${project.imageStyles.map((st) => `${st.name} (${st.id})`).join(", ")}.`);
+          if (!asked && project.imageStyles.length === 1) {
+            look = project.imageStyles[0]!;
+            notes.push(`Recorded as made in ${look.name}, the project's only look.`);
+          }
+          if (!look) notes.push("No saved look: save one with set_image_style and make the next pictures in it, so they match.");
+          if (made.variation_of && project.assets.find((a) => a.id === made.variation_of)?.generated?.kind !== "image") {
+            throw new ToolError(`${made.variation_of} is not a generated image in this project; get_image_context lists them.`);
+          }
+        }
         const { assets, failed } = await importFiles([file]);
         const asset = assets[0];
         if (!asset) throw new ToolError(`${name} was not imported: ${failed[0]?.reason ?? "it could not be read"}`);
+        if (made || place) {
+          let generated: GeneratedImage | undefined;
+          if (made) {
+            const subject = made.prompt.trim();
+            const words = look?.prompt ?? "";
+            const sentPrompt = made.sent_prompt?.trim() || (words ? `${subject}. ${words}` : subject);
+            if (look && words && !sentPrompt.includes(words)) notes.push(`What was sent does not include ${look.name}'s words, so it may not match the look.`);
+            if (look && look.model.trim().toLowerCase() !== made.model.trim().toLowerCase()) notes.push(`${look.name} pins ${look.model}; this was made with ${made.model}, so it may not match.`);
+            if (look?.negativePrompt && !made.negative_prompt?.trim()) {
+              notes.push(`${look.name} keeps out "${look.negativePrompt}", and no negative_prompt was recorded. If it was sent, import again with it; if not, send it with the next picture.`);
+            }
+            const negativePrompt = made.negative_prompt?.trim();
+            generated = {
+              kind: "image",
+              prompt: subject,
+              sentPrompt,
+              ...(negativePrompt ? { negativePrompt } : {}),
+              ...(look ? { styleId: look.id, style: look.name } : {}),
+              ...(made.seed !== undefined ? { seed: made.seed } : {}),
+              width: made.width ?? asset.width,
+              height: made.height ?? asset.height,
+              service: made.service.trim(),
+              model: made.model.trim(),
+              ...(made.variation_of ? { variationOf: made.variation_of } : {}),
+              createdAt: Date.now(),
+              by: "agent",
+            };
+          }
+          let placed;
+          try {
+            placed = placeImage(
+              { project: () => this.host.history().present, commit: (action) => void this.commit(action) },
+              { ...asset, ...(generated ? { generated } : {}) },
+              place && typeof place.start === "number"
+                ? { ...(place.trackId ? { trackId: place.trackId } : {}), start: place.start, duration: place.duration ?? 5, motion: place.motion ?? look?.motion ?? "push-in" }
+                : null,
+            );
+          } catch (err) {
+            throw new ToolError(err instanceof Error ? err.message : String(err));
+          }
+          return [
+            json({
+              ok: true,
+              assetId: asset.id,
+              name: asset.name,
+              kind: asset.kind,
+              size: `${asset.width}×${asset.height}`,
+              ...(generated ? { recorded: { style: look?.name ?? null, model: generated.model, service: generated.service, ...(generated.seed !== undefined ? { seed: generated.seed } : {}) } } : {}),
+              ...(placed ? { placed: { ...placed, start: round(placed.start), end: round(placed.end) } } : {}),
+              ...(notes.length ? { notes } : {}),
+              next: placed ? `Look at it before you keep it: render_frame({ time: ${round((placed.start + placed.end) / 2)} }).` : 'add_clip({ kind: "media", assetId, trackId, start }) places it.',
+            }),
+          ];
+        }
         this.commit({ type: "addAssets", assets: [asset] });
         return [
           json({

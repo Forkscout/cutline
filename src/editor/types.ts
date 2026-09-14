@@ -620,14 +620,17 @@ export interface GeneratedImage {
   styleId?: string;
   /** The look's name when it was drawn; it survives a renamed or removed look. */
   style?: string;
-  seed: number;
+  /** Unset when a tool outside Cutline did not say. */
+  seed?: number;
   /** The size asked for; the asset has the size that came back. */
   width: number;
   height: number;
   steps?: number;
   guidance?: number;
   sampler?: string;
-  providerId: string;
+  /** The connected service that drew it; unset for a picture made outside Cutline and imported. */
+  providerId?: string;
+  /** Who drew it: a connected service's name, or the tool outside Cutline that made it. */
   service: string;
   model: string;
   /** What the service says it drew with, when it differs from what was asked. */

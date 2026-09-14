@@ -666,9 +666,15 @@ the look's words added to every subject, a negative prompt, size, steps, an
 optional shared seed and a Ken Burns motion — and each still keeps `generated`
 (subject, prompt as sent, seed, model, look), so `generate_image({ variation_of
 })` draws it again or another take. `placeImage` puts it in an Images bin and on
-a video track above the first, scaled to cover the frame, with an 8% push-in
+a video track over the picture and under any graphics on screen then (a new
+track is inserted below them when none has room, so a title stays readable),
+scaled to cover the frame, with an 8% push-in
 or pan keyed from the clip's start: a still that does not move looks dead.
-Saving a service probes an image model by drawing a 256 px picture. Licences
+Saving a service probes an image model by drawing a 256 px picture. A picture
+made outside Cutline — by an image MCP server, when no image service is
+connected — is imported with `import_media({ generated, place })`: the same
+record (`providerId` unset, `service` naming the tool) and the same placement, so
+`get_image_context` still sees every image and the next one can match. Licences
 (`editor/image-models.ts`): Z-Image Turbo, FLUX.2 [klein] 4B and Qwen-Image are
 Apache 2.0; FLUX.2 [klein] 9B and FLUX.1 dev are non-commercial, and the
 Services manager, the Image panel and the agent's results say so; a hosted

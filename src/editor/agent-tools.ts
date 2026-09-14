@@ -862,7 +862,7 @@ export const EDITOR_TOOLS = {
     name: "generate_image",
     title: "Generate image",
     description:
-      "Draws a still from a prompt with the project's image service — Draw Things on this Mac, or a hosted model — in one of the project's saved looks, imports it into the Images bin as a PNG and, with place, puts it on a video track above the speaker as B-roll: covering the frame, with the look's slow move. prompt is the subject only; the look adds its words, negative prompt, size, steps and seed, so every image belongs to the same film. The asset records the subject, the prompt as sent, seed, model and look: variation_of draws that image again with its seed, or another take with new_seed. Look at every image with render_frame before you keep it — models draw hands, text and logos badly — and draw another take rather than keeping a bad one. A model under a non-commercial licence (FLUX.2 [klein] 9B, FLUX.1 dev) is not for client work; the result says so. A local model can take a minute. Works inside the current start_turn step. Needs importing allowed in Settings › Agents.",
+      "Draws a still from a prompt with the project's image service — Draw Things on this Mac, or a hosted model — in one of the project's saved looks, imports it into the Images bin as a PNG and, with place, puts it on a video track above the speaker as B-roll: covering the frame, with the look's slow move. prompt is the subject only; the look adds its words, negative prompt, size, steps and seed, so every image belongs to the same film. The asset records the subject, the prompt as sent, seed, model and look: variation_of draws that image again with its seed, or another take with new_seed. Look at every image with render_frame before you keep it — models draw hands, text and logos badly — and draw another take rather than keeping a bad one. A model under a non-commercial licence (FLUX.2 [klein] 9B, FLUX.1 dev) is not for client work; the result says so. A local model can take a minute. Works inside the current start_turn step. Needs importing allowed in Settings › Agents. With no image service connected, make the picture with another tool — an image MCP server — using the look's words, then import_media({ path or data, generated, place }) so it keeps the same record.",
     input: {
       prompt: z.string().max(4000).optional().describe("What this image shows, without the look's words. Required unless variation_of"),
       style: z.string().max(80).optional().describe("The look, by id or name (get_image_context). Needed when the project has more than one"),
@@ -1100,11 +1100,35 @@ export const EDITOR_TOOLS = {
     name: "import_media",
     title: "Import media",
     description:
-      "Adds a file — an image, a video or a sound — to the project's media, through the same import as a drop: probed, thumbnailed, a proxy for tall video, a waveform for sound. Send it as data (base64) with a name whose extension says what it is, or put the file in ~/Cutline/inbox/ and give its path. An SVG is rasterised to a 2048 px PNG, so the preview and the export draw the same pixels; the original is kept. Place it with add_clip and the asset id it answers with.",
+      "Adds a file — an image, a video or a sound — to the project's media, through the same import as a drop: probed, thumbnailed, a proxy for tall video, a waveform for sound. Send it as data (base64) with a name whose extension says what it is, or put the file in ~/Cutline/inbox/ and give its path. An SVG is rasterised to a 2048 px PNG, so the preview and the export draw the same pixels; the original is kept. Place it with add_clip and the asset id it answers with — or, for a picture, with place: as B-roll over the speaker and under the graphics, covering the frame with a slow move. A picture made outside Cutline — by an image MCP server or a web tool, when Cutline has no image service of its own — must come with generated: how it was made and in which look, so get_image_context keeps it with the rest and the next image can match it.",
     input: {
       name: z.string().min(1).max(200).optional().describe("File name with its extension, like logo.svg; needed with data"),
       data: z.string().max(12_000_000).optional().describe("The file, base64; up to about 9 MB — use path for anything bigger"),
       path: z.string().max(1000).optional().describe("A file in ~/Cutline/inbox, like ~/Cutline/inbox/logo.svg — the only folder it reads"),
+      generated: z
+        .object({
+          prompt: z.string().min(1).max(4000).describe("The subject, without the look's words"),
+          sent_prompt: z.string().max(6000).optional().describe("Exactly what the generator was sent; default the subject with the look's words"),
+          negative_prompt: z.string().max(2000).optional(),
+          style: z.string().max(80).optional().describe("The look it was made in, by id or name (get_image_context); needed when the project has more than one"),
+          model: z.string().min(1).max(300).describe("The model that made it, as the tool named it"),
+          service: z.string().min(1).max(120).describe("The tool that made it: the MCP server or site"),
+          seed: z.number().int().min(0).max(4294967295).optional(),
+          width: z.number().int().min(1).max(8192).optional(),
+          height: z.number().int().min(1).max(8192).optional(),
+          variation_of: z.string().optional().describe("The asset id of the image this is another take of"),
+        })
+        .optional()
+        .describe("For a picture made outside Cutline: how it was made"),
+      place: z
+        .object({
+          trackId: z.string().optional(),
+          start: s.seconds("When it appears"),
+          duration: z.number().min(0.5).max(60).optional().describe("Seconds on screen; default 5"),
+          motion: z.enum(["push-in", "pull-out", "pan-left", "pan-right", "none"]).optional().describe("Default: the look's, or a slow push-in"),
+        })
+        .optional()
+        .describe("Pictures only: put it on the timeline as B-roll"),
     },
   }),
   startTurn: tool({
@@ -1152,7 +1176,7 @@ export const SERVER_INSTRUCTIONS = `Cutline is a video editor open in the user's
 7. export_video only once the checks look right; give the user the path it returns.
 8. When the client leaves notes, list_notes, fix each, resolve_note with what you did, and save_version after the pass — \"v3 · notes pass\".
 9. Voiceover must sound like one person. get_voice_context before any generate_voice; with no speaker saved, agree one with the client (list_voices) and save it with set_voice_profile — voice, model, speed, direction, and why in notes. Read every line with that profile, and change a profile only when the client asks. Each generated asset keeps how it was read, so the next agent can match it.
-10. B-roll stills must look like one film. get_image_context before any generate_image; with no look saved, agree one with the client from the brief and theme and save it with set_image_style. Draw every image in that look, place it over the speaker as B-roll, and render_frame it before keeping it. For client work, draw with an Apache 2.0 model — Z-Image Turbo, FLUX.2 [klein] 4B, Qwen-Image.
+10. B-roll stills must look like one film. get_image_context before any generate_image; with no look saved, agree one with the client from the brief and theme and save it with set_image_style. Draw every image in that look, place it over the speaker as B-roll, and render_frame it before keeping it. For client work, draw with an Apache 2.0 model — Z-Image Turbo, FLUX.2 [klein] 4B, Qwen-Image. With no image service connected, make the still with another tool using the look's words, and import_media it with generated (subject, model, tool, seed, look) and place — never import a generated picture without its record.
 
 Ids come from get_project. Times are seconds on the timeline; positions are 0..1 of the frame; sizes are pixels at 1080p.`;
 

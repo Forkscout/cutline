@@ -1,7 +1,7 @@
 /**
  * Where a generated still goes: into an Images bin, and onto a video track
- * above the first as B-roll — covering the frame, with a slow move, because a
- * still that does not move looks dead. The Image panel and the agent both
+ * over the speaker and under the graphics as B-roll — covering the frame, with
+ * a slow move, because a still that does not move looks dead. The Image panel and the agent both
  * place a still through this, so they do it the same way.
  */
 
@@ -77,15 +77,27 @@ export function placeImage(ctx: { project(): Project; commit(action: Action): vo
     if (!track) throw new Error(`There is no track ${place.trackId}.`);
     if (!free(track)) throw new Error(`${track.name} cannot take it: it is not a video track, is locked, or has a clip between ${start.toFixed(2)} and ${end.toFixed(2)} s.`);
   } else {
-    // Above the first video track, where the speaker usually is, so the still cuts away from them.
-    const pick = () => {
+    // Over the picture and under the graphics on screen then: a still cuts away
+    // from the speaker, and a title over that stretch stays readable on top of it.
+    const during = (t: Track, kinds: string[]) => t.clips.some((c) => kinds.includes(c.kind) && c.start < end - 1e-3 && c.start + c.duration > start + 1e-3);
+    const layers = () => {
       const tracks = ctx.project().tracks;
       const first = tracks.findIndex((t) => t.kind === "video");
-      return tracks.find((t, i) => i > first && free(t));
+      const graphics = tracks.findIndex((t) => t.kind === "video" && during(t, ["text", "shape"]));
+      const ceiling = graphics === -1 ? tracks.length : graphics;
+      const picture = tracks.reduce((top, t, i) => (i < ceiling && t.kind === "video" && during(t, ["media"]) ? i : top), first);
+      // Never the first video track — the speaker's lane, drawn inside the padding — unless graphics sit on it and nothing is below them.
+      const floor = ceiling <= first ? first - 1 : picture;
+      return { tracks, floor, ceiling };
+    };
+    const pick = () => {
+      const { tracks, floor, ceiling } = layers();
+      return tracks.find((t, i) => i > floor && i < ceiling && free(t));
     };
     track = pick();
     if (!track) {
-      ctx.commit({ type: "addTrack", kind: "video" });
+      const { tracks, ceiling } = layers();
+      ctx.commit({ type: "addTrack", kind: "video", ...(ceiling < tracks.length ? { index: ceiling } : {}) });
       track = pick();
     }
     if (!track) throw new Error("Could not find or make a video track with room for the image.");

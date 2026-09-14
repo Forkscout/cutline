@@ -121,7 +121,8 @@ export function Inspector({
                 <div className="font-medium">Generated image{imageMade.style ? ` · ${imageMade.style}` : ""}</div>
                 <div className="line-clamp-4 whitespace-pre-wrap">{imageMade.prompt}</div>
                 <div className="text-muted-foreground">
-                  Seed {imageMade.seed} · {imageMade.modelUsed ?? imageMade.model} · {imageMade.service} · {imageMade.width}×{imageMade.height}
+                  {imageMade.seed !== undefined ? `Seed ${imageMade.seed} · ` : ""}
+                  {imageMade.modelUsed ?? imageMade.model} · {imageMade.service} · {imageMade.width}×{imageMade.height}
                   {imageMade.steps ? ` · ${imageMade.steps} steps` : ""}
                 </div>
                 {imageMade.negativePrompt && <div className="text-muted-foreground">Avoid: {imageMade.negativePrompt}</div>}
