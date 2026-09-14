@@ -846,10 +846,10 @@ export function Editor({
             <ResizablePanel defaultSize="19" minSize="12" className="border-r">
               <Tabs value={leftTab} onValueChange={setLeftTab} className="flex h-full flex-col gap-0">
                 <TabsList className="mx-2 mt-2 grid h-7 grid-cols-4">
-                  <TabsTrigger value="media" className="text-[10px]">Media</TabsTrigger>
-                  <TabsTrigger value="captions" className="text-[10px]">Captions</TabsTrigger>
-                  <TabsTrigger value="voice" className="text-[10px]">Generate</TabsTrigger>
-                  <TabsTrigger value="brief" className="text-[10px]">Brief</TabsTrigger>
+                  <TabsTrigger value="media" className="min-w-0 truncate px-1 text-[10px]">Media</TabsTrigger>
+                  <TabsTrigger value="captions" className="min-w-0 truncate px-1 text-[10px]">Captions</TabsTrigger>
+                  <TabsTrigger value="voice" className="min-w-0 truncate px-1 text-[10px]">Make</TabsTrigger>
+                  <TabsTrigger value="brief" className="min-w-0 truncate px-1 text-[10px]">Brief</TabsTrigger>
                 </TabsList>
                 <TabsContent value="media" className="mt-2 min-h-0 flex-1">
                   <MediaPool

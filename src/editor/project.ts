@@ -34,10 +34,10 @@ export type RowDensity = keyof typeof ROW_DENSITIES;
 /** What a new track's stored height is; rows are drawn by rowHeight. */
 const TRACK_HEIGHT: number = ROW_DENSITIES.normal.main;
 
-/** A row read closely: any audio track, the first video track — where footage goes — and any video track holding footage. */
+/** A row read closely: the first audio and the first video track — where sound and footage go — and any track holding sound or footage. */
 export function isMainTrack(project: Project, track: Track): boolean {
-  if (track.kind === "audio") return true;
-  if (project.tracks.find((t) => t.kind === "video") === track) return true;
+  if (project.tracks.find((t) => t.kind === track.kind) === track) return true;
+  if (track.kind === "audio") return track.clips.length > 0;
   return track.clips.some((c) => c.kind === "media" && assetOf(project, c)?.kind === "video");
 }
 

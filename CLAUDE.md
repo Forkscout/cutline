@@ -149,8 +149,8 @@ twenty-five tracks showed five of them, and the clips looked lost in the space.
 The header is one line now — name, hide, mute, lock, and a menu for solo, order
 and delete. Then one height for every row was still a wall: a project with
 forty lanes of titles and shapes showed five of them at 44 px. So a row's height
-follows what it holds (`rowHeight` in `project.ts`): audio tracks, the first
-video track and any video track holding footage are read closely and stay tall
+follows what it holds (`rowHeight` in `project.ts`): the first audio and video
+tracks and any track holding sound or footage are read closely and stay tall
 (48 at Normal); every other lane is 24, its clips filling it with a smaller
 label. The Rows control picks Compact (36/20), Normal or Tall (72/36) and is kept
 in the browser, since it is a view and not an edit; the height stored on a track
