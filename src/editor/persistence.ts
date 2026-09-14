@@ -14,8 +14,7 @@
 import { listProjectFiles, readProjectFile } from "@/recorder/storage";
 import { api, apiJson } from "@/lib/server";
 import { assetExists } from "./media";
-import { LEGACY_TRACK_HEIGHT, TRACK_HEIGHTS } from "./project";
-import { EMPTY_BRIEF, type Project, type Track } from "./types";
+import { EMPTY_BRIEF, type Project } from "./types";
 
 const RECOVERY_KEY = "cutline.recovery";
 const MIGRATED_KEY = "cutline.migrated-to-server.v1";
@@ -155,16 +154,6 @@ export async function duplicateProject(project: Project): Promise<Project> {
 }
 
 /**
- * Rows were 64 high while the track header needed two lines of buttons. A
- * project that never changed a height follows the shorter default; one where
- * someone set their own heights is left exactly as it is.
- */
-function rowHeights(tracks: Track[]): Track[] {
-  const untouched = tracks.length > 0 && tracks.every((t) => t.height === LEGACY_TRACK_HEIGHT);
-  return untouched ? tracks.map((t) => ({ ...t, height: TRACK_HEIGHTS.normal })) : tracks;
-}
-
-/**
  * Fills in anything a newer schema added. Old projects should open, not error —
  * a missing field is a default, never a failure.
  */
@@ -183,22 +172,21 @@ export function migrate(project: Project): Project {
     voices: project.voices ?? [],
     imageStyles: project.imageStyles ?? [],
     assets: (project.assets ?? []).map((asset) => ({ ...asset, tags: asset.tags ?? [] })),
-    tracks: rowHeights(
-      (project.tracks ?? []).map((track) => ({
-        ...track,
-        solo: track.solo ?? false,
-        locked: track.locked ?? false,
-        height: track.height ?? TRACK_HEIGHTS.normal,
-        color: track.color ?? null,
-        clips: track.clips.map((clip) => ({
-          ...clip,
-          keyframes: clip.keyframes ?? [],
-          effects: clip.effects ?? [],
-          linkId: clip.linkId ?? null,
-          enabled: clip.enabled ?? true,
-        })),
+    tracks: (project.tracks ?? []).map((track) => ({
+      ...track,
+      solo: track.solo ?? false,
+      locked: track.locked ?? false,
+      // Kept for older readers; the timeline sizes rows by what they hold.
+      height: track.height ?? 48,
+      color: track.color ?? null,
+      clips: track.clips.map((clip) => ({
+        ...clip,
+        keyframes: clip.keyframes ?? [],
+        effects: clip.effects ?? [],
+        linkId: clip.linkId ?? null,
+        enabled: clip.enabled ?? true,
       })),
-    ),
+    })),
   };
 }
 

@@ -19,15 +19,31 @@ const id = () => crypto.randomUUID();
 export const MIN_CLIP_SEC = 0.04;
 
 /**
- * How tall a row is. 64 was one row of buttons too many: the track header
- * needed two lines for its controls, and a project with twenty-five tracks
- * showed five of them. The controls fit one line now, so a row can be the
- * height of its clips.
+ * How tall a timeline row is, by what it holds. Footage and sound are read
+ * closely — thumbnails, waveforms, where a cut lands — so their rows stay tall
+ * enough to read; a lane of titles and shapes needs only its name, and a
+ * project with forty of those was a wall of tall empty rows at any one height.
+ * The Rows control picks a density for both.
  */
-export const TRACK_HEIGHTS = { compact: 32, normal: 44, tall: 72 } as const;
-/** What every track was before that. */
-export const LEGACY_TRACK_HEIGHT = 64;
-const TRACK_HEIGHT: number = TRACK_HEIGHTS.normal;
+export const ROW_DENSITIES = {
+  compact: { main: 36, other: 20 },
+  normal: { main: 48, other: 24 },
+  tall: { main: 72, other: 36 },
+} as const;
+export type RowDensity = keyof typeof ROW_DENSITIES;
+/** What a new track's stored height is; rows are drawn by rowHeight. */
+const TRACK_HEIGHT: number = ROW_DENSITIES.normal.main;
+
+/** A row read closely: any audio track, the first video track — where footage goes — and any video track holding footage. */
+export function isMainTrack(project: Project, track: Track): boolean {
+  if (track.kind === "audio") return true;
+  if (project.tracks.find((t) => t.kind === "video") === track) return true;
+  return track.clips.some((c) => c.kind === "media" && assetOf(project, c)?.kind === "video");
+}
+
+export function rowHeight(project: Project, track: Track, density: RowDensity): number {
+  return ROW_DENSITIES[density][isMainTrack(project, track) ? "main" : "other"];
+}
 
 /* --------------------------------------------------------------- building */
 

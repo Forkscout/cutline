@@ -34,7 +34,7 @@ import { clipAt, valueAt } from "./editor/keyframes";
 import { parseSubtitles, toSrt } from "./editor/captions";
 import { captionsForAsset, captionsFromWords, dropEchoes, dropLoops, wordsFromVerboseJson, wordsOnTimeline } from "./editor/transcript";
 import { transcriptHoles } from "./editor/inspect";
-import { createProject as newProject, mediaClip as newMediaClip, reduce, replaceValue, shapeClip } from "./editor/project";
+import { createProject as newProject, mediaClip as newMediaClip, reduce, replaceValue, rowHeight, shapeClip } from "./editor/project";
 import { needsConfirming, numbersIn, scanNumbers } from "./editor/facts";
 import { lintScene } from "./editor/lint";
 import { brandOverrides, contrast, mergeTheme, paletteOf, themeById } from "./editor/themes";
@@ -1097,6 +1097,16 @@ async function run() {
   const pip = base.tracks[1]?.clips[0]?.transform;
   check("camera is auto-placed as a circular PiP",
     pip?.shape === "circle" && pip.scale < 0.5, `${pip?.shape} at ${pip?.scale}`);
+
+  {
+    // Rows by what they hold: footage and sound read closely, a lane of titles thin.
+    const withTitles = reduce(base, { type: "addTrack", kind: "video" });
+    const titles = withTitles.tracks[withTitles.tracks.length - 1]!;
+    const lanes = { ...withTitles, tracks: withTitles.tracks.map((t) => (t.id === titles.id ? { ...t, clips: [textClip(0, 2)] } : t)) };
+    const heights = lanes.tracks.map((t) => `${t.name}:${rowHeight(lanes, t, "normal")}`).join(" ");
+    check("footage and sound rows are tall, a lane of titles is thin",
+      lanes.tracks.filter((t) => t.id !== titles.id).every((t) => rowHeight(lanes, t, "normal") === 48) && rowHeight(lanes, lanes.tracks.find((t) => t.id === titles.id)!, "normal") === 24, heights);
+  }
 
   const duration = projectDuration(base);
   check("timeline length matches the take",

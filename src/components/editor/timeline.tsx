@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import type { Action } from "@/editor/project";
 import type { AutoCaptionOptions } from "@/components/editor/auto-captions";
-import { TRACK_HEIGHTS, assetOf, linkSize, snapPoints } from "@/editor/project";
+import { ROW_DENSITIES, assetOf, linkSize, rowHeight, snapPoints, type RowDensity } from "@/editor/project";
 import type { Clip, ClipRef, Marker, Project, Track } from "@/editor/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -183,6 +183,26 @@ export function Timeline({
     [pxPerSec],
   );
 
+  // How tall rows are is the viewer's choice, kept in this browser: a view, not an edit to the project.
+  const [density, setDensity] = useState<RowDensity>(() => {
+    try {
+      const saved = localStorage.getItem("cutline:rows");
+      return saved && saved in ROW_DENSITIES ? (saved as RowDensity) : "normal";
+    } catch {
+      return "normal";
+    }
+  });
+  const chooseDensity = (next: RowDensity) => {
+    setDensity(next);
+    try {
+      localStorage.setItem("cutline:rows", next);
+    } catch {
+      // A private window: the choice lasts as long as the page.
+    }
+  };
+  const heights = useMemo(() => new Map(project.tracks.map((t) => [t.id, rowHeight(project, t, density)])), [project, density]);
+  const heightOf = useCallback((track: Track) => heights.get(track.id) ?? ROW_DENSITIES[density].other, [heights, density]);
+
   const trackAtClientY = useCallback(
     (clientY: number): Track | null => {
       const lanes = lanesRef.current;
@@ -190,12 +210,12 @@ export function Timeline({
       const rect = lanes.getBoundingClientRect();
       let offset = rect.top + RULER_HEIGHT + captionLane - lanes.scrollTop;
       for (const track of project.tracks) {
-        if (clientY >= offset && clientY < offset + track.height) return track;
-        offset += track.height;
+        if (clientY >= offset && clientY < offset + heightOf(track)) return track;
+        offset += heightOf(track);
       }
       return null;
     },
-    [project.tracks, captionLane],
+    [project.tracks, captionLane, heightOf],
   );
 
   const scrub = (event: React.PointerEvent) => {
@@ -280,11 +300,7 @@ export function Timeline({
 
   const step = tickStep(pxPerSec);
   const ticks = Math.ceil(contentWidth / pxPerSec / step) + 1;
-  const totalHeight = project.tracks.reduce((n, t) => n + t.height, 0);
-  const rowHeight = project.tracks[0]?.height ?? TRACK_HEIGHTS.normal;
-  /** Every row together, in one undo step: a height is a view, not an edit worth twenty-five of them. */
-  const setRowHeight = (height: number) =>
-    project.tracks.forEach((track, i) => dispatch({ type: "patchTrack", trackId: track.id, patch: { height } }, i > 0));
+  const totalHeight = project.tracks.reduce((n, t) => n + heightOf(t), 0);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -348,10 +364,13 @@ export function Timeline({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="text-xs">
-            {(Object.entries(TRACK_HEIGHTS) as [string, number][]).map(([name, height]) => (
-              <DropdownMenuItem key={name} onClick={() => setRowHeight(height)}>
-                <span className="w-3">{rowHeight === height ? "✓" : ""}</span>
+            {(Object.keys(ROW_DENSITIES) as RowDensity[]).map((name) => (
+              <DropdownMenuItem key={name} onClick={() => chooseDensity(name)}>
+                <span className="w-3">{density === name ? "✓" : ""}</span>
                 {name[0]!.toUpperCase() + name.slice(1)}
+                <span className="ml-auto pl-3 text-[10px] text-muted-foreground tabular-nums">
+                  {ROW_DENSITIES[name].main} / {ROW_DENSITIES[name].other}
+                </span>
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
@@ -416,6 +435,7 @@ export function Timeline({
               track={track}
               index={index}
               total={project.tracks.length}
+              height={heightOf(track)}
               dispatch={dispatch}
             />
           ))}
@@ -488,7 +508,7 @@ export function Timeline({
                   track.locked && "bg-muted/20",
                   tool === "razor" && "cursor-crosshair",
                 )}
-                style={{ height: track.height }}
+                style={{ height: heightOf(track) }}
                 onPointerDown={(e) => {
                   if (e.target === e.currentTarget) onSelect(null);
                 }}
@@ -504,6 +524,8 @@ export function Timeline({
               >
                 {track.clips.map((clip) => {
                   const asset = assetOf(project, clip);
+                  // A thin lane of titles and shapes: the clip fills it and its label shrinks to fit.
+                  const thin = heightOf(track) < 30;
                   const linked = linkSize(project, clip) > 1;
                   const isSelected =
                     selected?.trackId === track.id && selected.clipId === clip.id;
@@ -518,7 +540,8 @@ export function Timeline({
                           aria-label={`${clip.name}, ${clip.duration.toFixed(1)} seconds on ${track.name}`}
                           aria-pressed={isSelected}
                           className={cn(
-                            "group absolute top-1 bottom-1 overflow-hidden rounded border select-none",
+                            "group absolute overflow-hidden rounded border select-none",
+                            thin ? "top-px bottom-px" : "top-1 bottom-1",
                             "focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
                             clipStyle(project, clip),
                             tool === "select" && "cursor-grab active:cursor-grabbing",
@@ -536,7 +559,7 @@ export function Timeline({
                             }
                           }}
                         >
-                          {asset?.thumbnail && track.kind === "video" && width > 40 && (
+                          {asset?.thumbnail && track.kind === "video" && width > 40 && !thin && (
                             <img
                               src={asset.thumbnail}
                               alt=""
@@ -544,7 +567,7 @@ export function Timeline({
                             />
                           )}
                           {asset?.peaks && track.kind === "audio" && (
-                            <Waveform clip={clip} peaks={asset.peaks} width={width} height={track.height - 8} />
+                            <Waveform clip={clip} peaks={asset.peaks} width={width} height={heightOf(track) - 8} />
                           )}
 
                           {clip.transitionIn.type !== "none" && (
@@ -561,7 +584,7 @@ export function Timeline({
                           )}
 
                           <div className="pointer-events-none relative flex h-full items-center gap-1 px-1.5">
-                            <span className="truncate text-[11px] font-medium text-foreground/90">
+                            <span className={cn("truncate font-medium text-foreground/90", thin ? "text-[10px] leading-none" : "text-[11px]")}>
                               {clip.name}
                             </span>
                             {clip.speed !== 1 && (
@@ -712,17 +735,20 @@ function TrackHeader({
   track,
   index,
   total,
+  height,
   dispatch,
 }: {
   track: Track;
   index: number;
   total: number;
+  height: number;
   dispatch: (action: Action, coalesce?: boolean) => void;
 }) {
   const patch = (p: Partial<Track>) => dispatch({ type: "patchTrack", trackId: track.id, patch: p });
+  const button = height < 24 ? "size-4 shrink-0" : "size-5 shrink-0";
 
   return (
-    <div className="flex items-center gap-0.5 border-b px-1.5 last:border-b-0" style={{ height: track.height }}>
+    <div className="flex items-center gap-0.5 border-b px-1.5 last:border-b-0" style={{ height }}>
       {track.kind === "video" ? (
         <Video className="size-3 shrink-0 text-muted-foreground" />
       ) : (
@@ -738,7 +764,7 @@ function TrackHeader({
         <Button
           variant="ghost"
           size="icon"
-          className="size-5 shrink-0"
+          className={button}
           title={track.hidden ? "Show track" : "Hide track"}
           onClick={() => patch({ hidden: !track.hidden })}
         >
@@ -748,7 +774,7 @@ function TrackHeader({
       <Button
         variant="ghost"
         size="icon"
-        className="size-5 shrink-0"
+        className={button}
         title={track.muted ? "Unmute" : "Mute"}
         onClick={() => patch({ muted: !track.muted })}
       >
@@ -757,7 +783,7 @@ function TrackHeader({
       <Button
         variant="ghost"
         size="icon"
-        className="size-5 shrink-0"
+        className={button}
         title={track.locked ? "Unlock track" : "Lock track"}
         onClick={() => patch({ locked: !track.locked })}
       >
@@ -767,7 +793,7 @@ function TrackHeader({
           five buttons in a row is what made every track two lines tall. */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon" className="size-5 shrink-0" title="Solo, order, delete">
+          <Button variant="ghost" size="icon" className={button} title="Solo, order, delete">
             <EllipsisVertical className="size-3" />
           </Button>
         </DropdownMenuTrigger>
