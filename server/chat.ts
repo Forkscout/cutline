@@ -16,6 +16,7 @@ import { appendFile } from "node:fs/promises";
 import type { ChatBlock, ChatRequest, ChatResponse, ImagePart } from "../src/lib/chat-protocol";
 import { authHeaders, endpoint, type Capabilities, type Provider } from "./ai";
 import { probe } from "./stt";
+import { probeVoice } from "./tts";
 
 /** A reply with a dozen tool calls takes a minute or two; ten is generous. */
 const CHAT_TIMEOUT_MS = 10 * 60_000;
@@ -242,10 +243,10 @@ export async function probeChat(provider: Provider): Promise<Pick<Capabilities, 
   }
 }
 
-/** Transcription and chat, each found by trying it. */
+/** Transcription, chat and voice, each found by trying it. */
 export async function probeAll(provider: Provider): Promise<Capabilities> {
-  const [speech, chat] = await Promise.all([probe(provider), probeChat(provider)]);
-  return { ...speech, reachable: speech.reachable || chat.chat === true, ...chat };
+  const [speech, chat, voice] = await Promise.all([probe(provider), probeChat(provider), probeVoice(provider)]);
+  return { ...speech, reachable: speech.reachable || chat.chat === true || voice.voice === true, ...chat, ...voice };
 }
 
 export async function recordUsage(file: string, entry: Record<string, unknown>): Promise<void> {

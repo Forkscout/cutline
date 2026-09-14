@@ -801,6 +801,28 @@ export const EDITOR_TOOLS = {
       dy: z.number().optional(),
     },
   }),
+  listVoices: tool({
+    name: "list_voices",
+    title: "List voices",
+    readOnly: true,
+    description:
+      "The voices the project's voice service speaks, for generate_voice. The service and its voice model are chosen in Services (the voice role); when none is connected, ask the client to give one a voice model — on OpenRouter, google/gemini-3.1-flash-tts-preview reads Hindi and English.",
+    input: {},
+  }),
+  generateVoice: tool({
+    name: "generate_voice",
+    title: "Generate voice",
+    description:
+      "Reads a script aloud with the project's voice service and imports the audio into the Voice bin; with start, also puts it on an audio track with room at that time. One call per sentence or paragraph: short clips are easier to time and to redo. Hosted voices are paid per character, so agree the script with the client first. Needs importing allowed in Settings › Agents. transcribe the clip afterwards to time captions or graphics to its words.",
+    input: {
+      text: z.string().min(1).max(4000),
+      voice: z.string().max(200).optional().describe("A voice id from list_voices; default the model's first"),
+      speed: z.number().min(0.5).max(2).optional(),
+      instructions: z.string().max(500).optional().describe("How to read it, for models that take directions: warm, excited, unhurried"),
+      name: z.string().max(80).optional().describe("The media item's name; default the script's opening words"),
+      start: z.number().min(0).optional().describe("Timeline seconds to place it at; omit to only import it"),
+    },
+  }),
   addBackdrop: tool({
     name: "add_backdrop",
     title: "Add backdrop",

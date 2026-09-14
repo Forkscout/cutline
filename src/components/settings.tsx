@@ -190,6 +190,7 @@ function Usage() {
           ["Read", tokens(usage.totals.inputTokens)],
           ["Written", tokens(usage.totals.outputTokens)],
           ["Transcribed", minutes(usage.totals.transcribedSeconds)],
+          ["Spoken", `${(usage.totals.spokenCharacters ?? 0).toLocaleString()} characters`],
         ].map(([label, value]) => (
           <div key={label} className="rounded-xl border p-3">
             <span className="block text-lg font-semibold tabular-nums">{value}</span>

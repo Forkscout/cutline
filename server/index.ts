@@ -29,6 +29,7 @@ import { CursorService, type CursorRecording } from "./cursor";
 import { Remuxer } from "./remux";
 import { AiSettings, SERVICE_ROLES, isLocal, modelFor, type Provider, type ProviderKind, type ServiceRole } from "./ai";
 import { probeAll, recordUsage, runChat } from "./chat";
+import { listVoices, speak, type Speech } from "./tts";
 import type { ChatRequest } from "../src/lib/chat-protocol";
 import { PROVIDER_KINDS } from "./stt";
 import { Jobs, transcribeFile } from "./transcribe";
@@ -521,6 +522,70 @@ api.get("/ai/chat/:jobId", (c) => {
 api.delete("/ai/chat/:jobId", (c) => {
   chatAborts.get(c.req.param("jobId"))?.abort();
   return c.json({ ok: true });
+});
+
+/* --- voice --- */
+
+/** The voices the project's voice service speaks, for a picker. */
+api.get("/ai/voices", async (c) => {
+  const provider = await ai.resolve("voice", c.req.query("providerId"));
+  if (!provider) return c.json({ error: "No voice service is connected. Give a service a voice model in Services." }, 409);
+  try {
+    return c.json({ providerId: provider.id, name: provider.name, model: provider.voiceModel ?? "", voices: await listVoices(provider) });
+  } catch (err) {
+    // Not 502: the page reads a 5xx from the proxy as "the server is not running".
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 422);
+  }
+});
+
+/**
+ * Reads a script aloud and answers with the audio itself — a paragraph takes
+ * seconds, so there is no job to poll — for the page to import like any other
+ * sound. Logged to usage.jsonl by characters. A client that goes away stops the
+ * call upstream.
+ */
+api.post("/ai/speech", async (c) => {
+  const body = await c.req.json<{ text?: unknown; voice?: unknown; speed?: unknown; instructions?: unknown; providerId?: unknown; projectId?: unknown }>();
+  if (typeof body.text !== "string" || !body.text.trim()) return c.json({ error: "text is required" }, 400);
+  if (body.voice !== undefined && (typeof body.voice !== "string" || body.voice.length > 200)) return c.json({ error: "voice must be a voice id" }, 400);
+  if (body.speed !== undefined && !(typeof body.speed === "number" && body.speed >= 0.25 && body.speed <= 4)) return c.json({ error: "speed must be between 0.25 and 4" }, 400);
+  if (body.instructions !== undefined && (typeof body.instructions !== "string" || body.instructions.length > 500)) {
+    return c.json({ error: "instructions must be at most 500 characters" }, 400);
+  }
+  const provider = await ai.resolve("voice", typeof body.providerId === "string" ? body.providerId : null);
+  if (!provider) return c.json({ error: "No voice service is connected. Give a service a voice model in Services." }, 409);
+  let speech: Speech;
+  try {
+    speech = await speak(
+      provider,
+      {
+        text: body.text,
+        ...(typeof body.voice === "string" && body.voice ? { voice: body.voice } : {}),
+        ...(typeof body.speed === "number" ? { speed: body.speed } : {}),
+        ...(typeof body.instructions === "string" && body.instructions.trim() ? { instructions: body.instructions.trim() } : {}),
+      },
+      c.req.raw.signal,
+    );
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, err instanceof RangeError ? 413 : 422);
+  }
+  await recordUsage(USAGE_FILE, {
+    at: Date.now(),
+    kind: "voice",
+    providerId: provider.id,
+    provider: provider.name,
+    model: speech.model,
+    projectId: typeof body.projectId === "string" ? body.projectId : null,
+    characters: body.text.trim().length,
+  }).catch(() => {});
+  return new Response(speech.audio, {
+    headers: {
+      "content-type": speech.mime,
+      "x-voice": encodeURIComponent(speech.voice),
+      "x-model": encodeURIComponent(speech.model),
+      "x-provider": encodeURIComponent(provider.name),
+    },
+  });
 });
 
 /* --- transcription --- */

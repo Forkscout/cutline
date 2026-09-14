@@ -10,7 +10,7 @@
 
 import { z } from "zod";
 import { listSessions } from "@/lib/media-store";
-import { capabilities, listProviders, serviceFor, transcribe } from "@/lib/ai";
+import { capabilities, listProviders, serviceFor, transcribe, listVoices as voicesOf, speak } from "@/lib/ai";
 import { api, apiJson, refreshSession, tokenRefused } from "@/lib/server";
 import {
   ACTION_TOOLS,
@@ -30,6 +30,7 @@ import { captionsForAsset, wordsOnTimeline, type TimelineWord, type Transcript }
 import { needsConfirming, scanNumbers } from "./facts";
 import { issueKey, lintScene, type LintIssue } from "./lint";
 import { importFiles } from "./media";
+import { placeVoice } from "./voice";
 import { lockedTracksIn, movesAt, rangeOfWords, snapToWords } from "./cut";
 import { listVersions, loadVersion, saveVersion } from "./persistence";
 import { RECIPES, recipeById } from "./recipes";
@@ -966,6 +967,57 @@ export class AgentBridge {
         const after = this.host.history().present;
         const stuck = by ? members.filter((m) => Math.abs((findClip(after, { trackId: m.track.id, clipId: m.clip.id })?.start ?? -1) - Math.max(0, m.clip.start + by)) > 1e-3).length : 0;
         return [json({ ok: true, clips: refs.length, ...(stuck ? { notes: [`${stuck} of its clips could not move by ${by} s: something else is in the way on their tracks.`] } : {}) })];
+      }
+      case "listVoices": {
+        let list;
+        try {
+          list = await voicesOf(project.services.voice);
+        } catch (err) {
+          throw new ToolError(err instanceof Error ? err.message : String(err));
+        }
+        return [json({ ...list, voices: list.voices.slice(0, 300), ...(list.voices.length > 300 ? { more: list.voices.length - 300 } : {}) })];
+      }
+      case "generateVoice": {
+        const script = String(raw.text);
+        const name = (typeof raw.name === "string" && raw.name.trim()) || script.replace(/\s+/g, " ").trim().slice(0, 40);
+        let spoken;
+        try {
+          spoken = await speak(
+            {
+              text: script,
+              ...(typeof raw.voice === "string" ? { voice: raw.voice } : {}),
+              ...(typeof raw.speed === "number" ? { speed: raw.speed } : {}),
+              ...(typeof raw.instructions === "string" ? { instructions: raw.instructions } : {}),
+              ...(project.services.voice ? { providerId: project.services.voice } : {}),
+              projectId: project.id,
+            },
+            name,
+          );
+        } catch (err) {
+          throw new ToolError(err instanceof Error ? err.message : String(err));
+        }
+        const { assets, failed } = await importFiles([spoken.file]);
+        const asset = assets[0];
+        if (!asset) throw new ToolError(`The audio came back but could not be imported: ${failed[0]?.reason ?? "no reason given"}`);
+        let placed;
+        try {
+          placed = placeVoice({ project: () => this.host.history().present, commit: (action) => void this.commit(action) }, { ...asset, name }, typeof raw.start === "number" ? raw.start : null);
+        } catch (err) {
+          throw new ToolError(err instanceof Error ? err.message : String(err));
+        }
+        return [
+          json({
+            ok: true,
+            assetId: asset.id,
+            name,
+            durationSec: round(asset.durationSec),
+            voice: spoken.voice,
+            model: spoken.model,
+            service: spoken.provider,
+            ...(placed ? { placed: { ...placed, start: round(placed.start), end: round(placed.end) } } : {}),
+            next: placed ? "transcribe({ assetId }) gives its words, to time captions or graphics to." : 'add_clip({ kind: "media", assetId, trackId, start }) places it.',
+          }),
+        ];
       }
       case "importMedia": {
         const fromPath = typeof raw.path === "string" && raw.path ? raw.path : null;

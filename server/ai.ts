@@ -9,6 +9,8 @@
  * back to the page: this server makes every call, so the browser never holds a
  * key and local services never see a cross-origin request.
  *
+ * `tts.ts` reads scripts aloud for the voice role.
+ *
  * Adding a provider probes it rather than reporting "connected": a green tick
  * on an endpoint that cannot transcribe is how someone finds out at the
  * captions button that nothing works. LM Studio, as of September 2026, lists
@@ -35,14 +37,18 @@ export interface Capabilities {
   chat?: boolean;
   /** Why it cannot, in the service's own words. */
   chatMessage?: string;
+  /** The chosen voice model spoke a word. */
+  voice?: boolean;
+  /** Why it did not. */
+  voiceMessage?: string;
 }
 
 /** Which API the provider speaks; `stt.ts` has an adapter for each. */
 export type ProviderKind = "openai" | "elevenlabs" | "anthropic";
 
 /**
- * What a service is used for. Speech-to-text and the Director's model are
- * probed and used; voice, image and video are written down for when something
+ * What a service is used for. Speech-to-text, the Director's model and voice
+ * are probed and used; image and video are written down for when something
  * here generates them — nothing does yet, and the interface says so.
  */
 export type ServiceRole = "transcribe" | "chat" | "voice" | "image" | "video";
@@ -99,6 +105,8 @@ export function canDo(provider: Provider, role: ServiceRole): boolean {
   if (!modelFor(provider, role)) return false;
   if (role === "transcribe") return Boolean(provider.capabilities?.transcribe);
   if (role === "chat") return Boolean(provider.capabilities?.chat);
+  // A voice model saved before voices were probed has not failed a probe; it is tried when used.
+  if (role === "voice") return provider.capabilities?.voice !== false;
   return true;
 }
 

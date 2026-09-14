@@ -598,8 +598,8 @@ takes and how big an upload; `transcribe.ts` does the rest the same for all.
 Adding a service is an adapter and a preset.
 
 **A service holds a model per role, and a project chooses which service fills
-each.** The roles are speech to text, the Director's model, and voice, images
-and video — the last three are written down for when something here generates
+each.** The roles are speech to text, the Director's model, voice, images
+and video — the last two are written down for when something here generates
 them; nothing does yet, and the interface says so rather than implying
 otherwise. `project.services` names a service per role; unset means the
 workspace's, which is the one connected last that can do the job. The page and
@@ -614,6 +614,23 @@ keeps keys in `~/Cutline/ai.json` (0600); the page never sees one. Adding a
 provider probes it with a quarter-second of silence, so the answer is
 *transcription ✗, and why*, not "connected". LM Studio, as of September 2026,
 cannot transcribe.
+
+**A voice is read by the service holding the key, and imported like any
+sound.** `server/tts.ts` has an adapter per kind of API: OpenAI's
+`/audio/speech` (OpenAI, OpenRouter, local servers like Kokoro-FastAPI) and
+ElevenLabs'. OpenRouter routes speech to Gemini TTS, MiniMax, Mistral, Deepgram
+and more, and answers raw PCM unless asked for MP3, so every request asks for
+MP3 (PCM that comes anyway is given a WAV header). Voices belong to a model:
+OpenRouter lists each speech model's on its public models API
+(`output_modalities=speech`, `supported_voices`), ElevenLabs the account's, a
+local server may answer `/audio/voices`, and OpenAI's are a fixed set.
+`POST /api/ai/speech` answers with the audio itself — a paragraph takes seconds
+— and logs characters to usage; provider failures are 422, not 502, which the
+page reads as the server being down. The Voice tab and the agent's
+`generate_voice` import it into a Voice bin and put it on an audio track with
+room (`editor/voice.ts`). Saving a service with a voice model probes it by
+having it say "OK."; a voice model saved before that was probed is tried when
+used. `bun scripts/voice-check.ts` checks both adapters against stand-ins.
 
 **Services differ where it hurts, and the adapter absorbs it.** OpenAI and
 OpenRouter refuse uploads over 25 MB, and OpenRouter gives the model 60 s per

@@ -55,8 +55,8 @@ const PRESETS: Preset[] = [
     kind: "openai",
     baseUrl: "https://openrouter.ai/api/v1",
     needsKey: true,
-    note: "One key for Claude, GPT, Gemini and Whisper.",
-    models: { transcribe: "openai/whisper-large-v3", chat: "anthropic/claude-sonnet-5" },
+    note: "One key for Claude, GPT, Gemini, Whisper and voices — Gemini TTS reads Hindi and English.",
+    models: { transcribe: "openai/whisper-large-v3", chat: "anthropic/claude-sonnet-5", voice: "google/gemini-3.1-flash-tts-preview" },
   },
   {
     label: "OpenAI",
@@ -64,7 +64,7 @@ const PRESETS: Preset[] = [
     baseUrl: "https://api.openai.com/v1",
     needsKey: true,
     note: "Whisper, GPT, speech and images on one key.",
-    models: { transcribe: "whisper-1", chat: "gpt-5", voice: "tts-1", image: "gpt-image-1" },
+    models: { transcribe: "whisper-1", chat: "gpt-5", voice: "gpt-4o-mini-tts", image: "gpt-image-1" },
   },
   {
     label: "Anthropic",
@@ -87,7 +87,7 @@ const PRESETS: Preset[] = [
     kind: "elevenlabs",
     baseUrl: "https://api.elevenlabs.io/v1",
     needsKey: true,
-    note: "Scribe for speech-to-text: strong on Hindi and mixed speech.",
+    note: "Scribe for speech-to-text and its own voices: strong on Hindi and mixed speech.",
     models: { transcribe: "scribe_v2", voice: "eleven_v3" },
   },
 ];
@@ -150,7 +150,9 @@ function ServiceForm({ draft, onDone, onCancel }: { draft: Draft; onDone: () => 
       });
       const can = SERVICE_ROLES.filter((role) => canDo(report, role)).map((role) => ROLES[role].title.toLowerCase());
       toast.success(`${report.name} saved`, { description: can.length ? `Can do: ${can.join(", ")}.` : "Nothing it can do yet — check the models and the key." });
-      if (!can.length) setFailure(report.capabilities?.chatMessage ?? report.capabilities?.message ?? "It answered nothing useful.");
+      const voiceFailed = report.voiceModel && report.capabilities?.voice === false ? report.capabilities.voiceMessage : undefined;
+      if (!can.length) setFailure(report.capabilities?.chatMessage ?? voiceFailed ?? report.capabilities?.message ?? "It answered nothing useful.");
+      else if (voiceFailed) setFailure(`Saved, but the voice model did not speak: ${voiceFailed}`);
       else onDone();
     } catch (err) {
       setFailure(err instanceof Error ? err.message : "Could not save it.");
@@ -206,7 +208,7 @@ function ServiceForm({ draft, onDone, onCancel }: { draft: Draft; onDone: () => 
       </div>
       <p className="text-[11px] leading-snug text-muted-foreground">
         A key stays in <code className="font-mono">~/Cutline/ai.json</code> on this machine and is sent only to this URL. Saving asks the service what it
-        can do: speech-to-text with a quarter-second of silence, the model with a few tokens.
+        can do: speech-to-text with a quarter-second of silence, the model with a few tokens, a voice by saying one word.
       </p>
       {failure && (
         <div className="space-y-1 rounded-md border border-destructive/40 p-2 text-[11px] leading-snug">
@@ -345,6 +347,7 @@ export function ServicesManager({
                     );
                   })}
                   {p.capabilities?.message && !p.capabilities.transcribe && <span className="truncate">{p.capabilities.message}</span>}
+                  {p.voiceModel && p.capabilities?.voice === false && p.capabilities.voiceMessage && <span className="truncate">{p.capabilities.voiceMessage}</span>}
                 </div>
                 <div className="mt-1.5 flex flex-wrap gap-1">
                   <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setDraft(draftFrom(p))}>

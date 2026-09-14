@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SlidersHorizontal, Clapperboard,
-  Captions,
   Bot,
   Film,
   Gauge,
@@ -55,6 +54,8 @@ import { Monitor } from "@/components/editor/monitor";
 import { Timeline, type Tool } from "@/components/editor/timeline";
 import { Inspector } from "@/components/editor/inspector";
 import { CaptionsPanel } from "@/components/editor/captions-panel";
+import { VoicePanel } from "@/components/editor/voice-panel";
+import { placeVoice } from "@/editor/voice";
 import { ExportDialog } from "@/components/editor/export-dialog";
 import { Scope, type ScopeKind } from "@/components/editor/scopes";
 import { Button } from "@/components/ui/button";
@@ -841,11 +842,10 @@ export function Editor({
           <ResizablePanelGroup orientation="horizontal">
             <ResizablePanel defaultSize="19" minSize="12" className="border-r">
               <Tabs value={leftTab} onValueChange={setLeftTab} className="flex h-full flex-col gap-0">
-                <TabsList className="mx-2 mt-2 grid h-7 grid-cols-3">
+                <TabsList className="mx-2 mt-2 grid h-7 grid-cols-4">
                   <TabsTrigger value="media" className="text-[10px]">Media</TabsTrigger>
-                  <TabsTrigger value="captions" className="text-[10px]">
-                    <Captions className="size-3" />Captions
-                  </TabsTrigger>
+                  <TabsTrigger value="captions" className="text-[10px]">Captions</TabsTrigger>
+                  <TabsTrigger value="voice" className="text-[10px]">Voice</TabsTrigger>
                   <TabsTrigger value="brief" className="text-[10px]">Brief</TabsTrigger>
                 </TabsList>
                 <TabsContent value="media" className="mt-2 min-h-0 flex-1">
@@ -866,6 +866,28 @@ export function Editor({
                     dispatch={dispatch}
                     onSeek={(t) => engineRef.current?.seek(t)}
                     onAutoCaption={autoCaption}
+                  />
+                </TabsContent>
+                <TabsContent value="voice" className="mt-2 min-h-0 flex-1">
+                  <VoicePanel
+                    project={project}
+                    time={time}
+                    onOpenServices={() => setServicesOpen(true)}
+                    onPlace={(asset, start) => {
+                      // One undo step per generated clip: its bin, its track and its clip.
+                      let first = true;
+                      placeVoice(
+                        {
+                          project: () => historyRef.current.present,
+                          commit: (action) => {
+                            dispatch(action, !first);
+                            first = false;
+                          },
+                        },
+                        asset,
+                        start,
+                      );
+                    }}
                   />
                 </TabsContent>
                 <TabsContent value="brief" className="mt-2 min-h-0 flex-1">

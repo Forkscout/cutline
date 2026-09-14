@@ -5,7 +5,7 @@
 
 import type { Transcript } from "@/editor/transcript";
 import type { ChatRequest, ChatResponse } from "./chat-protocol";
-import { apiJson } from "./server";
+import { api, apiJson } from "./server";
 
 /** Which API a provider speaks: OpenAI's (OpenAI, Groq, OpenRouter, whisper.cpp…), ElevenLabs' or Anthropic's. */
 export type ProviderKind = "openai" | "elevenlabs" | "anthropic";
@@ -19,7 +19,7 @@ export const SERVICE_ROLES: ServiceRole[] = ["transcribe", "chat", "voice", "ima
 export const ROLES: Record<ServiceRole, { title: string; blurb: string; used: boolean }> = {
   transcribe: { title: "Speech to text", blurb: "Captions, and the transcript every graphic is timed to.", used: true },
   chat: { title: "Language model", blurb: "The Director: it reads the project, plans the edit and makes it.", used: true },
-  voice: { title: "Voice", blurb: "Text to speech. Saved for when Cutline speaks; nothing uses it yet.", used: false },
+  voice: { title: "Voice", blurb: "Text to speech: voiceovers read from a script, placed on the timeline.", used: true },
   image: { title: "Images", blurb: "Generated stills. Saved for when Cutline makes them; nothing uses it yet.", used: false },
   video: { title: "Video", blurb: "Generated shots. Saved for when Cutline makes them; nothing uses it yet.", used: false },
 };
@@ -47,6 +47,8 @@ export interface ProviderReport {
     flavor?: "whisper.cpp" | "openrouter";
     chat?: boolean;
     chatMessage?: string;
+    voice?: boolean;
+    voiceMessage?: string;
   };
 }
 
@@ -70,7 +72,13 @@ export const modelOf = (p: ProviderReport, role: ServiceRole): string | undefine
 /** Whether a service can fill a role: what the probe found, or — for what nothing calls yet — that a model is written down. */
 export const canDo = (p: ProviderReport, role: ServiceRole): boolean =>
   Boolean(modelOf(p, role)) &&
-  (role === "transcribe" ? Boolean(p.capabilities?.transcribe) : role === "chat" ? Boolean(p.capabilities?.chat) : true);
+  (role === "transcribe"
+    ? Boolean(p.capabilities?.transcribe)
+    : role === "chat"
+      ? Boolean(p.capabilities?.chat)
+      : role === "voice"
+        ? p.capabilities?.voice !== false
+        : true);
 export const capabilities = () => apiJson<Capabilities>("/api/ai/capabilities");
 
 /**
@@ -121,6 +129,49 @@ export async function serviceFor(role: ServiceRole, preferred?: string): Promise
   }
   const fallback = await capabilities().catch(() => ({ transcribe: null }) as Capabilities);
   return fallback[role] ?? null;
+}
+
+export interface VoiceList {
+  providerId: string;
+  name: string;
+  model: string;
+  voices: { id: string; name: string }[];
+}
+
+/** The voices a service's voice model speaks: the project's choice, or the workspace's. */
+export const listVoices = (providerId?: string) =>
+  apiJson<VoiceList>(`/api/ai/voices${providerId ? `?providerId=${encodeURIComponent(providerId)}` : ""}`);
+
+export interface SpokenAudio {
+  file: File;
+  voice: string;
+  model: string;
+  provider: string;
+}
+
+/** Has the voice service read `text` aloud, and answers with the audio as a file to import. */
+export async function speak(
+  request: { text: string; voice?: string; speed?: number; instructions?: string; providerId?: string; projectId?: string },
+  name = "Voice",
+): Promise<SpokenAudio> {
+  const response = await api("/api/ai/speech", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`;
+    try {
+      message = ((await response.json()) as { error?: string }).error ?? message;
+    } catch {
+      // Not JSON; the status line is the best there is.
+    }
+    throw new Error(message);
+  }
+  const mime = response.headers.get("content-type") ?? "audio/mpeg";
+  const header = (key: string) => decodeURIComponent(response.headers.get(key) ?? "");
+  const file = new File([await response.blob()], `${name.replace(/[\\/:*?"<>|]+/g, " ").trim() || "Voice"}.${mime.includes("wav") ? "wav" : "mp3"}`, { type: mime });
+  return { file, voice: header("x-voice"), model: header("x-model"), provider: header("x-provider") };
 }
 
 export type TranscribeTarget = { sessionId: string; fileName: string } | { mediaId: string };
