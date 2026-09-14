@@ -154,7 +154,11 @@ tracks and any track holding sound or footage are read closely and stay tall
 (48 at Normal); every other lane is 24, its clips filling it with a smaller
 label. The Rows control picks Compact (36/20), Normal or Tall (72/36) and is kept
 in the browser, since it is a view and not an edit; the height stored on a track
-is no longer what the timeline draws.
+is no longer what the timeline draws. The header column is a separate box beside the scrolling
+lanes, so it follows their `scrollTop` and a wheel over it scrolls the lanes; it
+used to be `overflow-hidden` with no link at all, and once rows were thin enough
+to fit forty, the headers below the fold could not be reached. Scroll events are
+not dispatched while the tab is hidden, so check it with the page on screen.
 
 The app is dark-only: `<html class="dark">` is fixed in `index.html`, and
 `sonner.tsx` was edited to drop its `next-themes` dependency.

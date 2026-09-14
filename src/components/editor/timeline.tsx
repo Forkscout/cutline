@@ -147,6 +147,7 @@ export function Timeline({
   const captionLane = project.captions.length > 0 ? CAPTION_LANE_HEIGHT : 0;
   const [snapping, setSnapping] = useState(true);
   const lanesRef = useRef<HTMLDivElement>(null);
+  const headersRef = useRef<HTMLDivElement>(null);
 
   const duration = Math.max(
     ...project.tracks.flatMap((t) => t.clips.map((c) => c.start + c.duration)),
@@ -414,8 +415,20 @@ export function Timeline({
       </div>
 
       <div className="flex min-h-0 flex-1">
-        <div className="shrink-0 overflow-hidden border-r" style={{ width: HEADER_WIDTH }}>
-          <div style={{ height: RULER_HEIGHT }} className="border-b bg-muted/30" />
+        {/* The headers follow the lanes' vertical scroll, and a wheel over them scrolls the lanes:
+            with forty tracks, the ones out of view could otherwise never be reached from here. */}
+        <div
+          ref={headersRef}
+          className="shrink-0 overflow-hidden border-r"
+          style={{ width: HEADER_WIDTH }}
+          onWheel={(e) => {
+            const lanes = lanesRef.current;
+            if (lanes) lanes.scrollTop += e.deltaY;
+          }}
+        >
+          <div style={{ height: RULER_HEIGHT }} className="sticky top-0 z-10 border-b bg-background">
+            <div className="h-full bg-muted/30" />
+          </div>
           {captionLane > 0 && (
             <div
               style={{ height: captionLane }}
@@ -439,9 +452,17 @@ export function Timeline({
               dispatch={dispatch}
             />
           ))}
+          {/* Room for the lanes' horizontal scrollbar, so both can scroll to the same bottom. */}
+          <div className="h-6" aria-hidden />
         </div>
 
-        <div ref={lanesRef} className="relative min-w-0 flex-1 overflow-auto">
+        <div
+          ref={lanesRef}
+          className="relative min-w-0 flex-1 overflow-auto"
+          onScroll={(e) => {
+            if (headersRef.current) headersRef.current.scrollTop = e.currentTarget.scrollTop;
+          }}
+        >
           <div style={{ width: contentWidth, minHeight: totalHeight + RULER_HEIGHT + captionLane }}>
             <div
               className="sticky top-0 z-20 cursor-ew-resize border-b bg-muted/60 backdrop-blur select-none"
