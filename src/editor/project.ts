@@ -10,7 +10,7 @@ import { parseFigure, settledText } from "./counter";
 import { cutRange } from "./cut";
 import { sliceKeyframes } from "./keyframes";
 import type { SessionMeta } from "@/recorder/types";
-import { DEFAULT_CAPTION_STYLE, DEFAULT_CHROMA, DEFAULT_COLOR, DEFAULT_GUIDES, DEFAULT_MASK, DEFAULT_SHAPE, DEFAULT_TEXT, DEFAULT_TRANSFORM, EMPTY_BRIEF, NO_TRANSITION, type Brief, type CaptionCue, type CaptionStyle, type Clip, type ClipKind, type ClipRef, type ColorGrade, type EffectInstance, type Fact, type Guides, type ProjectServices, type Keyframe, type Marker, type MediaAsset, type Project, type ShapeStyle, type TextStyle, type Storyboard, type Theme, type Track, type TrackKind, type Transform, type Transition, type VoiceProfile } from "./types";
+import { DEFAULT_CAPTION_STYLE, DEFAULT_CHROMA, DEFAULT_COLOR, DEFAULT_GUIDES, DEFAULT_MASK, DEFAULT_SHAPE, DEFAULT_TEXT, DEFAULT_TRANSFORM, EMPTY_BRIEF, NO_TRANSITION, type Brief, type CaptionCue, type CaptionStyle, type Clip, type ClipKind, type ClipRef, type ColorGrade, type EffectInstance, type Fact, type Guides, type ProjectServices, type Keyframe, type Marker, type MediaAsset, type Project, type ShapeStyle, type TextStyle, type Storyboard, type Theme, type Track, type TrackKind, type Transform, type Transition, type VoiceProfile, type ImageStyle } from "./types";
 import { restyleClip, themeBackground, themeCaptionStyle } from "./themes";
 
 const id = () => crypto.randomUUID();
@@ -129,6 +129,7 @@ export function createProject(name = "Untitled project"): Project {
     facts: [],
     services: {},
     voices: [],
+    imageStyles: [],
   };
 }
 
@@ -369,7 +370,10 @@ export type Action =
   | { type: "cutRange"; from: number; to: number }
   /** Adds a speaker, or replaces the one with the same id. */
   | { type: "setVoiceProfile"; profile: VoiceProfile }
-  | { type: "removeVoiceProfile"; profileId: string };
+  | { type: "removeVoiceProfile"; profileId: string }
+  /** Adds a look for generated stills, or replaces the one with the same id. */
+  | { type: "setImageStyle"; style: ImageStyle }
+  | { type: "removeImageStyle"; styleId: string };
 
 /** Applies `fn` to every clip named in `refs`, wherever those clips live. */
 function mapClips(
@@ -914,6 +918,15 @@ export function reduce(project: Project, action: Action): Project {
     }
     case "removeVoiceProfile":
       return touched({ ...project, voices: project.voices.filter((v) => v.id !== action.profileId) });
+    case "setImageStyle": {
+      const exists = project.imageStyles.some((s) => s.id === action.style.id);
+      return touched({
+        ...project,
+        imageStyles: exists ? project.imageStyles.map((s) => (s.id === action.style.id ? action.style : s)) : [...project.imageStyles, action.style],
+      });
+    }
+    case "removeImageStyle":
+      return touched({ ...project, imageStyles: project.imageStyles.filter((s) => s.id !== action.styleId) });
     case "setFact": {
       const exists = project.facts.some((f) => f.id === action.fact.id);
       return touched({

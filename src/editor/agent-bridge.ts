@@ -10,7 +10,7 @@
 
 import { z } from "zod";
 import { listSessions } from "@/lib/media-store";
-import { capabilities, listProviders, serviceFor, transcribe, listVoices as voicesOf, speak } from "@/lib/ai";
+import { capabilities, listProviders, serviceFor, transcribe, listVoices as voicesOf, speak, generateImage as drawImage } from "@/lib/ai";
 import { api, apiJson, refreshSession, tokenRefused } from "@/lib/server";
 import {
   ACTION_TOOLS,
@@ -31,6 +31,8 @@ import { needsConfirming, scanNumbers } from "./facts";
 import { issueKey, lintScene, type LintIssue } from "./lint";
 import { importFiles } from "./media";
 import { placeVoice } from "./voice";
+import { placeImage } from "./image";
+import { imageSizeFor, licenceOf, licenceWarning } from "./image-models";
 import { lockedTracksIn, movesAt, rangeOfWords, snapToWords } from "./cut";
 import { listVersions, loadVersion, saveVersion } from "./persistence";
 import { RECIPES, recipeById } from "./recipes";
@@ -61,7 +63,7 @@ import {
   type Action,
   type History, replaceValue } from "./project";
 import { contactSheet, renderStill } from "./snapshot";
-import type { Clip, ClipRef, Project, Marker, Track, GeneratedAudio } from "./types";
+import type { Clip, ClipRef, Project, Marker, Track, GeneratedAudio, GeneratedImage, KenBurns } from "./types";
 
 /** A mistake the agent can fix, reported back to it as the tool's error. */
 class ToolError extends Error {}
@@ -359,6 +361,57 @@ const EXECUTORS: Executors = {
   removeVoiceProfile: (a, project) => {
     if (!project.voices.some((v) => v.id === a.profileId)) throw new ToolError(`There is no voice profile ${a.profileId}; get_voice_context lists them.`);
     return { type: "removeVoiceProfile", profileId: a.profileId };
+  },
+  setImageStyle: async (a, project) => {
+    const existing = project.imageStyles.find((st) => (a.id ? st.id === a.id : st.name.toLowerCase() === a.name.trim().toLowerCase()));
+    if (a.id && !existing) throw new ToolError(`There is no image look ${a.id}; get_image_context lists them.`);
+    if (!existing && !a.prompt?.trim()) throw new ToolError("A new look needs its words: prompt — light, lens, palette, texture.");
+    const service = await serviceFor("image", project.services.image);
+    const model = a.model?.trim() || existing?.model || service?.model;
+    if (!model) throw new ToolError("No image service is connected: ask the client to connect one in Services — Draw Things on this Mac, or a hosted service.");
+    const keep = <T,>(given: T | undefined, had: T | undefined) => (given === undefined ? had : given);
+    const text = (given: string | undefined, had: string | undefined) => keep(given, had)?.trim() || undefined;
+    const size = imageSizeFor(project);
+    const seed = a.seed === null ? undefined : keep(a.seed, existing?.seed);
+    const steps = keep(a.steps, existing?.steps);
+    const guidance = keep(a.guidance, existing?.guidance);
+    const sampler = text(a.sampler, existing?.sampler);
+    const negativePrompt = text(a.negative_prompt, existing?.negativePrompt);
+    const notes = text(a.notes, existing?.notes);
+    const providerId = existing?.providerId ?? service?.providerId;
+    const now = Date.now();
+    const action = {
+      type: "setImageStyle" as const,
+      style: {
+        id: existing?.id ?? crypto.randomUUID(),
+        name: a.name.trim(),
+        ...(providerId ? { providerId } : {}),
+        model,
+        prompt: text(a.prompt, existing?.prompt) ?? "",
+        ...(negativePrompt ? { negativePrompt } : {}),
+        width: a.width ?? existing?.width ?? size.width,
+        height: a.height ?? existing?.height ?? size.height,
+        ...(steps !== undefined ? { steps } : {}),
+        ...(guidance !== undefined ? { guidance } : {}),
+        ...(sampler ? { sampler } : {}),
+        ...(seed !== undefined ? { seed } : {}),
+        motion: a.motion ?? existing?.motion ?? "push-in",
+        ...(notes ? { notes } : {}),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      },
+    };
+    const warning = licenceWarning(model, service?.local ?? false);
+    const warnings = [
+      ...(warning ? [warning] : []),
+      ...(model.trim().toLowerCase() === "current" ? ["This look follows whatever model the app has selected. Pin the model's name, so a later image cannot come from another model."] : []),
+    ];
+    if (warnings.length) ACTION_NOTES.set(action, warnings);
+    return action;
+  },
+  removeImageStyle: (a, project) => {
+    if (!project.imageStyles.some((st) => st.id === a.styleId)) throw new ToolError(`There is no image look ${a.styleId}; get_image_context lists them.`);
+    return { type: "removeImageStyle", styleId: a.styleId };
   },
   setServices: (a) => ({
     type: "setServices",
@@ -1010,6 +1063,201 @@ export class AgentBridge {
         const after = this.host.history().present;
         const stuck = by ? members.filter((m) => Math.abs((findClip(after, { trackId: m.track.id, clipId: m.clip.id })?.start ?? -1) - Math.max(0, m.clip.start + by)) > 1e-3).length : 0;
         return [json({ ok: true, clips: refs.length, ...(stuck ? { notes: [`${stuck} of its clips could not move by ${by} s: something else is in the way on their tracks.`] } : {}) })];
+      }
+      case "getImageContext": {
+        const service = await serviceFor("image", project.services.image);
+        const local = service?.local ?? false;
+        const where = (assetId: string) =>
+          project.tracks.flatMap((t) => t.clips.filter((c) => c.assetId === assetId).map((c) => ({ trackId: t.id, clipId: c.id, start: round(c.start), end: round(c.start + c.duration) })));
+        const images = project.assets.flatMap((a) => {
+          const g = a.generated;
+          if (g?.kind !== "image") return [];
+          const look = project.imageStyles.find((st) => st.id === g.styleId);
+          const words = g.sentPrompt.slice(g.prompt.length).replace(/^[.\s]+/, "");
+          const differs = Boolean(
+            look &&
+              (look.model !== g.model ||
+                look.prompt !== words ||
+                (look.negativePrompt ?? "") !== (g.negativePrompt ?? "") ||
+                look.width !== g.width ||
+                look.height !== g.height ||
+                (look.steps ?? 0) !== (g.steps ?? 0) ||
+                (look.seed !== undefined && look.seed !== g.seed && !g.variationOf)),
+          );
+          return [
+            {
+              assetId: a.id,
+              name: a.name,
+              style: g.style ?? null,
+              styleId: g.styleId ?? null,
+              prompt: g.prompt.length > 600 ? `${g.prompt.slice(0, 600)}…` : g.prompt,
+              seed: g.seed,
+              model: g.model,
+              ...(g.modelUsed ? { modelUsed: g.modelUsed } : {}),
+              ...(g.negativePrompt ? { negativePrompt: g.negativePrompt } : {}),
+              size: `${a.width}×${a.height}`,
+              service: g.service,
+              by: g.by,
+              createdAt: new Date(g.createdAt).toISOString(),
+              ...(g.variationOf ? { variationOf: g.variationOf } : {}),
+              onTimeline: where(a.id),
+              ...(differs ? { differsFromStyle: true } : {}),
+            },
+          ];
+        });
+        const stale = images.filter((i) => i.differsFromStyle).length;
+        const licences = project.imageStyles.flatMap((st) => {
+          const warning = licenceWarning(st.model, local);
+          return warning ? [`${st.name}: ${warning}`] : [];
+        });
+        const licenceName = (model: string) => licenceOf(model, local)?.name;
+        // A service left to follow the app's model says which model that was on the latest image it drew.
+        const latest = [...project.assets]
+          .reverse()
+          .flatMap((a) => (a.generated?.kind === "image" && a.generated.providerId === service?.providerId ? [a.generated.modelUsed ?? a.generated.model] : []))[0];
+        const drawsWith = service && service.model.trim().toLowerCase() === "current" && latest ? latest : service?.model;
+        return [
+          json({
+            service: service
+              ? {
+                  name: service.name,
+                  model: service.model,
+                  ...(drawsWith && drawsWith !== service.model ? { lastDrewWith: drawsWith } : {}),
+                  providerId: service.providerId,
+                  local,
+                  licence: licenceName(drawsWith ?? service.model) ?? (local ? "unknown: check the model's licence" : "the service's terms"),
+                }
+              : null,
+            styles: project.imageStyles.map((st) => ({ ...st, ...(licenceName(st.model) ? { licence: licenceName(st.model) } : {}) })),
+            images,
+            rule: project.imageStyles.length
+              ? "Draw every new image in one of these looks: generate_image({ prompt: the subject only, style }). Another take of an image is generate_image({ variation_of, new_seed: true }). Change a look only when the client asks."
+              : "No look is saved. Agree one with the client — words for light, lens, palette and texture, taken from the brief and theme — and save it with set_image_style before drawing any B-roll.",
+            ...(stale || licences.length
+              ? { notes: [...(stale ? [`${stale} image${stale === 1 ? " differs" : "s differ"} from ${stale === 1 ? "its look" : "their looks"} as it is now, and may not match newer ones.`] : []), ...licences] }
+              : {}),
+          }),
+        ];
+      }
+      case "generateImage": {
+        const base = typeof raw.variation_of === "string" ? project.assets.find((a) => a.id === raw.variation_of) : undefined;
+        if (typeof raw.variation_of === "string" && base?.generated?.kind !== "image") {
+          throw new ToolError(`${raw.variation_of} is not a generated image in this project; get_image_context lists them.`);
+        }
+        const from = base?.generated?.kind === "image" ? base.generated : undefined;
+        const subject = (typeof raw.prompt === "string" && raw.prompt.trim()) || from?.prompt;
+        if (!subject) throw new ToolError("Say what to draw: prompt, the subject without the look's words.");
+        // The look: the one named, the one the image being varied had, the project's only one — or none, and then say to save one.
+        const asked = typeof raw.style === "string" ? raw.style.trim() : "";
+        let look = asked
+          ? project.imageStyles.find((st) => st.id === asked || st.name.toLowerCase() === asked.toLowerCase())
+          : from?.styleId
+            ? project.imageStyles.find((st) => st.id === from.styleId)
+            : undefined;
+        if (asked && !look) throw new ToolError(`There is no look "${asked}". Looks: ${project.imageStyles.map((st) => `${st.name} (${st.id})`).join(", ") || "none — save one with set_image_style"}.`);
+        if (!look && !from && project.imageStyles.length > 1) throw new ToolError(`Say which look: style is one of ${project.imageStyles.map((st) => `${st.name} (${st.id})`).join(", ")}.`);
+        const notes: string[] = [];
+        if (!look && !from && project.imageStyles.length === 1) {
+          look = project.imageStyles[0]!;
+          notes.push(`Drawn in ${look.name}, the project's only look.`);
+        }
+        if (!look && !from) notes.push("No saved look: save one with set_image_style, so later images — and other agents — are drawn the same way.");
+        const words = look?.prompt ?? (from ? from.sentPrompt.slice(from.prompt.length).replace(/^[.\s]+/, "") : "");
+        const sentPrompt = words ? `${subject}. ${words}` : subject;
+        const num = (v: unknown) => (typeof v === "number" ? v : undefined);
+        const frame = imageSizeFor(project);
+        const width = num(raw.width) ?? look?.width ?? from?.width ?? frame.width;
+        const height = num(raw.height) ?? look?.height ?? from?.height ?? frame.height;
+        const negativePrompt = typeof raw.negative_prompt === "string" ? raw.negative_prompt.trim() || undefined : (look?.negativePrompt ?? from?.negativePrompt);
+        const steps = num(raw.steps) ?? look?.steps ?? from?.steps;
+        const guidance = look?.guidance ?? from?.guidance;
+        const sampler = look?.sampler ?? from?.sampler;
+        // Another take of an image keeps its seed unless a new one is asked for; a look may hold one seed for all.
+        const seed = num(raw.seed) ?? (from && raw.new_seed !== true ? from.seed : look?.seed);
+        if (look && (width !== look.width || height !== look.height || (negativePrompt ?? "") !== (look.negativePrompt ?? "") || (steps ?? 0) !== (look.steps ?? 0))) {
+          notes.push(`This image departs from ${look.name}'s settings, so it may not match the others. Say why in your report.`);
+        }
+        const model = look?.model ?? from?.model;
+        const providerId = look?.providerId ?? from?.providerId ?? project.services.image;
+        const service = await serviceFor("image", providerId);
+        if (!service) throw new ToolError("No image service is connected: ask the client to connect one in Services — Draw Things on this Mac, or a hosted service.");
+        const warning = licenceWarning(model ?? service.model, service.local);
+        if (warning) notes.push(warning);
+        const name = (typeof raw.name === "string" && raw.name.trim()) || subject.replace(/\s+/g, " ").slice(0, 40);
+        let picture;
+        try {
+          picture = await drawImage(
+            {
+              prompt: sentPrompt,
+              ...(negativePrompt ? { negativePrompt } : {}),
+              width,
+              height,
+              ...(seed !== undefined ? { seed } : {}),
+              ...(steps !== undefined ? { steps } : {}),
+              ...(guidance !== undefined ? { guidance } : {}),
+              ...(sampler ? { sampler } : {}),
+              ...(model && model.trim().toLowerCase() !== "current" ? { model } : {}),
+              ...(providerId ? { providerId } : {}),
+              projectId: project.id,
+            },
+            name,
+          );
+        } catch (err) {
+          throw new ToolError(err instanceof Error ? err.message : String(err));
+        }
+        const { assets, failed } = await importFiles([picture.file]);
+        const asset = assets[0];
+        if (!asset) throw new ToolError(`The image came back but could not be imported: ${failed[0]?.reason ?? "no reason given"}`);
+        const generated: GeneratedImage = {
+          kind: "image",
+          prompt: subject,
+          sentPrompt,
+          ...(negativePrompt ? { negativePrompt } : {}),
+          ...(look ? { styleId: look.id, style: look.name } : from?.styleId ? { styleId: from.styleId, ...(from.style ? { style: from.style } : {}) } : {}),
+          seed: picture.seed,
+          width,
+          height,
+          ...(steps !== undefined ? { steps } : {}),
+          ...(guidance !== undefined ? { guidance } : {}),
+          ...(sampler ? { sampler } : {}),
+          providerId: picture.providerId,
+          service: picture.provider,
+          model: picture.model,
+          ...(picture.modelUsed && picture.modelUsed !== picture.model ? { modelUsed: picture.modelUsed } : {}),
+          ...(base ? { variationOf: base.id } : {}),
+          createdAt: Date.now(),
+          by: "agent",
+        };
+        const place = raw.place as { trackId?: string; start?: number; duration?: number; motion?: KenBurns } | undefined;
+        let placed;
+        try {
+          placed = placeImage(
+            { project: () => this.host.history().present, commit: (action) => void this.commit(action) },
+            { ...asset, name, generated },
+            place && typeof place.start === "number"
+              ? { ...(place.trackId ? { trackId: place.trackId } : {}), start: place.start, duration: place.duration ?? 5, motion: place.motion ?? look?.motion ?? "push-in" }
+              : null,
+          );
+        } catch (err) {
+          throw new ToolError(err instanceof Error ? err.message : String(err));
+        }
+        return [
+          json({
+            ok: true,
+            assetId: asset.id,
+            name,
+            style: look?.name ?? from?.style ?? null,
+            seed: picture.seed,
+            model: picture.model,
+            ...(picture.modelUsed && picture.modelUsed !== picture.model ? { modelUsed: picture.modelUsed } : {}),
+            size: `${asset.width}×${asset.height}`,
+            ...(placed ? { placed: { ...placed, start: round(placed.start), end: round(placed.end) } } : {}),
+            ...(notes.length ? { notes } : {}),
+            next: placed
+              ? `Look at it before you keep it: render_frame({ time: ${round((placed.start + placed.end) / 2)} }). Another take in the same look: generate_image({ variation_of: "${asset.id}", new_seed: true }).`
+              : `Place it with generate_image's place, or add_clip({ kind: "media", assetId: "${asset.id}", trackId, start }), then render_frame it.`,
+          }),
+        ];
       }
       case "getVoiceContext": {
         const service = await serviceFor("voice", project.services.voice);

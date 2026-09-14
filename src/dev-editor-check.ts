@@ -44,6 +44,8 @@ import { exportProject } from "./editor/export";
 import { clipBox, drawFrame, textLineBoxes, type ClipBox } from "./editor/compositor";
 import { counterText, formatCount, parseFigure, settledText } from "./editor/counter";
 import { addCoin, addStack, addStat, addTable, addTree, measureOnCanvas, type MacroContext } from "./editor/agent-macros";
+import { coverScale, kenBurnsKeys, placeImage } from "./editor/image";
+import type { Action } from "./editor/project";
 import type { Clip, ClipRef, Easing, MediaAsset, Project } from "./editor/types";
 
 const out = document.getElementById("log")!;
@@ -966,6 +968,46 @@ async function run() {
     const zeroPx = zeroShot ? brightPixelsInBand(zeroShot, 180, 90) : 0;
     const fullPx = fullShot ? brightPixelsInBand(fullShot, 180, 90) : 0;
     check("a count reaches the export: 0 first, then the whole figure", zeroPx > 50 && fullPx > zeroPx * 3, `${zeroPx} px at 0.5 s, ${fullPx} at 1.5 s`);
+  }
+
+  /* --- generated stills: a bin, a B-roll track, covering, a slow move --- */
+  log("\ngenerated stills", "dim");
+  {
+    // A still as a service would send one, in a shape that is not the frame's.
+    const canvas = document.createElement("canvas");
+    canvas.width = 768;
+    canvas.height = 512;
+    const g = canvas.getContext("2d")!;
+    const gradient = g.createLinearGradient(0, 0, 768, 0);
+    gradient.addColorStop(0, "#ff3030");
+    gradient.addColorStop(1, "#3030ff");
+    g.fillStyle = gradient;
+    g.fillRect(0, 0, 768, 512);
+    const blob = await new Promise<Blob>((resolve) => canvas.toBlob((b) => resolve(b!), "image/png"));
+    const { assets: stills } = await importFiles([new File([blob], "still.png", { type: "image/png" })]);
+    const still = stills[0];
+    check("a generated PNG imports as a picture, at its size", still?.kind === "image" && still.width === 768 && still.height === 512, still ? `${still.kind} ${still.width}×${still.height}` : "not imported");
+    if (still) {
+      let doc: Project = { ...newProject("b-roll"), width: 960, height: 540 };
+      const ctx = { project: () => doc, commit: (action: Action) => { doc = reduce(doc, action); } };
+      const placed = placeImage(ctx, still, { start: 1, duration: 4, motion: "push-in" });
+      const track = doc.tracks.find((t) => t.id === placed?.trackId);
+      const clip = track?.clips[0];
+      const firstVideo = doc.tracks.findIndex((t) => t.kind === "video");
+      check("it lands in an Images bin, on a video track above the first",
+        track?.kind === "video" && doc.tracks.indexOf(track) > firstVideo && doc.bins.some((b) => b.name === "Images" && b.id === doc.assets[0]?.binId));
+      const cover = coverScale(doc, still);
+      check("it covers the frame and pushes in over its length, keyed from the clip's start",
+        Boolean(clip) && Math.abs(cover - (960 / 540) / (768 / 512)) < 1e-9 && clip!.start === 1 && clip!.duration === 4 &&
+          Math.abs((valueAt(clip!, "transform.scale", 0) ?? 0) - cover) < 1e-9 && Math.abs((valueAt(clip!, "transform.scale", 4) ?? 0) - cover * 1.08) < 1e-9);
+      const beside = placeImage(ctx, still, { start: 2, duration: 2, motion: "pan-left" });
+      check("a still overlapping it goes on another track, and a pan slides it",
+        Boolean(beside) && beside!.trackId !== placed?.trackId && kenBurnsKeys("pan-left", 2, 1).some((k) => k.property === "transform.x" && k.time === 2 && k.value === 0.48));
+    }
+    let looks = reduce(newProject("looks"), { type: "setImageStyle", style: { id: "look", name: "Documentary", model: "z_image_turbo_1.0_q8p.ckpt", prompt: "soft window light, muted palette", width: 1536, height: 896, createdAt: 1, updatedAt: 1 } });
+    looks = reduce(looks, { type: "setImageStyle", style: { ...looks.imageStyles[0]!, prompt: "hard noon light", updatedAt: 2 } });
+    check("a look is saved once and updated in place", looks.imageStyles.length === 1 && looks.imageStyles[0]?.prompt === "hard noon light" && looks.imageStyles[0].createdAt === 1);
+    check("and removed by id", reduce(looks, { type: "removeImageStyle", styleId: "look" }).imageStyles.length === 0);
   }
 
   /* --- voice profiles ------------------------------------------------- */

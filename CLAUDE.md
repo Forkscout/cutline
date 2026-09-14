@@ -599,9 +599,8 @@ Adding a service is an adapter and a preset.
 
 **A service holds a model per role, and a project chooses which service fills
 each.** The roles are speech to text, the Director's model, voice, images
-and video — the last two are written down for when something here generates
-them; nothing does yet, and the interface says so rather than implying
-otherwise. `project.services` names a service per role; unset means the
+and video — video is written down for when something here generates it;
+nothing does yet, and the interface says so rather than implying otherwise. `project.services` names a service per role; unset means the
 workspace's, which is the one connected last that can do the job. The page and
 the server resolve a role by the same rule (`serviceFor` in `lib/ai.ts`,
 `AiSettings.resolve`), so the interface never names one service while another
@@ -645,6 +644,38 @@ guess between several, and says when a line departs from one. The MCP
 instructions, the tool descriptions and the guide all tell an agent to save a
 speaker before reading and to keep to it. The Voice panel saves and picks
 speakers too, and the Inspector shows a clip's record.
+
+**A still is drawn in a saved look, on this Mac if it can be.**
+`server/image.ts` has an adapter per kind of API. OpenAI's images API is
+`/images/generations` on OpenAI and on local servers such as
+stable-diffusion.cpp's, and `/images` on OpenRouter, which takes an aspect ratio
+and no negative prompt, so that goes in words. AUTOMATIC1111's
+`/sdapi/v1/txt2img` (kind `a1111`) is what the Draw Things app serves on
+127.0.0.1:7860 once its API server is switched on in the app, and what A1111,
+Forge and SD.Next serve. Draw Things draws with the model selected in the app,
+not one named in the request, and answers `GET /` with its settings as JSON: so
+a look that pins a model is checked against the app's before drawing and
+refused with what to select, while A1111 is sent `override_settings`. Draw
+Things was not installed when this was written, so these field names come from
+A1111's API and what was reported about the app, checked against stand-ins
+(`scripts/image-check.ts`), not against the app itself: check them when it is.
+The seed is chosen before sending and recorded; what comes back must be a PNG,
+JPEG or WebP under 40 MB, or it is a 422 (413 when too large), and the page
+keeps every still as a PNG. A project keeps `imageStyles` — the pinned model,
+the look's words added to every subject, a negative prompt, size, steps, an
+optional shared seed and a Ken Burns motion — and each still keeps `generated`
+(subject, prompt as sent, seed, model, look), so `generate_image({ variation_of
+})` draws it again or another take. `placeImage` puts it in an Images bin and on
+a video track above the first, scaled to cover the frame, with an 8% push-in
+or pan keyed from the clip's start: a still that does not move looks dead.
+Saving a service probes an image model by drawing a 256 px picture. Licences
+(`editor/image-models.ts`): Z-Image Turbo, FLUX.2 [klein] 4B and Qwen-Image are
+Apache 2.0; FLUX.2 [klein] 9B and FLUX.1 dev are non-commercial, and the
+Services manager, the Image panel and the agent's results say so; a hosted
+model's pictures come under the service's terms. Not built on, as of September
+2026: Ollama's image generation, removed in 0.32.6, and LM Studio, whose image
+plugin calls the Hugging Face cloud. mflux is MLX-native but a command line; it
+would need a small local server speaking the OpenAI images API.
 
 **Services differ where it hurts, and the adapter absorbs it.** OpenAI and
 OpenRouter refuse uploads over 25 MB, and OpenRouter gives the model 60 s per

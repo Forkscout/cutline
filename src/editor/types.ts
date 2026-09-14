@@ -61,8 +61,8 @@ export interface MediaAsset {
    */
   vectorSource?: string;
 
-  /** How a generated sound was made: to read the next line the same way, or this one again. */
-  generated?: GeneratedAudio;
+  /** How a generated sound or still was made: to make the next one the same way, or this one again. */
+  generated?: GeneratedAudio | GeneratedImage;
 
   /** A data URL, cached so the browser does not re-decode on every render. */
   thumbnail?: string;
@@ -511,6 +511,8 @@ export interface Project {
   services: ProjectServices;
   /** The speakers this project's voiceovers are read in. */
   voices: VoiceProfile[];
+  /** The looks this project's generated stills are drawn in. */
+  imageStyles: ImageStyle[];
 }
 
 /**
@@ -567,6 +569,71 @@ export interface GeneratedAudio {
   voice: string;
   speed?: number;
   instructions?: string;
+  createdAt: number;
+  by: "agent" | "user";
+}
+
+/* ------------------------------------------------------------------ image */
+
+/** How a still placed as B-roll moves: a still that does not move looks dead. */
+export type KenBurns = "none" | "push-in" | "pull-out" | "pan-left" | "pan-right";
+
+/**
+ * A look a project's generated stills are drawn in, chosen once and used for
+ * every image, so B-roll drawn next week — by another agent, or by the user —
+ * belongs to the same film.
+ */
+export interface ImageStyle {
+  id: string;
+  /** "Documentary B-roll", "Product close-ups". */
+  name: string;
+  /** The service it was set up on; unset uses the project's image service. */
+  providerId?: string;
+  /** Pinned: another model is another look. "current" follows whatever Draw Things has selected. */
+  model: string;
+  /** The look in words, added to every subject: light, lens, palette, texture. */
+  prompt: string;
+  negativePrompt?: string;
+  width: number;
+  height: number;
+  steps?: number;
+  guidance?: number;
+  sampler?: string;
+  /** One seed for the whole look, so similar subjects compose alike; unset draws each with its own. */
+  seed?: number;
+  /** How a still in this look moves when placed. */
+  motion?: KenBurns;
+  /** Why this look: what the client said. */
+  notes?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** How a generated still was drawn, kept on its asset: to draw it again, or another take. */
+export interface GeneratedImage {
+  kind: "image";
+  /** The subject asked for, without the look's words. */
+  prompt: string;
+  /** Exactly what was sent: the subject with the look's words. */
+  sentPrompt: string;
+  negativePrompt?: string;
+  styleId?: string;
+  /** The look's name when it was drawn; it survives a renamed or removed look. */
+  style?: string;
+  seed: number;
+  /** The size asked for; the asset has the size that came back. */
+  width: number;
+  height: number;
+  steps?: number;
+  guidance?: number;
+  sampler?: string;
+  providerId: string;
+  service: string;
+  model: string;
+  /** What the service says it drew with, when it differs from what was asked. */
+  modelUsed?: string;
+  /** The still this is another take of. */
+  variationOf?: string;
   createdAt: number;
   by: "agent" | "user";
 }

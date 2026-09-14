@@ -258,9 +258,24 @@ const anthropic: SttAdapter = {
   },
 };
 
+/* ------------------------------------------- AUTOMATIC1111 / Draw Things */
+
+/** An image server: connected for pictures, and it says so here. */
+const a1111: SttAdapter = {
+  partSeconds: () => 600,
+  maxBytes: () => 0,
+  concurrency: () => 1,
+  async transcribe() {
+    throw new Error("An image server has no speech-to-text. Connect a transcription service in Services.");
+  },
+  async probe() {
+    return { checkedAt: Date.now(), reachable: false, models: [], transcribe: false, message: "No speech-to-text: this is an image server." };
+  },
+};
+
 /* ------------------------------------------------------------ lookup */
 
-const ADAPTERS: Record<ProviderKind, SttAdapter> = { openai, elevenlabs, anthropic };
+const ADAPTERS: Record<ProviderKind, SttAdapter> = { openai, elevenlabs, anthropic, a1111 };
 
 export const PROVIDER_KINDS = Object.keys(ADAPTERS) as ProviderKind[];
 

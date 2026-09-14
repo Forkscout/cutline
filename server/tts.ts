@@ -238,9 +238,20 @@ const anthropic: TtsAdapter = {
   },
 };
 
+/** An image server speaks no words. */
+const imageServer: TtsAdapter = {
+  maxChars: () => 0,
+  async voices() {
+    throw new Error("An image server has no text to speech.");
+  },
+  async speak() {
+    throw new Error("An image server has no text to speech. Give a voice model to another service in Services.");
+  },
+};
+
 /* ------------------------------------------------------------ public */
 
-const ADAPTERS: Record<ProviderKind, TtsAdapter> = { openai, elevenlabs, anthropic };
+const ADAPTERS: Record<ProviderKind, TtsAdapter> = { openai, elevenlabs, anthropic, a1111: imageServer };
 
 const adapterFor = (provider: Provider): TtsAdapter => ADAPTERS[provider.kind] ?? openai;
 
@@ -265,7 +276,7 @@ export async function speak(provider: Provider, request: SpeechRequest, signal?:
 
 /** Whether the chosen voice model speaks, found by having it say one word — a few characters' worth. */
 export async function probeVoice(provider: Provider): Promise<Pick<Capabilities, "voice" | "voiceMessage">> {
-  if (!provider.voiceModel || provider.kind === "anthropic") return {};
+  if (!provider.voiceModel || provider.kind === "anthropic" || provider.kind === "a1111") return {};
   try {
     await speak(provider, { text: "OK." });
     return { voice: true };

@@ -30,6 +30,7 @@ import { Remuxer } from "./remux";
 import { AiSettings, SERVICE_ROLES, isLocal, modelFor, type Provider, type ProviderKind, type ServiceRole } from "./ai";
 import { probeAll, recordUsage, runChat } from "./chat";
 import { listVoices, speak, type Speech } from "./tts";
+import { generateImage, imageStatus, type Picture } from "./image";
 import type { ChatRequest } from "../src/lib/chat-protocol";
 import { PROVIDER_KINDS } from "./stt";
 import { Jobs, transcribeFile } from "./transcribe";
@@ -591,6 +592,70 @@ api.post("/ai/speech", async (c) => {
       "x-voice": encodeURIComponent(speech.voice),
       "x-model": encodeURIComponent(speech.model),
       "x-provider": encodeURIComponent(provider.name),
+    },
+  });
+});
+
+/* --- images --- */
+
+/**
+ * Draws a still from a prompt and answers with the image itself, for the page
+ * to import like any other picture. A local model can take a minute, so the
+ * request waits for it; a client that goes away stops the call. Logged to
+ * usage.jsonl by images.
+ */
+api.post("/ai/image", async (c) => {
+  const body = await c.req.json<Record<string, unknown>>();
+  const whole = (v: unknown, min: number, max: number) => typeof v === "number" && Number.isInteger(v) && v >= min && v <= max;
+  if (typeof body.prompt !== "string" || !body.prompt.trim() || body.prompt.length > 4000) return c.json({ error: "prompt is required, at most 4000 characters" }, 400);
+  if (body.negativePrompt !== undefined && (typeof body.negativePrompt !== "string" || body.negativePrompt.length > 2000)) return c.json({ error: "negativePrompt must be at most 2000 characters" }, 400);
+  if (!whole(body.width, 64, 4096) || !whole(body.height, 64, 4096)) return c.json({ error: "width and height must be whole pixels from 64 to 4096" }, 400);
+  if (body.seed !== undefined && !whole(body.seed, 0, 4294967295)) return c.json({ error: "seed must be a whole number from 0" }, 400);
+  if (body.steps !== undefined && !whole(body.steps, 1, 150)) return c.json({ error: "steps must be from 1 to 150" }, 400);
+  if (body.guidance !== undefined && !(typeof body.guidance === "number" && body.guidance >= 0 && body.guidance <= 30)) return c.json({ error: "guidance must be from 0 to 30" }, 400);
+  if (body.sampler !== undefined && (typeof body.sampler !== "string" || body.sampler.length > 80)) return c.json({ error: "sampler must be a sampler's name" }, 400);
+  if (body.model !== undefined && (typeof body.model !== "string" || !body.model || body.model.length > 300)) return c.json({ error: "model must be a model's name" }, 400);
+  const found = await ai.resolve("image", typeof body.providerId === "string" ? body.providerId : null);
+  if (!found) return c.json({ error: "No image service is connected. Give a service an image model in Services — Draw Things on this Mac, or a hosted one." }, 409);
+  // A look draws with the model it was saved with, not whatever the service's default is today.
+  const provider = typeof body.model === "string" ? { ...found, imageModel: body.model } : found;
+  let picture: Picture;
+  try {
+    picture = await generateImage(
+      provider,
+      {
+        prompt: body.prompt,
+        ...(typeof body.negativePrompt === "string" && body.negativePrompt.trim() ? { negativePrompt: body.negativePrompt.trim() } : {}),
+        width: body.width as number,
+        height: body.height as number,
+        ...(typeof body.seed === "number" ? { seed: body.seed } : {}),
+        ...(typeof body.steps === "number" ? { steps: body.steps } : {}),
+        ...(typeof body.guidance === "number" ? { guidance: body.guidance } : {}),
+        ...(typeof body.sampler === "string" && body.sampler ? { sampler: body.sampler } : {}),
+      },
+      { signal: c.req.raw.signal },
+    );
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, imageStatus(err));
+  }
+  await recordUsage(USAGE_FILE, {
+    at: Date.now(),
+    kind: "image",
+    providerId: provider.id,
+    provider: provider.name,
+    model: picture.modelUsed ?? picture.model,
+    projectId: typeof body.projectId === "string" ? body.projectId : null,
+    images: 1,
+  }).catch(() => {});
+  return new Response(picture.bytes, {
+    headers: {
+      "content-type": picture.mime,
+      "x-seed": String(picture.seed),
+      "x-model": encodeURIComponent(picture.model),
+      ...(picture.modelUsed ? { "x-model-used": encodeURIComponent(picture.modelUsed) } : {}),
+      "x-provider-id": encodeURIComponent(provider.id),
+      "x-provider": encodeURIComponent(provider.name),
+      ...(picture.width && picture.height ? { "x-width": String(picture.width), "x-height": String(picture.height) } : {}),
     },
   });
 });

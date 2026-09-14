@@ -409,6 +409,33 @@ export const ACTION_TOOLS = {
     description: "Removes a speaker. Lines already generated keep their own record of how they were read. Only when the client asks.",
     input: { profileId: z.string().min(1) },
   }),
+  setImageStyle: tool({
+    name: "set_image_style",
+    title: "Set image look",
+    description:
+      "Saves a look for this project's generated stills: the words added to every subject (light, lens, palette, texture — take the palette from the brief and theme), a negative prompt, the model (pinned, because another model is another look), the size, steps, an optional seed shared by the whole look, and how its stills move when placed. Save one before drawing any B-roll, agreed with the client, and record why in notes; every generate_image then draws in it, so all stills belong to the same film whichever agent draws them. Change a look only when the client asks: images already drawn will no longer match. With an id it updates that look; without, the look with that name is updated or a new one is made. An update keeps what it leaves out; an empty string clears a text field, and seed null lets each image have its own.",
+    input: {
+      id: z.string().max(80).optional(),
+      name: z.string().min(1).max(60).describe("The look: Documentary B-roll, Product close-ups"),
+      prompt: z.string().max(1500).optional().describe("The look in words, added to every subject. Required for a new look"),
+      negative_prompt: z.string().max(1000).optional().describe("What to keep out: text, watermark, logo, extra fingers"),
+      model: z.string().max(300).optional().describe("Default: the image model of the project's image service now. For Draw Things, the model's file name as the app shows it"),
+      width: z.number().int().min(256).max(2048).optional().describe("Default: the sequence's shape, 1536 px on the long side"),
+      height: z.number().int().min(256).max(2048).optional(),
+      steps: z.number().int().min(1).max(150).optional(),
+      guidance: z.number().min(0).max(30).optional(),
+      sampler: z.string().max(80).optional(),
+      seed: z.number().int().min(0).max(4294967295).nullable().optional(),
+      motion: z.enum(["push-in", "pull-out", "pan-left", "pan-right", "none"]).optional().describe("How its stills move when placed; default push-in"),
+      notes: z.string().max(300).optional().describe("Why this look: what the client said"),
+    },
+  }),
+  removeImageStyle: tool({
+    name: "remove_image_style",
+    title: "Remove image look",
+    description: "Removes a look. Images already drawn keep their own record of how they were drawn. Only when the client asks.",
+    input: { styleId: z.string().min(1) },
+  }),
   setServices: tool({
     name: "set_services",
     title: "Set services",
@@ -823,6 +850,41 @@ export const EDITOR_TOOLS = {
       dy: z.number().optional(),
     },
   }),
+  getImageContext: tool({
+    name: "get_image_context",
+    title: "Image context",
+    readOnly: true,
+    description:
+      "Everything about this project's generated stills, read before drawing any: the image service in use and its model's licence, the saved looks (pinned model, words, negative prompt, size, steps, seed, motion, notes) and every image already drawn — its subject, the prompt as sent, seed, model, look, who drew it and where it is on the timeline — with images that no longer match their look flagged. A new image or another take must match these.",
+    input: {},
+  }),
+  generateImage: tool({
+    name: "generate_image",
+    title: "Generate image",
+    description:
+      "Draws a still from a prompt with the project's image service — Draw Things on this Mac, or a hosted model — in one of the project's saved looks, imports it into the Images bin as a PNG and, with place, puts it on a video track above the speaker as B-roll: covering the frame, with the look's slow move. prompt is the subject only; the look adds its words, negative prompt, size, steps and seed, so every image belongs to the same film. The asset records the subject, the prompt as sent, seed, model and look: variation_of draws that image again with its seed, or another take with new_seed. Look at every image with render_frame before you keep it — models draw hands, text and logos badly — and draw another take rather than keeping a bad one. A model under a non-commercial licence (FLUX.2 [klein] 9B, FLUX.1 dev) is not for client work; the result says so. A local model can take a minute. Works inside the current start_turn step. Needs importing allowed in Settings › Agents.",
+    input: {
+      prompt: z.string().max(4000).optional().describe("What this image shows, without the look's words. Required unless variation_of"),
+      style: z.string().max(80).optional().describe("The look, by id or name (get_image_context). Needed when the project has more than one"),
+      negative_prompt: z.string().max(2000).optional().describe("Overrides the look's for this image only"),
+      width: z.number().int().min(256).max(2048).optional().describe("Default: the look's, or the sequence's shape at 1536 px"),
+      height: z.number().int().min(256).max(2048).optional(),
+      seed: z.number().int().min(0).max(4294967295).optional(),
+      steps: z.number().int().min(1).max(150).optional(),
+      variation_of: z.string().optional().describe("A generated image's asset id: draw it again with its subject, look and seed, or another take with new_seed"),
+      new_seed: z.boolean().optional(),
+      name: z.string().max(80).optional(),
+      place: z
+        .object({
+          trackId: z.string().optional().describe("Default: a video track above the first with room"),
+          start: s.seconds("When it appears"),
+          duration: z.number().min(0.5).max(60).optional().describe("Seconds on screen; default 5"),
+          motion: z.enum(["push-in", "pull-out", "pan-left", "pan-right", "none"]).optional().describe("Default: the look's, or a slow push-in"),
+        })
+        .optional()
+        .describe("Put it on the timeline as B-roll"),
+    },
+  }),
   getVoiceContext: tool({
     name: "get_voice_context",
     title: "Voice context",
@@ -1090,6 +1152,7 @@ export const SERVER_INSTRUCTIONS = `Cutline is a video editor open in the user's
 7. export_video only once the checks look right; give the user the path it returns.
 8. When the client leaves notes, list_notes, fix each, resolve_note with what you did, and save_version after the pass — \"v3 · notes pass\".
 9. Voiceover must sound like one person. get_voice_context before any generate_voice; with no speaker saved, agree one with the client (list_voices) and save it with set_voice_profile — voice, model, speed, direction, and why in notes. Read every line with that profile, and change a profile only when the client asks. Each generated asset keeps how it was read, so the next agent can match it.
+10. B-roll stills must look like one film. get_image_context before any generate_image; with no look saved, agree one with the client from the brief and theme and save it with set_image_style. Draw every image in that look, place it over the speaker as B-roll, and render_frame it before keeping it. For client work, draw with an Apache 2.0 model — Z-Image Turbo, FLUX.2 [klein] 4B, Qwen-Image.
 
 Ids come from get_project. Times are seconds on the timeline; positions are 0..1 of the frame; sizes are pixels at 1080p.`;
 

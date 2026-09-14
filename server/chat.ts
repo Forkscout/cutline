@@ -17,6 +17,7 @@ import type { ChatBlock, ChatRequest, ChatResponse, ImagePart } from "../src/lib
 import { authHeaders, endpoint, type Capabilities, type Provider } from "./ai";
 import { probe } from "./stt";
 import { probeVoice } from "./tts";
+import { probeImage } from "./image";
 
 /** A reply with a dozen tool calls takes a minute or two; ten is generous. */
 const CHAT_TIMEOUT_MS = 10 * 60_000;
@@ -234,7 +235,7 @@ export function runChat(provider: Provider, req: ChatRequest, signal?: AbortSign
 
 /** Whether the chosen model answers at all, found by asking it for a word. */
 export async function probeChat(provider: Provider): Promise<Pick<Capabilities, "chat" | "chatMessage">> {
-  if (!provider.chatModel || provider.kind === "elevenlabs") return { chat: false };
+  if (!provider.chatModel || provider.kind === "elevenlabs" || provider.kind === "a1111") return { chat: false };
   try {
     await runChat(provider, { system: "Answer in one word.", messages: [{ role: "user", content: [{ type: "text", text: "Say OK." }] }], tools: [], maxTokens: 16 });
     return { chat: true };
@@ -243,10 +244,10 @@ export async function probeChat(provider: Provider): Promise<Pick<Capabilities, 
   }
 }
 
-/** Transcription, chat and voice, each found by trying it. */
+/** Transcription, chat, voice and images, each found by trying it. */
 export async function probeAll(provider: Provider): Promise<Capabilities> {
-  const [speech, chat, voice] = await Promise.all([probe(provider), probeChat(provider), probeVoice(provider)]);
-  return { ...speech, reachable: speech.reachable || chat.chat === true || voice.voice === true, ...chat, ...voice };
+  const [speech, chat, voice, image] = await Promise.all([probe(provider), probeChat(provider), probeVoice(provider), probeImage(provider)]);
+  return { ...speech, reachable: speech.reachable || chat.chat === true || voice.voice === true || image.image === true, ...chat, ...voice, ...image };
 }
 
 export async function recordUsage(file: string, entry: Record<string, unknown>): Promise<void> {

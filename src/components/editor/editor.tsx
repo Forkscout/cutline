@@ -56,6 +56,8 @@ import { Inspector } from "@/components/editor/inspector";
 import { CaptionsPanel } from "@/components/editor/captions-panel";
 import { VoicePanel } from "@/components/editor/voice-panel";
 import { placeVoice } from "@/editor/voice";
+import { ImagePanel } from "@/components/editor/image-panel";
+import { placeImage } from "@/editor/image";
 import { ExportDialog } from "@/components/editor/export-dialog";
 import { Scope, type ScopeKind } from "@/components/editor/scopes";
 import { Button } from "@/components/ui/button";
@@ -119,6 +121,7 @@ export function Editor({
   const [selected, setSelected] = useState<ClipRef | null>(null);
   // The server restarted with a new token and this page could not pick it up.
   const [serverStale, setServerStale] = useState(false);
+  const [making, setMaking] = useState<"voice" | "image">("voice");
   const [selectedAsset, setSelectedAsset] = useState<string | null>(null);
   const [time, setTime] = useState(0);
   const [tool, setTool] = useState<Tool>("select");
@@ -845,7 +848,7 @@ export function Editor({
                 <TabsList className="mx-2 mt-2 grid h-7 grid-cols-4">
                   <TabsTrigger value="media" className="text-[10px]">Media</TabsTrigger>
                   <TabsTrigger value="captions" className="text-[10px]">Captions</TabsTrigger>
-                  <TabsTrigger value="voice" className="text-[10px]">Voice</TabsTrigger>
+                  <TabsTrigger value="voice" className="text-[10px]">Generate</TabsTrigger>
                   <TabsTrigger value="brief" className="text-[10px]">Brief</TabsTrigger>
                 </TabsList>
                 <TabsContent value="media" className="mt-2 min-h-0 flex-1">
@@ -868,28 +871,68 @@ export function Editor({
                     onAutoCaption={autoCaption}
                   />
                 </TabsContent>
-                <TabsContent value="voice" className="mt-2 min-h-0 flex-1">
-                  <VoicePanel
-                    project={project}
-                    time={time}
-                    dispatch={dispatch}
-                    onOpenServices={() => setServicesOpen(true)}
-                    onPlace={(asset, start) => {
-                      // One undo step per generated clip: its bin, its track and its clip.
-                      let first = true;
-                      placeVoice(
-                        {
-                          project: () => historyRef.current.present,
-                          commit: (action) => {
-                            dispatch(action, !first);
-                            first = false;
-                          },
-                        },
-                        asset,
-                        start,
-                      );
-                    }}
-                  />
+                <TabsContent value="voice" className="mt-2 flex min-h-0 flex-1 flex-col">
+                  <div className="mx-2 mb-2 grid grid-cols-2 gap-0.5 rounded-md bg-muted p-0.5">
+                    {(["voice", "image"] as const).map((kind) => (
+                      <button
+                        key={kind}
+                        onClick={() => setMaking(kind)}
+                        className={cn(
+                          "rounded px-2 py-1 text-[10px] font-medium",
+                          making === kind ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                        )}
+                      >
+                        {kind === "voice" ? "Voice" : "Image"}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="min-h-0 flex-1">
+                    {making === "voice" ? (
+                      <VoicePanel
+                        project={project}
+                        time={time}
+                        dispatch={dispatch}
+                        onOpenServices={() => setServicesOpen(true)}
+                        onPlace={(asset, start) => {
+                          // One undo step per generated clip: its bin, its track and its clip.
+                          let first = true;
+                          placeVoice(
+                            {
+                              project: () => historyRef.current.present,
+                              commit: (action) => {
+                                dispatch(action, !first);
+                                first = false;
+                              },
+                            },
+                            asset,
+                            start,
+                          );
+                        }}
+                      />
+                    ) : (
+                      <ImagePanel
+                        project={project}
+                        time={time}
+                        dispatch={dispatch}
+                        onOpenServices={() => setServicesOpen(true)}
+                        onPlace={(asset, place) => {
+                          // One undo step per image: its bin, its track and its clip.
+                          let first = true;
+                          placeImage(
+                            {
+                              project: () => historyRef.current.present,
+                              commit: (action) => {
+                                dispatch(action, !first);
+                                first = false;
+                              },
+                            },
+                            asset,
+                            place,
+                          );
+                        }}
+                      />
+                    )}
+                  </div>
                 </TabsContent>
                 <TabsContent value="brief" className="mt-2 min-h-0 flex-1">
                   <BriefPanel onCompareLooks={() => setCompareOpen(true)} studio={studioContext} project={project} dispatch={dispatch} />

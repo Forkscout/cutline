@@ -77,6 +77,8 @@ export function Inspector({
 }) {
   const clip = findClip(project, selected);
   const asset = clip ? assetOf(project, clip) : undefined;
+  const voiceMade = asset?.generated?.kind === "voice" ? asset.generated : undefined;
+  const imageMade = asset?.generated?.kind === "image" ? asset.generated : undefined;
   const localTime = clip ? time - clip.start : 0;
   const [tab, setTab] = useState("transform");
 
@@ -114,6 +116,21 @@ export function Inspector({
 
         <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
           <TabsContent value="transform" className="mt-0 space-y-3">
+            {imageMade && (
+              <div className="space-y-1 rounded-md border p-2 text-[11px]">
+                <div className="font-medium">Generated image{imageMade.style ? ` · ${imageMade.style}` : ""}</div>
+                <div className="line-clamp-4 whitespace-pre-wrap">{imageMade.prompt}</div>
+                <div className="text-muted-foreground">
+                  Seed {imageMade.seed} · {imageMade.modelUsed ?? imageMade.model} · {imageMade.service} · {imageMade.width}×{imageMade.height}
+                  {imageMade.steps ? ` · ${imageMade.steps} steps` : ""}
+                </div>
+                {imageMade.negativePrompt && <div className="text-muted-foreground">Avoid: {imageMade.negativePrompt}</div>}
+                <div className="text-[10px] text-muted-foreground">
+                  Drawn {new Date(imageMade.createdAt).toLocaleString()} by {imageMade.by === "agent" ? "an agent" : "you"}
+                  {imageMade.variationOf ? " · another take of an earlier image" : ""}
+                </div>
+              </div>
+            )}
             {clip.kind === "text" && clip.text && (
               <>
                 <Field label="Content">
@@ -470,17 +487,17 @@ export function Inspector({
           </TabsContent>
 
           <TabsContent value="audio" className="mt-0 space-y-3">
-            {asset?.generated && (
+            {voiceMade && (
               <div className="space-y-1 rounded-md border p-2 text-[11px]">
-                <div className="font-medium">Generated voice{asset.generated.speaker ? ` · ${asset.generated.speaker}` : ""}</div>
+                <div className="font-medium">Generated voice{voiceMade.speaker ? ` · ${voiceMade.speaker}` : ""}</div>
                 <div className="text-muted-foreground">
-                  {asset.generated.voice} · {asset.generated.model} · {asset.generated.service}
-                  {asset.generated.speed ? ` · ${asset.generated.speed}×` : ""}
+                  {voiceMade.voice} · {voiceMade.model} · {voiceMade.service}
+                  {voiceMade.speed ? ` · ${voiceMade.speed}×` : ""}
                 </div>
-                {asset.generated.instructions && <div className="text-muted-foreground">Direction: {asset.generated.instructions}</div>}
-                <div className="line-clamp-5 whitespace-pre-wrap rounded border p-1.5">{asset.generated.text}</div>
+                {voiceMade.instructions && <div className="text-muted-foreground">Direction: {voiceMade.instructions}</div>}
+                <div className="line-clamp-5 whitespace-pre-wrap rounded border p-1.5">{voiceMade.text}</div>
                 <div className="text-[10px] text-muted-foreground">
-                  Read {new Date(asset.generated.createdAt).toLocaleString()} by {asset.generated.by === "agent" ? "an agent" : "you"}
+                  Read {new Date(voiceMade.createdAt).toLocaleString()} by {voiceMade.by === "agent" ? "an agent" : "you"}
                 </div>
               </div>
             )}

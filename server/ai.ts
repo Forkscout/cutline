@@ -9,7 +9,8 @@
  * back to the page: this server makes every call, so the browser never holds a
  * key and local services never see a cross-origin request.
  *
- * `tts.ts` reads scripts aloud for the voice role.
+ * `tts.ts` reads scripts aloud for the voice role, and `image.ts` draws stills
+ * for the image role.
  *
  * Adding a provider probes it rather than reporting "connected": a green tick
  * on an endpoint that cannot transcribe is how someone finds out at the
@@ -41,15 +42,20 @@ export interface Capabilities {
   voice?: boolean;
   /** Why it did not. */
   voiceMessage?: string;
+  /** The chosen image model drew a small picture. */
+  image?: boolean;
+  /** Why it did not. */
+  imageMessage?: string;
 }
 
 /** Which API the provider speaks; `stt.ts` has an adapter for each. */
-export type ProviderKind = "openai" | "elevenlabs" | "anthropic";
+/** a1111: the AUTOMATIC1111 image API, which Draw Things, A1111, Forge and SD.Next serve. */
+export type ProviderKind = "openai" | "elevenlabs" | "anthropic" | "a1111";
 
 /**
- * What a service is used for. Speech-to-text, the Director's model and voice
- * are probed and used; image and video are written down for when something
- * here generates them — nothing does yet, and the interface says so.
+ * What a service is used for. Speech-to-text, the Director's model, voice and
+ * images are probed and used; video is written down for when something here
+ * generates it — nothing does yet, and the interface says so.
  */
 export type ServiceRole = "transcribe" | "chat" | "voice" | "image" | "video";
 
@@ -107,6 +113,7 @@ export function canDo(provider: Provider, role: ServiceRole): boolean {
   if (role === "chat") return Boolean(provider.capabilities?.chat);
   // A voice model saved before voices were probed has not failed a probe; it is tried when used.
   if (role === "voice") return provider.capabilities?.voice !== false;
+  if (role === "image") return provider.capabilities?.image !== false;
   return true;
 }
 
@@ -123,7 +130,7 @@ export function authHeaders(provider: Provider): Record<string, string> {
 }
 
 /** The model a kind of service is asked for when the user names none. */
-export const DEFAULT_MODEL: Record<ProviderKind, string> = { openai: "whisper-1", elevenlabs: "scribe_v2", anthropic: "" };
+export const DEFAULT_MODEL: Record<ProviderKind, string> = { openai: "whisper-1", elevenlabs: "scribe_v2", anthropic: "", a1111: "" };
 
 /**
  * The URL a request actually goes to. Inside a container "localhost" is the

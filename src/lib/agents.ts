@@ -46,7 +46,7 @@ export interface AgentsView {
 
 export interface UsageSummary {
   since: number;
-  totals: { calls: number; inputTokens: number; outputTokens: number; cachedTokens: number; transcribedSeconds: number; spokenCharacters?: number };
+  totals: { calls: number; inputTokens: number; outputTokens: number; cachedTokens: number; transcribedSeconds: number; spokenCharacters?: number; images?: number };
   byDay: { day: string; calls: number; inputTokens: number; outputTokens: number; transcribedSeconds: number }[];
   byModel: { model: string; provider: string; calls: number; inputTokens: number; outputTokens: number }[];
   byProject: { projectId: string; calls: number; inputTokens: number; outputTokens: number }[];

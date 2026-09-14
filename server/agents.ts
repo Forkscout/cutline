@@ -39,7 +39,7 @@ export interface SeenClient {
 
 export interface UsageEntry {
   at: number;
-  kind?: "chat" | "transcribe" | "voice";
+  kind?: "chat" | "transcribe" | "voice" | "image";
   provider?: string;
   providerId?: string;
   model?: string;
@@ -50,11 +50,13 @@ export interface UsageEntry {
   seconds?: number;
   /** Characters read aloud. */
   characters?: number;
+  /** Images drawn. */
+  images?: number;
 }
 
 export interface UsageSummary {
   since: number;
-  totals: { calls: number; inputTokens: number; outputTokens: number; cachedTokens: number; transcribedSeconds: number; spokenCharacters: number };
+  totals: { calls: number; inputTokens: number; outputTokens: number; cachedTokens: number; transcribedSeconds: number; spokenCharacters: number; images: number };
   byDay: { day: string; calls: number; inputTokens: number; outputTokens: number; transcribedSeconds: number }[];
   byModel: { model: string; provider: string; calls: number; inputTokens: number; outputTokens: number }[];
   byProject: { projectId: string; calls: number; inputTokens: number; outputTokens: number }[];
@@ -121,7 +123,7 @@ export class AgentSettings {
     } catch {
       // Nothing spent yet.
     }
-    const totals = { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, transcribedSeconds: 0, spokenCharacters: 0 };
+    const totals = { calls: 0, inputTokens: 0, outputTokens: 0, cachedTokens: 0, transcribedSeconds: 0, spokenCharacters: 0, images: 0 };
     const byDay = new Map<string, { day: string; calls: number; inputTokens: number; outputTokens: number; transcribedSeconds: number }>();
     const byModel = new Map<string, { model: string; provider: string; calls: number; inputTokens: number; outputTokens: number }>();
     const byProject = new Map<string, { projectId: string; calls: number; inputTokens: number; outputTokens: number }>();
@@ -143,6 +145,7 @@ export class AgentSettings {
       totals.cachedTokens += entry.cachedTokens ?? 0;
       totals.transcribedSeconds += seconds;
       totals.spokenCharacters += entry.characters ?? 0;
+      totals.images += entry.images ?? 0;
 
       const day = new Date(entry.at).toISOString().slice(0, 10);
       const d = byDay.get(day) ?? { day, calls: 0, inputTokens: 0, outputTokens: 0, transcribedSeconds: 0 };

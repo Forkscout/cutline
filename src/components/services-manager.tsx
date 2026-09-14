@@ -27,6 +27,7 @@ import {
   type ProviderReport,
   type ServiceRole,
 } from "@/lib/ai";
+import { licenceOf, licenceWarning } from "@/editor/image-models";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -49,6 +50,14 @@ const PRESETS: Preset[] = [
     needsKey: false,
     note: "A whisper.cpp server on this machine: free, and nothing leaves it.",
     models: { transcribe: "whisper-1" },
+  },
+  {
+    label: "Draw Things",
+    kind: "a1111",
+    baseUrl: "http://127.0.0.1:7860",
+    needsKey: false,
+    note: "The Draw Things app on this Mac draws images, free and offline. In the app, turn on its API server (HTTP, port 7860). It draws with the model selected in the app: write that model's name here so looks can pin it, or current to follow the app. For client work pick an Apache 2.0 model — Z-Image Turbo, FLUX.2 [klein] 4B or Qwen-Image; FLUX.2 [klein] 9B and FLUX.1 dev are non-commercial.",
+    models: { image: "current" },
   },
   {
     label: "OpenRouter",
@@ -125,6 +134,14 @@ const draftFromPreset = (preset: Preset): Draft => ({
   preset: preset.label,
 });
 
+const onThisMac = (url: string) => {
+  try {
+    return ["localhost", "127.0.0.1", "[::1]", "::1"].includes(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+};
+
 function ServiceForm({ draft, onDone, onCancel }: { draft: Draft; onDone: () => void; onCancel: () => void }) {
   const [form, setForm] = useState<Draft>(draft);
   const [busy, setBusy] = useState(false);
@@ -151,8 +168,10 @@ function ServiceForm({ draft, onDone, onCancel }: { draft: Draft; onDone: () => 
       const can = SERVICE_ROLES.filter((role) => canDo(report, role)).map((role) => ROLES[role].title.toLowerCase());
       toast.success(`${report.name} saved`, { description: can.length ? `Can do: ${can.join(", ")}.` : "Nothing it can do yet — check the models and the key." });
       const voiceFailed = report.voiceModel && report.capabilities?.voice === false ? report.capabilities.voiceMessage : undefined;
-      if (!can.length) setFailure(report.capabilities?.chatMessage ?? voiceFailed ?? report.capabilities?.message ?? "It answered nothing useful.");
+      const imageFailed = report.imageModel && report.capabilities?.image === false ? report.capabilities.imageMessage : undefined;
+      if (!can.length) setFailure(report.capabilities?.chatMessage ?? voiceFailed ?? imageFailed ?? report.capabilities?.message ?? "It answered nothing useful.");
       else if (voiceFailed) setFailure(`Saved, but the voice model did not speak: ${voiceFailed}`);
+      else if (imageFailed) setFailure(`Saved, but the image model did not draw: ${imageFailed}`);
       else onDone();
     } catch (err) {
       setFailure(err instanceof Error ? err.message : "Could not save it.");
@@ -206,9 +225,12 @@ function ServiceForm({ draft, onDone, onCancel }: { draft: Draft; onDone: () => 
           </label>
         ))}
       </div>
+      {licenceWarning(form.models.image ?? "", onThisMac(form.baseUrl)) && (
+        <p className="rounded-md border border-amber-500/40 p-2 text-[11px] leading-snug text-amber-500">{licenceWarning(form.models.image ?? "", onThisMac(form.baseUrl))}</p>
+      )}
       <p className="text-[11px] leading-snug text-muted-foreground">
         A key stays in <code className="font-mono">~/Cutline/ai.json</code> on this machine and is sent only to this URL. Saving asks the service what it
-        can do: speech-to-text with a quarter-second of silence, the model with a few tokens, a voice by saying one word.
+        can do: speech-to-text with a quarter-second of silence, the model with a few tokens, a voice by saying one word, an image model by drawing a 256 px picture.
       </p>
       {failure && (
         <div className="space-y-1 rounded-md border border-destructive/40 p-2 text-[11px] leading-snug">
@@ -343,11 +365,17 @@ export function ServicesManager({
                         {ok ? <Check className="size-3 text-primary" /> : <X className="size-3" />}
                         {ROLES[role].title.toLowerCase()} · <span className="font-mono">{model}</span>
                         {!ROLES[role].used && ok ? " (saved for later)" : ""}
+                        {role === "image" && licenceOf(model, p.local) && (
+                          <span className={licenceOf(model, p.local)!.commercial ? "" : "font-medium text-amber-500"}>
+                            · {licenceOf(model, p.local)!.commercial ? licenceOf(model, p.local)!.name : "non-commercial"}
+                          </span>
+                        )}
                       </span>
                     );
                   })}
-                  {p.capabilities?.message && !p.capabilities.transcribe && <span className="truncate">{p.capabilities.message}</span>}
+                  {p.transcribeModel && p.capabilities?.message && !p.capabilities.transcribe && <span className="truncate">{p.capabilities.message}</span>}
                   {p.voiceModel && p.capabilities?.voice === false && p.capabilities.voiceMessage && <span className="truncate">{p.capabilities.voiceMessage}</span>}
+                  {p.imageModel && p.capabilities?.image === false && p.capabilities.imageMessage && <span className="truncate">{p.capabilities.imageMessage}</span>}
                 </div>
                 <div className="mt-1.5 flex flex-wrap gap-1">
                   <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setDraft(draftFrom(p))}>

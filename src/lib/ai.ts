@@ -8,7 +8,7 @@ import type { ChatRequest, ChatResponse } from "./chat-protocol";
 import { api, apiJson } from "./server";
 
 /** Which API a provider speaks: OpenAI's (OpenAI, Groq, OpenRouter, whisper.cpp…), ElevenLabs' or Anthropic's. */
-export type ProviderKind = "openai" | "elevenlabs" | "anthropic";
+export type ProviderKind = "openai" | "elevenlabs" | "anthropic" | "a1111";
 
 /** What a service is used for. */
 export type ServiceRole = "transcribe" | "chat" | "voice" | "image" | "video";
@@ -20,7 +20,7 @@ export const ROLES: Record<ServiceRole, { title: string; blurb: string; used: bo
   transcribe: { title: "Speech to text", blurb: "Captions, and the transcript every graphic is timed to.", used: true },
   chat: { title: "Language model", blurb: "The Director: it reads the project, plans the edit and makes it.", used: true },
   voice: { title: "Voice", blurb: "Text to speech: voiceovers read from a script, placed on the timeline.", used: true },
-  image: { title: "Images", blurb: "Generated stills. Saved for when Cutline makes them; nothing uses it yet.", used: false },
+  image: { title: "Images", blurb: "Stills from a prompt, drawn in a saved look: B-roll and backgrounds.", used: true },
   video: { title: "Video", blurb: "Generated shots. Saved for when Cutline makes them; nothing uses it yet.", used: false },
 };
 
@@ -49,6 +49,8 @@ export interface ProviderReport {
     chatMessage?: string;
     voice?: boolean;
     voiceMessage?: string;
+    image?: boolean;
+    imageMessage?: string;
   };
 }
 
@@ -78,7 +80,9 @@ export const canDo = (p: ProviderReport, role: ServiceRole): boolean =>
       ? Boolean(p.capabilities?.chat)
       : role === "voice"
         ? p.capabilities?.voice !== false
-        : true);
+        : role === "image"
+          ? p.capabilities?.image !== false
+          : true);
 export const capabilities = () => apiJson<Capabilities>("/api/ai/capabilities");
 
 /**
@@ -176,6 +180,78 @@ export async function speak(
   const header = (key: string) => decodeURIComponent(response.headers.get(key) ?? "");
   const file = new File([await response.blob()], `${name.replace(/[\\/:*?"<>|]+/g, " ").trim() || "Voice"}.${mime.includes("wav") ? "wav" : "mp3"}`, { type: mime });
   return { file, providerId: header("x-provider-id"), voice: header("x-voice"), model: header("x-model"), provider: header("x-provider") };
+}
+
+export interface DrawnImage {
+  /** Always a PNG, whatever the service sent. */
+  file: File;
+  seed: number;
+  model: string;
+  modelUsed?: string;
+  providerId: string;
+  provider: string;
+  width: number;
+  height: number;
+}
+
+/** Has the image service draw a still, and answers with it as a PNG file to import. */
+export async function generateImage(
+  request: {
+    prompt: string;
+    negativePrompt?: string;
+    width: number;
+    height: number;
+    seed?: number;
+    steps?: number;
+    guidance?: number;
+    sampler?: string;
+    /** A look's pinned model, over the service's current one. */
+    model?: string;
+    providerId?: string;
+    projectId?: string;
+  },
+  name = "Image",
+): Promise<DrawnImage> {
+  const response = await api("/api/ai/image", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request) });
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`;
+    try {
+      message = ((await response.json()) as { error?: string }).error ?? message;
+    } catch {
+      // Not JSON; the status line is the best there is.
+    }
+    throw new Error(message);
+  }
+  const header = (key: string) => decodeURIComponent(response.headers.get(key) ?? "");
+  let blob = await response.blob();
+  let width = Number(response.headers.get("x-width")) || 0;
+  let height = Number(response.headers.get("x-height")) || 0;
+  // Every generated still is kept as a PNG, so they are all the same kind of file.
+  if (blob.type !== "image/png" || !width || !height) {
+    const bitmap = await createImageBitmap(blob);
+    width = bitmap.width;
+    height = bitmap.height;
+    if (blob.type !== "image/png") {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext("2d")?.drawImage(bitmap, 0, 0);
+      blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not keep the image as a PNG."))), "image/png"));
+    }
+    bitmap.close();
+  }
+  const safe = name.replace(/[/:*?"<>|]+/g, " ").trim().slice(0, 60) || "Image";
+  const used = response.headers.get("x-model-used");
+  return {
+    file: new File([blob], `${safe}.png`, { type: "image/png" }),
+    seed: Number(response.headers.get("x-seed")),
+    model: header("x-model"),
+    ...(used ? { modelUsed: decodeURIComponent(used) } : {}),
+    providerId: header("x-provider-id"),
+    provider: header("x-provider"),
+    width,
+    height,
+  };
 }
 
 export type TranscribeTarget = { sessionId: string; fileName: string } | { mediaId: string };

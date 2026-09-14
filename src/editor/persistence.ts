@@ -181,6 +181,7 @@ export function migrate(project: Project): Project {
     facts: project.facts ?? [],
     services: project.services ?? {},
     voices: project.voices ?? [],
+    imageStyles: project.imageStyles ?? [],
     assets: (project.assets ?? []).map((asset) => ({ ...asset, tags: asset.tags ?? [] })),
     tracks: rowHeights(
       (project.tracks ?? []).map((track) => ({
