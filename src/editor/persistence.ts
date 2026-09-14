@@ -180,6 +180,7 @@ export function migrate(project: Project): Project {
     storyboard: project.storyboard ?? null,
     facts: project.facts ?? [],
     services: project.services ?? {},
+    voices: project.voices ?? [],
     assets: (project.assets ?? []).map((asset) => ({ ...asset, tags: asset.tags ?? [] })),
     tracks: rowHeights(
       (project.tracks ?? []).map((track) => ({

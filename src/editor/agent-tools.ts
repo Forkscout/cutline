@@ -387,6 +387,28 @@ export const ACTION_TOOLS = {
       "Puts the project back to a saved version (list_versions). What it replaces stays in History, so one undo brings it back — save_version first if it deserves a name.",
     input: { versionId: z.string().min(1) },
   }),
+  setVoiceProfile: tool({
+    name: "set_voice_profile",
+    title: "Set voice profile",
+    description:
+      "Saves a speaker for this project's voiceovers: who is speaking, the voice, the model (pinned, so a line read next week matches), speed, and the direction sent with every line — the voice's standing prompt: tone, pace, accent, language. Save one before generating anything, agreed with the client, and record why in notes. Every generate_voice then names it, so all lines sound like one person, whichever agent reads them. Change a profile only when the client asks: lines already read will no longer match. With an id it updates that profile; without, the profile with that name is updated or a new one is made. An update keeps what it leaves out (speed, instructions, language, notes); an empty string clears one. The voice is checked against the model's voices.",
+    input: {
+      id: z.string().max(80).optional(),
+      name: z.string().min(1).max(60).describe("Who is speaking: Narrator, Priya (host)"),
+      voice: z.string().min(1).max(200).describe("A voice id from list_voices"),
+      model: z.string().max(200).optional().describe("Default: the voice model of the project's voice service now"),
+      speed: z.number().min(0.5).max(2).optional(),
+      instructions: z.string().max(500).optional().describe("How every line is read: warm, unhurried, a light Indian English accent"),
+      language: z.string().max(40).optional().describe("hi, en, Hinglish"),
+      notes: z.string().max(300).optional().describe("Why this voice: what the client said"),
+    },
+  }),
+  removeVoiceProfile: tool({
+    name: "remove_voice_profile",
+    title: "Remove voice profile",
+    description: "Removes a speaker. Lines already generated keep their own record of how they were read. Only when the client asks.",
+    input: { profileId: z.string().min(1) },
+  }),
   setServices: tool({
     name: "set_services",
     title: "Set services",
@@ -801,24 +823,33 @@ export const EDITOR_TOOLS = {
       dy: z.number().optional(),
     },
   }),
+  getVoiceContext: tool({
+    name: "get_voice_context",
+    title: "Voice context",
+    readOnly: true,
+    description:
+      "Everything about this project's voiceover, read before generating any: the voice service in use, the saved speakers (voice, pinned model, speed, direction, notes) and every line already generated — its script, who read it, with which voice, model and direction, by whom, and where it is on the timeline — with lines that no longer match their speaker's profile flagged. A new or redone line must match these.",
+    input: {},
+  }),
   listVoices: tool({
     name: "list_voices",
     title: "List voices",
     readOnly: true,
     description:
-      "The voices the project's voice service speaks, for generate_voice. The service and its voice model are chosen in Services (the voice role); when none is connected, ask the client to give one a voice model — on OpenRouter, google/gemini-3.1-flash-tts-preview reads Hindi and English.",
-    input: {},
+      "The voices a speech model speaks: the project's voice service by default, for choosing a speaker's voice before set_voice_profile. The service and its voice model are chosen in Services (the voice role); when none is connected, ask the client to give one a voice model — on OpenRouter, google/gemini-3.1-flash-tts-preview reads Hindi and English.",
+    input: { model: z.string().max(200).optional().describe("Another speech model's voices; default the service's") },
   }),
   generateVoice: tool({
     name: "generate_voice",
     title: "Generate voice",
     description:
-      "Reads a script aloud with the project's voice service and imports the audio into the Voice bin; with start, also puts it on an audio track with room at that time. One call per sentence or paragraph: short clips are easier to time and to redo. Hosted voices are paid per character, so agree the script with the client first. Needs importing allowed in Settings › Agents. transcribe the clip afterwards to time captions or graphics to its words.",
+      "Reads a script aloud as one of the project's speakers and imports the audio into the Voice bin; with start, also puts it on an audio track with room at that time. Keep the voice consistent: get_voice_context first, and read every line with a saved profile (set_voice_profile) — its voice, pinned model, speed and direction — so all lines sound like one person across sessions and agents. The asset records how it was read (script, speaker, voice, model, direction). One call per sentence or paragraph: short clips are easier to time and to redo. Hosted voices are paid per character, so agree the script with the client first. Needs importing allowed in Settings › Agents. transcribe the clip afterwards to time captions or graphics to its words.",
     input: {
       text: z.string().min(1).max(4000),
-      voice: z.string().max(200).optional().describe("A voice id from list_voices; default the model's first"),
-      speed: z.number().min(0.5).max(2).optional(),
-      instructions: z.string().max(500).optional().describe("How to read it, for models that take directions: warm, excited, unhurried"),
+      profile: z.string().max(80).optional().describe("The speaker, by profile id or name (get_voice_context). Needed when the project has more than one"),
+      voice: z.string().max(200).optional().describe("Overrides the profile's voice for this line only — it will not match; say why"),
+      speed: z.number().min(0.5).max(2).optional().describe("Overrides the profile's speed for this line only"),
+      instructions: z.string().max(500).optional().describe("Overrides the profile's direction for this line only"),
       name: z.string().max(80).optional().describe("The media item's name; default the script's opening words"),
       start: z.number().min(0).optional().describe("Timeline seconds to place it at; omit to only import it"),
     },
@@ -1058,6 +1089,7 @@ export const SERVER_INSTRUCTIONS = `Cutline is a video editor open in the user's
 6. Verify before you report: lint_scene on what you built, fixing until it is clean; render_frame or contact_sheet across everything you touched; audio_envelope after timing edits. list_facts shows numbers on screen nobody said: ask the client, record answers with set_fact or correct_fact, and report any still unconfirmed.
 7. export_video only once the checks look right; give the user the path it returns.
 8. When the client leaves notes, list_notes, fix each, resolve_note with what you did, and save_version after the pass — \"v3 · notes pass\".
+9. Voiceover must sound like one person. get_voice_context before any generate_voice; with no speaker saved, agree one with the client (list_voices) and save it with set_voice_profile — voice, model, speed, direction, and why in notes. Read every line with that profile, and change a profile only when the client asks. Each generated asset keeps how it was read, so the next agent can match it.
 
 Ids come from get_project. Times are seconds on the timeline; positions are 0..1 of the frame; sizes are pixels at 1080p.`;
 

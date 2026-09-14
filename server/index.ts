@@ -528,8 +528,11 @@ api.delete("/ai/chat/:jobId", (c) => {
 
 /** The voices the project's voice service speaks, for a picker. */
 api.get("/ai/voices", async (c) => {
-  const provider = await ai.resolve("voice", c.req.query("providerId"));
-  if (!provider) return c.json({ error: "No voice service is connected. Give a service a voice model in Services." }, 409);
+  const found = await ai.resolve("voice", c.req.query("providerId"));
+  if (!found) return c.json({ error: "No voice service is connected. Give a service a voice model in Services." }, 409);
+  // A speaker's pinned model, when it asks for one.
+  const model = c.req.query("model");
+  const provider = model ? { ...found, voiceModel: model } : found;
   try {
     return c.json({ providerId: provider.id, name: provider.name, model: provider.voiceModel ?? "", voices: await listVoices(provider) });
   } catch (err) {
@@ -545,15 +548,18 @@ api.get("/ai/voices", async (c) => {
  * call upstream.
  */
 api.post("/ai/speech", async (c) => {
-  const body = await c.req.json<{ text?: unknown; voice?: unknown; speed?: unknown; instructions?: unknown; providerId?: unknown; projectId?: unknown }>();
+  const body = await c.req.json<{ text?: unknown; voice?: unknown; speed?: unknown; instructions?: unknown; model?: unknown; providerId?: unknown; projectId?: unknown }>();
+  if (body.model !== undefined && (typeof body.model !== "string" || !body.model || body.model.length > 200)) return c.json({ error: "model must be a model id" }, 400);
   if (typeof body.text !== "string" || !body.text.trim()) return c.json({ error: "text is required" }, 400);
   if (body.voice !== undefined && (typeof body.voice !== "string" || body.voice.length > 200)) return c.json({ error: "voice must be a voice id" }, 400);
   if (body.speed !== undefined && !(typeof body.speed === "number" && body.speed >= 0.25 && body.speed <= 4)) return c.json({ error: "speed must be between 0.25 and 4" }, 400);
   if (body.instructions !== undefined && (typeof body.instructions !== "string" || body.instructions.length > 500)) {
     return c.json({ error: "instructions must be at most 500 characters" }, 400);
   }
-  const provider = await ai.resolve("voice", typeof body.providerId === "string" ? body.providerId : null);
-  if (!provider) return c.json({ error: "No voice service is connected. Give a service a voice model in Services." }, 409);
+  const found = await ai.resolve("voice", typeof body.providerId === "string" ? body.providerId : null);
+  if (!found) return c.json({ error: "No voice service is connected. Give a service a voice model in Services." }, 409);
+  // A speaker reads with the model it was saved with, not whatever the service's default is today.
+  const provider = typeof body.model === "string" ? { ...found, voiceModel: body.model } : found;
   let speech: Speech;
   try {
     speech = await speak(
@@ -581,6 +587,7 @@ api.post("/ai/speech", async (c) => {
   return new Response(speech.audio, {
     headers: {
       "content-type": speech.mime,
+      "x-provider-id": encodeURIComponent(provider.id),
       "x-voice": encodeURIComponent(speech.voice),
       "x-model": encodeURIComponent(speech.model),
       "x-provider": encodeURIComponent(provider.name),

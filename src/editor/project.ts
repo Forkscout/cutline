@@ -10,41 +10,7 @@ import { parseFigure, settledText } from "./counter";
 import { cutRange } from "./cut";
 import { sliceKeyframes } from "./keyframes";
 import type { SessionMeta } from "@/recorder/types";
-import {
-  DEFAULT_CAPTION_STYLE,
-  DEFAULT_CHROMA,
-  DEFAULT_COLOR,
-  DEFAULT_GUIDES,
-  DEFAULT_MASK,
-  DEFAULT_SHAPE,
-  DEFAULT_TEXT,
-  DEFAULT_TRANSFORM,
-  EMPTY_BRIEF,
-  NO_TRANSITION,
-  type Brief,
-  type CaptionCue,
-  type CaptionStyle,
-  type Clip,
-  type ClipKind,
-  type ClipRef,
-  type ColorGrade,
-  type EffectInstance,
-  type Fact,
-  type Guides,
-  type ProjectServices,
-  type Keyframe,
-  type Marker,
-  type MediaAsset,
-  type Project,
-  type ShapeStyle,
-  type TextStyle,
-  type Storyboard,
-  type Theme,
-  type Track,
-  type TrackKind,
-  type Transform,
-  type Transition,
-} from "./types";
+import { DEFAULT_CAPTION_STYLE, DEFAULT_CHROMA, DEFAULT_COLOR, DEFAULT_GUIDES, DEFAULT_MASK, DEFAULT_SHAPE, DEFAULT_TEXT, DEFAULT_TRANSFORM, EMPTY_BRIEF, NO_TRANSITION, type Brief, type CaptionCue, type CaptionStyle, type Clip, type ClipKind, type ClipRef, type ColorGrade, type EffectInstance, type Fact, type Guides, type ProjectServices, type Keyframe, type Marker, type MediaAsset, type Project, type ShapeStyle, type TextStyle, type Storyboard, type Theme, type Track, type TrackKind, type Transform, type Transition, type VoiceProfile } from "./types";
 import { restyleClip, themeBackground, themeCaptionStyle } from "./themes";
 
 const id = () => crypto.randomUUID();
@@ -162,6 +128,7 @@ export function createProject(name = "Untitled project"): Project {
     storyboard: null,
     facts: [],
     services: {},
+    voices: [],
   };
 }
 
@@ -399,7 +366,10 @@ export type Action =
   /** Which connected service each role uses here; a role set to undefined goes back to the workspace's. */
   | { type: "setServices"; patch: ProjectServices }
   /** Removes [from, to) from every track and closes the gap; see cut.ts. */
-  | { type: "cutRange"; from: number; to: number };
+  | { type: "cutRange"; from: number; to: number }
+  /** Adds a speaker, or replaces the one with the same id. */
+  | { type: "setVoiceProfile"; profile: VoiceProfile }
+  | { type: "removeVoiceProfile"; profileId: string };
 
 /** Applies `fn` to every clip named in `refs`, wherever those clips live. */
 function mapClips(
@@ -935,6 +905,15 @@ export function reduce(project: Project, action: Action): Project {
       }
       return touched({ ...project, services });
     }
+    case "setVoiceProfile": {
+      const exists = project.voices.some((v) => v.id === action.profile.id);
+      return touched({
+        ...project,
+        voices: exists ? project.voices.map((v) => (v.id === action.profile.id ? action.profile : v)) : [...project.voices, action.profile],
+      });
+    }
+    case "removeVoiceProfile":
+      return touched({ ...project, voices: project.voices.filter((v) => v.id !== action.profileId) });
     case "setFact": {
       const exists = project.facts.some((f) => f.id === action.fact.id);
       return touched({

@@ -872,6 +872,7 @@ export function Editor({
                   <VoicePanel
                     project={project}
                     time={time}
+                    dispatch={dispatch}
                     onOpenServices={() => setServicesOpen(true)}
                     onPlace={(asset, start) => {
                       // One undo step per generated clip: its bin, its track and its clip.

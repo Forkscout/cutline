@@ -61,6 +61,9 @@ export interface MediaAsset {
    */
   vectorSource?: string;
 
+  /** How a generated sound was made: to read the next line the same way, or this one again. */
+  generated?: GeneratedAudio;
+
   /** A data URL, cached so the browser does not re-decode on every render. */
   thumbnail?: string;
   /** Normalised min/max pairs per bucket, for drawing waveforms. */
@@ -506,6 +509,8 @@ export interface Project {
   facts: Fact[];
   /** Which connected service fills each role here; unset means the workspace's. */
   services: ProjectServices;
+  /** The speakers this project's voiceovers are read in. */
+  voices: VoiceProfile[];
 }
 
 /**
@@ -519,6 +524,51 @@ export interface ProjectServices {
   voice?: string;
   image?: string;
   video?: string;
+}
+
+/* ------------------------------------------------------------------ voice */
+
+/**
+ * A speaker a project's voiceovers are read in, chosen once and used for every
+ * line, so a line read next week — by another agent, or by the user in the
+ * Voice panel — sounds like the rest.
+ */
+export interface VoiceProfile {
+  id: string;
+  /** Who is speaking: "Narrator", "Priya (host)". */
+  name: string;
+  /** The service it was set up on; unset uses the project's voice service. */
+  providerId?: string;
+  /** Pinned: a service's default model can change, and a different model is a different voice. */
+  model: string;
+  voice: string;
+  speed?: number;
+  /** The standing direction sent with every line: tone, pace, accent, language. */
+  instructions?: string;
+  language?: string;
+  /** Why this voice: what the client said. */
+  notes?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** How a generated sound was read, kept on its asset. */
+export interface GeneratedAudio {
+  kind: "voice";
+  /** The script, as it was sent. */
+  text: string;
+  profileId?: string;
+  /** The profile's name when it was read; it survives a renamed or removed profile. */
+  speaker?: string;
+  providerId: string;
+  /** The service's name when it was read. */
+  service: string;
+  model: string;
+  voice: string;
+  speed?: number;
+  instructions?: string;
+  createdAt: number;
+  by: "agent" | "user";
 }
 
 /* ------------------------------------------------------------- storyboard */

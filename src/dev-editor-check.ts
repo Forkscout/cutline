@@ -968,6 +968,20 @@ async function run() {
     check("a count reaches the export: 0 first, then the whole figure", zeroPx > 50 && fullPx > zeroPx * 3, `${zeroPx} px at 0.5 s, ${fullPx} at 1.5 s`);
   }
 
+  /* --- voice profiles ------------------------------------------------- */
+  log("\nvoice profiles", "dim");
+  {
+    let p = newProject("voices");
+    const narrator = { id: "narrator", name: "Narrator", model: "google/gemini-3.1-flash-tts-preview", voice: "Kore", instructions: "Warm", createdAt: 1, updatedAt: 1 };
+    p = reduce(p, { type: "setVoiceProfile", profile: narrator });
+    p = reduce(p, { type: "setVoiceProfile", profile: { ...narrator, voice: "Puck", updatedAt: 2 } });
+    check("a speaker is saved once and updated in place", p.voices.length === 1 && p.voices[0]?.voice === "Puck" && p.voices[0].createdAt === 1);
+    const kept = JSON.parse(JSON.stringify(p)) as Project;
+    check("speakers survive a save", kept.voices[0]?.instructions === "Warm");
+    p = reduce(p, { type: "removeVoiceProfile", profileId: "narrator" });
+    check("and are removed by id", p.voices.length === 0);
+  }
+
   /* --- record a real take ------------------------------------------ */
   log("\nrecording fixture", "dim");
   const sources = [

@@ -139,11 +139,14 @@ export interface VoiceList {
 }
 
 /** The voices a service's voice model speaks: the project's choice, or the workspace's. */
-export const listVoices = (providerId?: string) =>
-  apiJson<VoiceList>(`/api/ai/voices${providerId ? `?providerId=${encodeURIComponent(providerId)}` : ""}`);
+export const listVoices = (providerId?: string, model?: string) => {
+  const query = new URLSearchParams({ ...(providerId ? { providerId } : {}), ...(model ? { model } : {}) }).toString();
+  return apiJson<VoiceList>(`/api/ai/voices${query ? `?${query}` : ""}`);
+};
 
 export interface SpokenAudio {
   file: File;
+  providerId: string;
   voice: string;
   model: string;
   provider: string;
@@ -151,7 +154,8 @@ export interface SpokenAudio {
 
 /** Has the voice service read `text` aloud, and answers with the audio as a file to import. */
 export async function speak(
-  request: { text: string; voice?: string; speed?: number; instructions?: string; providerId?: string; projectId?: string },
+  /** model pins a speaker's model over the service's current one. */
+  request: { text: string; voice?: string; speed?: number; instructions?: string; model?: string; providerId?: string; projectId?: string },
   name = "Voice",
 ): Promise<SpokenAudio> {
   const response = await api("/api/ai/speech", {
@@ -171,7 +175,7 @@ export async function speak(
   const mime = response.headers.get("content-type") ?? "audio/mpeg";
   const header = (key: string) => decodeURIComponent(response.headers.get(key) ?? "");
   const file = new File([await response.blob()], `${name.replace(/[\\/:*?"<>|]+/g, " ").trim() || "Voice"}.${mime.includes("wav") ? "wav" : "mp3"}`, { type: mime });
-  return { file, voice: header("x-voice"), model: header("x-model"), provider: header("x-provider") };
+  return { file, providerId: header("x-provider-id"), voice: header("x-voice"), model: header("x-model"), provider: header("x-provider") };
 }
 
 export type TranscribeTarget = { sessionId: string; fileName: string } | { mediaId: string };

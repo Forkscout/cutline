@@ -61,7 +61,7 @@ import {
   type Action,
   type History, replaceValue } from "./project";
 import { contactSheet, renderStill } from "./snapshot";
-import type { Clip, ClipRef, Project, Marker, Track } from "./types";
+import type { Clip, ClipRef, Project, Marker, Track, GeneratedAudio } from "./types";
 
 /** A mistake the agent can fix, reported back to it as the tool's error. */
 class ToolError extends Error {}
@@ -316,6 +316,49 @@ const EXECUTORS: Executors = {
       throw new ToolError(`Could not open version ${a.versionId} (${err instanceof Error ? err.message : String(err)}); list_versions shows them.`);
     }
     return { type: "restoreVersion", project: doc, label: a.versionId };
+  },
+  setVoiceProfile: async (a, project) => {
+    const existing = project.voices.find((v) => (a.id ? v.id === a.id : v.name.toLowerCase() === a.name.trim().toLowerCase()));
+    if (a.id && !existing) throw new ToolError(`There is no voice profile ${a.id}; get_voice_context lists them.`);
+    let model = a.model ?? existing?.model;
+    if (!model) {
+      const service = await serviceFor("voice", project.services.voice);
+      if (!service) throw new ToolError("No voice service is connected: ask the client to give a service a voice model in Services.");
+      model = service.model;
+    }
+    let list;
+    try {
+      list = await voicesOf(existing?.providerId ?? project.services.voice, model);
+    } catch (err) {
+      throw new ToolError(err instanceof Error ? err.message : String(err));
+    }
+    if (list.voices.length && !list.voices.some((v) => v.id === a.voice)) {
+      throw new ToolError(`${model} has no voice "${a.voice}". Some it has: ${list.voices.slice(0, 12).map((v) => v.id).join(", ")}.`);
+    }
+    const now = Date.now();
+    const keep = <T,>(given: T | undefined, had: T | undefined) => (given === undefined ? had : given);
+    const text = (given: string | undefined, had: string | undefined) => keep(given, had)?.trim() || undefined;
+    return {
+      type: "setVoiceProfile",
+      profile: {
+        id: existing?.id ?? crypto.randomUUID(),
+        name: a.name.trim(),
+        providerId: list.providerId,
+        model,
+        voice: a.voice,
+        // Left out keeps what the profile had; an empty string clears it.
+        ...(keep(a.speed, existing?.speed) !== undefined && keep(a.speed, existing?.speed) !== 1 ? { speed: keep(a.speed, existing?.speed)! } : {}),
+        ...(text(a.instructions, existing?.instructions) ? { instructions: text(a.instructions, existing?.instructions)! } : {}),
+        ...(text(a.language, existing?.language) ? { language: text(a.language, existing?.language)! } : {}),
+        ...(text(a.notes, existing?.notes) ? { notes: text(a.notes, existing?.notes)! } : {}),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      },
+    };
+  },
+  removeVoiceProfile: (a, project) => {
+    if (!project.voices.some((v) => v.id === a.profileId)) throw new ToolError(`There is no voice profile ${a.profileId}; get_voice_context lists them.`);
+    return { type: "removeVoiceProfile", profileId: a.profileId };
   },
   setServices: (a) => ({
     type: "setServices",
@@ -968,10 +1011,54 @@ export class AgentBridge {
         const stuck = by ? members.filter((m) => Math.abs((findClip(after, { trackId: m.track.id, clipId: m.clip.id })?.start ?? -1) - Math.max(0, m.clip.start + by)) > 1e-3).length : 0;
         return [json({ ok: true, clips: refs.length, ...(stuck ? { notes: [`${stuck} of its clips could not move by ${by} s: something else is in the way on their tracks.`] } : {}) })];
       }
+      case "getVoiceContext": {
+        const service = await serviceFor("voice", project.services.voice);
+        const where = (assetId: string) =>
+          project.tracks.flatMap((t) => t.clips.filter((c) => c.assetId === assetId).map((c) => ({ trackId: t.id, clipId: c.id, start: round(c.start), end: round(c.start + c.duration) })));
+        const lines = project.assets.flatMap((a) => {
+          const g = a.generated;
+          if (g?.kind !== "voice") return [];
+          const profile = project.voices.find((v) => v.id === g.profileId);
+          const changed = Boolean(profile && (profile.voice !== g.voice || profile.model !== g.model || (profile.instructions ?? "") !== (g.instructions ?? "") || (profile.speed ?? 1) !== (g.speed ?? 1)));
+          return [
+            {
+              assetId: a.id,
+              name: a.name,
+              speaker: g.speaker ?? null,
+              profileId: g.profileId ?? null,
+              text: g.text.length > 600 ? `${g.text.slice(0, 600)}…` : g.text,
+              voice: g.voice,
+              model: g.model,
+              service: g.service,
+              ...(g.speed ? { speed: g.speed } : {}),
+              ...(g.instructions ? { instructions: g.instructions } : {}),
+              by: g.by,
+              createdAt: new Date(g.createdAt).toISOString(),
+              durationSec: round(a.durationSec),
+              onTimeline: where(a.id),
+              ...(changed ? { differsFromProfile: true } : {}),
+            },
+          ];
+        });
+        const stale = lines.filter((l) => l.differsFromProfile).length;
+        return [
+          json({
+            service: service ? { name: service.name, model: service.model, providerId: service.providerId } : null,
+            profiles: project.voices,
+            lines,
+            rule: project.voices.length
+              ? "Read every new or redone line with one of these profiles: generate_voice({ profile }). Change a profile only when the client asks."
+              : "No speaker is saved. Agree one with the client (list_voices, a short test line) and save it with set_voice_profile before reading the script.",
+            ...(stale
+              ? { notes: [`${stale} line${stale === 1 ? " differs" : "s differ"} from ${stale === 1 ? "its speaker's profile" : "their speakers' profiles"} as it is now — read with an override, or before the profile changed — and may not match newer lines.`] }
+              : {}),
+          }),
+        ];
+      }
       case "listVoices": {
         let list;
         try {
-          list = await voicesOf(project.services.voice);
+          list = await voicesOf(project.services.voice, typeof raw.model === "string" && raw.model ? raw.model : undefined);
         } catch (err) {
           throw new ToolError(err instanceof Error ? err.message : String(err));
         }
@@ -980,15 +1067,38 @@ export class AgentBridge {
       case "generateVoice": {
         const script = String(raw.text);
         const name = (typeof raw.name === "string" && raw.name.trim()) || script.replace(/\s+/g, " ").trim().slice(0, 40);
+        // The speaker: the one named, the project's only one, or none — and then say to save one.
+        const asked = typeof raw.profile === "string" ? raw.profile.trim() : "";
+        let profile = asked ? project.voices.find((v) => v.id === asked || v.name.toLowerCase() === asked.toLowerCase()) : undefined;
+        if (asked && !profile) {
+          throw new ToolError(`There is no voice profile "${asked}". Speakers: ${project.voices.map((v) => `${v.name} (${v.id})`).join(", ") || "none — save one with set_voice_profile"}.`);
+        }
+        if (!profile && project.voices.length > 1) {
+          throw new ToolError(`Say who is speaking: profile is one of ${project.voices.map((v) => `${v.name} (${v.id})`).join(", ")}.`);
+        }
+        const notes: string[] = [];
+        if (!profile && project.voices.length === 1) {
+          profile = project.voices[0]!;
+          notes.push(`Read as ${profile.name}, the project's only speaker.`);
+        }
+        if (!profile) notes.push("No speaker profile: save this voice with set_voice_profile, so later lines — and other agents — read the same way.");
+        const voice = typeof raw.voice === "string" && raw.voice ? raw.voice : profile?.voice;
+        const speed = typeof raw.speed === "number" ? raw.speed : profile?.speed;
+        const instructions = typeof raw.instructions === "string" ? raw.instructions.trim() : profile?.instructions;
+        if (profile && (voice !== profile.voice || (speed ?? 1) !== (profile.speed ?? 1) || (instructions ?? "") !== (profile.instructions ?? ""))) {
+          notes.push(`This line departs from ${profile.name}'s profile, so it will not match the other lines. Say why in your report.`);
+        }
+        const providerId = profile?.providerId ?? project.services.voice;
         let spoken;
         try {
           spoken = await speak(
             {
               text: script,
-              ...(typeof raw.voice === "string" ? { voice: raw.voice } : {}),
-              ...(typeof raw.speed === "number" ? { speed: raw.speed } : {}),
-              ...(typeof raw.instructions === "string" ? { instructions: raw.instructions } : {}),
-              ...(project.services.voice ? { providerId: project.services.voice } : {}),
+              ...(voice ? { voice } : {}),
+              ...(speed !== undefined ? { speed } : {}),
+              ...(instructions ? { instructions } : {}),
+              ...(profile ? { model: profile.model } : {}),
+              ...(providerId ? { providerId } : {}),
               projectId: project.id,
             },
             name,
@@ -1001,7 +1111,20 @@ export class AgentBridge {
         if (!asset) throw new ToolError(`The audio came back but could not be imported: ${failed[0]?.reason ?? "no reason given"}`);
         let placed;
         try {
-          placed = placeVoice({ project: () => this.host.history().present, commit: (action) => void this.commit(action) }, { ...asset, name }, typeof raw.start === "number" ? raw.start : null);
+          const generated: GeneratedAudio = {
+            kind: "voice",
+            text: script.trim(),
+            ...(profile ? { profileId: profile.id, speaker: profile.name } : {}),
+            providerId: spoken.providerId,
+            service: spoken.provider,
+            model: spoken.model,
+            voice: spoken.voice,
+            ...(speed !== undefined && speed !== 1 ? { speed } : {}),
+            ...(instructions ? { instructions } : {}),
+            createdAt: Date.now(),
+            by: "agent",
+          };
+          placed = placeVoice({ project: () => this.host.history().present, commit: (action) => void this.commit(action) }, { ...asset, name, generated }, typeof raw.start === "number" ? raw.start : null);
         } catch (err) {
           throw new ToolError(err instanceof Error ? err.message : String(err));
         }
@@ -1011,10 +1134,14 @@ export class AgentBridge {
             assetId: asset.id,
             name,
             durationSec: round(asset.durationSec),
+            speaker: profile?.name ?? null,
+            profileId: profile?.id ?? null,
             voice: spoken.voice,
             model: spoken.model,
             service: spoken.provider,
+            ...(instructions ? { instructions } : {}),
             ...(placed ? { placed: { ...placed, start: round(placed.start), end: round(placed.end) } } : {}),
+            ...(notes.length ? { notes } : {}),
             next: placed ? "transcribe({ assetId }) gives its words, to time captions or graphics to." : 'add_clip({ kind: "media", assetId, trackId, start }) places it.',
           }),
         ];

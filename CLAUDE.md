@@ -632,6 +632,20 @@ room (`editor/voice.ts`). Saving a service with a voice model probes it by
 having it say "OK."; a voice model saved before that was probed is tried when
 used. `bun scripts/voice-check.ts` checks both adapters against stand-ins.
 
+**A voice is a saved speaker, and every line remembers how it was read.**
+A voiceover built over several sessions, by different agents or by the user,
+drifted as soon as anyone forgot which voice or direction the first lines had.
+So a project keeps `voices` — speaker profiles with the voice, a pinned model
+(a service's default can change, and another model is another voice), speed,
+the direction sent with every line, and why — and each generated asset keeps
+`generated`: the script, speaker, voice, model, service, direction, who made it
+and when. `get_voice_context` gives an agent all of it, flagging lines that
+no longer match their profile; `generate_voice` reads with a profile, refuses to
+guess between several, and says when a line departs from one. The MCP
+instructions, the tool descriptions and the guide all tell an agent to save a
+speaker before reading and to keep to it. The Voice panel saves and picks
+speakers too, and the Inspector shows a clip's record.
+
 **Services differ where it hurts, and the adapter absorbs it.** OpenAI and
 OpenRouter refuse uploads over 25 MB, and OpenRouter gives the model 60 s per
 request, so parts are sized from the audio's bitrate and the service's limits.

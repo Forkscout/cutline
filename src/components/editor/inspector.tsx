@@ -470,6 +470,20 @@ export function Inspector({
           </TabsContent>
 
           <TabsContent value="audio" className="mt-0 space-y-3">
+            {asset?.generated && (
+              <div className="space-y-1 rounded-md border p-2 text-[11px]">
+                <div className="font-medium">Generated voice{asset.generated.speaker ? ` · ${asset.generated.speaker}` : ""}</div>
+                <div className="text-muted-foreground">
+                  {asset.generated.voice} · {asset.generated.model} · {asset.generated.service}
+                  {asset.generated.speed ? ` · ${asset.generated.speed}×` : ""}
+                </div>
+                {asset.generated.instructions && <div className="text-muted-foreground">Direction: {asset.generated.instructions}</div>}
+                <div className="line-clamp-5 whitespace-pre-wrap rounded border p-1.5">{asset.generated.text}</div>
+                <div className="text-[10px] text-muted-foreground">
+                  Read {new Date(asset.generated.createdAt).toLocaleString()} by {asset.generated.by === "agent" ? "an agent" : "you"}
+                </div>
+              </div>
+            )}
             {asset?.hasAudio ? (
               <>
                 <NumberSlider label="Volume" path="volume" clip={clip} clipRef={selected} localTime={localTime}
